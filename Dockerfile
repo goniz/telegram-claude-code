@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for Telegram Bot in Rust
 
 # Stage 1: Build stage
-FROM rust:1.87-slim as builder
+FROM rust:1.87-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
