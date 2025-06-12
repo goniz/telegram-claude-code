@@ -53,9 +53,5 @@ ENV RUST_LOG=info
 # Expose port (if needed for webhooks in the future)
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD pgrep -x telegram-bot || exit 1
-
 # Run the bot
 CMD ["./telegram-bot"]
