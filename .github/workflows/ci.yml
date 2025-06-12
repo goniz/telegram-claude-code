@@ -57,11 +57,38 @@ jobs:
       run: |
         echo "Testing docker compose up with staging token..."
         # Use --wait to wait for services to be healthy
-        docker compose up -d --wait
-        echo "✅ Container started successfully and is healthy"
+        if docker compose up -d --wait; then
+          echo "✅ Container started successfully and is healthy"
+          
+          # Output service logs for debugging
+          echo "=== Service Logs ==="
+          docker compose logs
+          
+          # Cleanup
+          docker compose down --volumes
+        else
+          echo "❌ Container failed to start or become healthy"
+          echo "=== Service Logs (for debugging) ==="
+          docker compose logs || echo "Could not retrieve logs"
+          docker compose down --volumes || echo "Cleanup failed"
+          exit 1
+        fi
         
-        # Cleanup
-        docker compose down --volumes
+    - name: Upload logs artifact on failure
+      if: failure()
+      run: |
+        echo "=== Archiving logs due to failure ==="
+        # Attempt to capture any remaining logs and system state
+        docker compose logs > docker-compose-logs.txt 2>&1 || echo "Failed to capture compose logs" > docker-compose-logs.txt
+        docker ps -a >> docker-compose-logs.txt 2>&1 || echo "Failed to capture container state" >> docker-compose-logs.txt
+        
+    - name: Upload logs artifact
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: docker-compose-logs
+        path: docker-compose-logs.txt
+        retention-days: 7
 
   push-docker:
     runs-on: ubuntu-latest
