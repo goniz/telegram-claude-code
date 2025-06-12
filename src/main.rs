@@ -42,6 +42,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
         Command::Help => {
             bot.send_message(msg.chat.id, Command::descriptions().to_string())
                 .await?;
+        }
         Command::StartSession => {
             let chat_id = msg.chat.id.0;
             let container_name = format!("coding-session-{}", chat_id);
@@ -85,57 +86,6 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
             bot.send_message(msg.chat.id, "Hello! I'm your Telegram bot with Docker support 🤖🐳")
                 .await?;
         }
-        Command::Echo(text) => {
-            bot.send_message(msg.chat.id, text).await?;
-        }
-        Command::ListContainers => {
-            match docker.list_containers(None::<bollard::container::ListContainersOptions<String>>).await {
-                Ok(containers) => {
-                    let mut response = "Running containers:\n".to_string();
-                    if containers.is_empty() {
-                        response.push_str("No containers running");
-                    } else {
-                        for container in containers {
-                            let name = container.names
-                                .and_then(|names| names.first().cloned())
-                                .unwrap_or_else(|| "Unknown".to_string());
-                            let image = container.image.unwrap_or_else(|| "Unknown".to_string());
-                            let status = container.status.unwrap_or_else(|| "Unknown".to_string());
-                            response.push_str(&format!("• {}: {} ({})\n", name, image, status));
-                        }
-                    }
-                    bot.send_message(msg.chat.id, response).await?;
-                }
-                Err(e) => {
-                    bot.send_message(msg.chat.id, format!("Error listing containers: {}", e))
-                        .await?;
-                }
-            }
-        }
-        Command::DockerInfo => {
-            match docker.info().await {
-                Ok(info) => {
-                    let response = format!(
-                        "Docker System Info:\n\
-                        • Version: {}\n\
-                        • Containers: {}\n\
-                        • Images: {}\n\
-                        • Memory: {} MB\n\
-                        • CPUs: {}",
-                        info.server_version.unwrap_or_else(|| "Unknown".to_string()),
-                        info.containers.unwrap_or(0),
-                        info.images.unwrap_or(0),
-                        info.mem_total.unwrap_or(0) / 1024 / 1024,
-                        info.ncpu.unwrap_or(0)
-                    );
-                    bot.send_message(msg.chat.id, response).await?;
-                }
-                Err(e) => {
-                    bot.send_message(msg.chat.id, format!("Error getting Docker info: {}", e))
-                        .await?;
-                }
-            }
-        }
     }
 
     Ok(())
@@ -165,7 +115,7 @@ async fn start_coding_session(docker: &Docker, container_name: &str) -> Result<S
             "CODEX_ENV_GO_VERSION=1.23.8",
             "CODEX_ENV_SWIFT_VERSION=6.1",
         ]),
-        cmd: Some(vec!["/bin/bash".to_string()]),
+        cmd: Some(vec!["/bin/bash"]),
         ..Default::default()
     };
     
