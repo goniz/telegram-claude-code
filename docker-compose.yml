@@ -1,31 +1,20 @@
-version: '3.8'
-
 services:
   telegram-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/goniz/telegram-claude-code:main
     container_name: telegram-bot
     restart: unless-stopped
     environment:
-      - TELOXIDE_TOKEN=${TELOXIDE_TOKEN}
+      - TELOXIDE_TOKEN=${TELOXIDE_TOKEN:?TELOXIDE_TOKEN is required}
       - RUST_LOG=${RUST_LOG:-info}
-    # Mount logs directory if you want to persist logs
+      - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}
+    # Mount logs directory for persistent logging and Docker socket for container management
     volumes:
       - ./logs:/app/logs:rw
-    # Resource limits
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: '0.5'
-        reservations:
-          memory: 64M
-          cpus: '0.1'
-    # Health check
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Health check - monitors bot process and responsiveness
     healthcheck:
-      test: ["CMD", "pgrep", "-x", "telegram-bot"]
+      test: ["CMD", "sh", "-c", "pgrep -x telegram-bot && kill -0 $(pgrep -x telegram-bot)"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
