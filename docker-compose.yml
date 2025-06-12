@@ -11,10 +11,3 @@ services:
     volumes:
       - ./logs:/app/logs:rw
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    # Health check - monitors bot process and responsiveness
-    healthcheck:
-      test: ["CMD", "sh", "-c", "pgrep -x telegram-bot && kill -0 $(pgrep -x telegram-bot)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
