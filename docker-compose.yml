@@ -10,18 +10,23 @@ services:
     environment:
       - TELOXIDE_TOKEN=${TELOXIDE_TOKEN}
       - RUST_LOG=${RUST_LOG:-info}
-    # Mount logs directory if you want to persist logs
+    # Mount logs directory and Docker socket
     volumes:
       - ./logs:/app/logs:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Security options for Docker socket access
+    user: "telegram-bot"
+    group_add:
+      - docker
     # Resource limits
     deploy:
       resources:
         limits:
-          memory: 128M
-          cpus: '0.5'
+          memory: 256M
+          cpus: '1.0'
         reservations:
-          memory: 64M
-          cpus: '0.1'
+          memory: 128M
+          cpus: '0.2'
     # Health check
     healthcheck:
       test: ["CMD", "pgrep", "-x", "telegram-bot"]
@@ -29,3 +34,26 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    # Network for container isolation
+    networks:
+      - telegram-bot-network
+
+  # Optional: Add a logging service for centralized log management
+  log-aggregator:
+    image: fluent/fluentd:v1.16-1
+    container_name: telegram-bot-logs
+    restart: unless-stopped
+    volumes:
+      - ./logs:/fluentd/log:ro
+      - ./fluentd/conf:/fluentd/etc:ro
+    ports:
+      - "24224:24224"
+    networks:
+      - telegram-bot-network
+    profiles:
+      - logging
+
+networks:
+  telegram-bot-network:
+    driver: bridge
+    name: telegram-bot-network

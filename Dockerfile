@@ -38,8 +38,10 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user
-RUN useradd -r -s /bin/false -m -d /app telegram-bot
+# Create a non-root user and add to docker group
+RUN useradd -r -s /bin/false -m -d /app telegram-bot && \
+    groupadd -f docker && \
+    usermod -aG docker telegram-bot
 
 # Set working directory
 WORKDIR /app
@@ -48,7 +50,8 @@ WORKDIR /app
 COPY --from=builder /app/target/release/telegram-bot /app/telegram-bot
 
 # Change ownership to the telegram-bot user
-RUN chown -R telegram-bot:telegram-bot /app
+RUN chown -R telegram-bot:telegram-bot /app && \
+    chmod +x /app/telegram-bot
 
 # Switch to non-root user
 USER telegram-bot

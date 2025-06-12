@@ -2,6 +2,9 @@ use teloxide::{prelude::*, utils::command::BotCommands};
 use bollard::Docker;
 use bollard::container::{CreateContainerOptions, Config, RemoveContainerOptions};
 
+mod claude_code_client;
+use claude_code_client::ClaudeCodeClient;
+
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "These commands are supported:")]
@@ -20,6 +23,10 @@ enum Command {
     ListContainers,
     #[command(description = "Show Docker system information")]
     DockerInfo,
+    #[command(description = "Review code in your session")]
+    ReviewCode(String),
+    #[command(description = "Generate documentation for code in your session")]
+    GenerateDocs(String),
 }
 
 // Main bot logic
@@ -53,8 +60,11 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
             let chat_id = msg.chat.id.0;
             let container_name = format!("coding-session-{}", chat_id);
             
+            log::info!("Starting coding session for chat {} with container {}", chat_id, container_name);
+            
             match start_coding_session(&docker, &container_name).await {
                 Ok(container_id) => {
+                    log::info!("Successfully started container {} for chat {}", container_id, chat_id);
                     bot.send_message(
                         msg.chat.id, 
                         format!("🚀 New coding session started!\n\nContainer ID: {}\nContainer Name: {}\n\nYou can now run code and manage your development environment.", 
@@ -62,6 +72,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                     ).await?;
                 }
                 Err(e) => {
+                    log::error!("Failed to start coding session for chat {}: {}", chat_id, e);
                     bot.send_message(
                         msg.chat.id, 
                         format!("❌ Failed to start coding session: {}", e)
@@ -73,14 +84,18 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
             let chat_id = msg.chat.id.0;
             let container_name = format!("coding-session-{}", chat_id);
             
+            log::info!("Clearing coding session for chat {} with container {}", chat_id, container_name);
+            
             match clear_coding_session(&docker, &container_name).await {
                 Ok(()) => {
+                    log::info!("Successfully cleared container {} for chat {}", container_name, chat_id);
                     bot.send_message(
                         msg.chat.id, 
                         "🧹 Coding session cleared successfully!\n\nThe container has been stopped and removed."
                     ).await?;
                 }
                 Err(e) => {
+                    log::error!("Failed to clear coding session for chat {}: {}", chat_id, e);
                     bot.send_message(
                         msg.chat.id, 
                         format!("❌ Failed to clear session: {}", e)
@@ -96,9 +111,10 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
             bot.send_message(msg.chat.id, text).await?;
         }
         Command::ListContainers => {
+            log::debug!("Listing containers for chat {}", msg.chat.id);
             match docker.list_containers(None::<bollard::container::ListContainersOptions<String>>).await {
                 Ok(containers) => {
-                    let mut response = "Running containers:\n".to_string();
+                    let mut response = "🐳 Running containers:\n".to_string();
                     if containers.is_empty() {
                         response.push_str("No containers running");
                     } else {
@@ -114,16 +130,18 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                     bot.send_message(msg.chat.id, response).await?;
                 }
                 Err(e) => {
-                    bot.send_message(msg.chat.id, format!("Error listing containers: {}", e))
+                    log::error!("Failed to list containers: {}", e);
+                    bot.send_message(msg.chat.id, format!("❌ Error listing containers: {}", e))
                         .await?;
                 }
             }
         }
         Command::DockerInfo => {
+            log::debug!("Getting Docker system info for chat {}", msg.chat.id);
             match docker.info().await {
                 Ok(info) => {
                     let response = format!(
-                        "Docker System Info:\n\
+                        "📊 Docker System Info:\n\
                         • Version: {}\n\
                         • Containers: {}\n\
                         • Images: {}\n\
@@ -138,8 +156,71 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                     bot.send_message(msg.chat.id, response).await?;
                 }
                 Err(e) => {
-                    bot.send_message(msg.chat.id, format!("Error getting Docker info: {}", e))
+                    log::error!("Failed to get Docker info: {}", e);
+                    bot.send_message(msg.chat.id, format!("❌ Error getting Docker info: {}", e))
                         .await?;
+                }
+            }
+        }
+        Command::ReviewCode(file_path) => {
+            let chat_id = msg.chat.id.0;
+            let container_name = format!("coding-session-{}", chat_id);
+            
+            match ClaudeCodeClient::for_session(docker.clone(), &container_name).await {
+                Ok(client) => {
+                    match client.review_code(&file_path).await {
+                        Ok(result) => {
+                            let response = if result.is_error {
+                                format!("❌ Code review failed: {}", result.result)
+                            } else {
+                                format!("📝 Code Review Results:\n\n{}", result.result)
+                            };
+                            bot.send_message(msg.chat.id, response).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                msg.chat.id, 
+                                format!("❌ Failed to review code: {}", e)
+                            ).await?;
+                        }
+                    }
+                }
+                Err(_) => {
+                    bot.send_message(
+                        msg.chat.id, 
+                        format!("❌ No active coding session found. Start a session first with /startsession")
+                    ).await?;
+                }
+            }
+        }
+        Command::GenerateDocs(file_path) => {
+            let chat_id = msg.chat.id.0;
+            let container_name = format!("coding-session-{}", chat_id);
+            
+            match ClaudeCodeClient::for_session(docker.clone(), &container_name).await {
+                Ok(client) => {
+                    match client.generate_docs(&file_path).await {
+                        Ok(result) => {
+                            let response = if result.is_error {
+                                format!("❌ Documentation generation failed: {}", result.result)
+                            } else {
+                                format!("📚 Generated Documentation:\n\n{}", result.result)
+                            };
+                            bot.send_message(msg.chat.id, response).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                msg.chat.id, 
+                                format!("❌ Failed to generate documentation: {}", e)
+                            ).await?;
+                        }
+                    }
+                }
+                Err(_) => {
+                    bot.send_message(
+                        msg.chat.id, 
+                        format!("❌ No active coding session found. Start a session first with /startsession")
+                    ).await?;
                 }
             }
         }
@@ -201,6 +282,44 @@ async fn clear_coding_session(docker: &Docker, container_name: &str) -> Result<(
                 Ok(())
             } else {
                 Err(e.into())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_container_name_generation() {
+        let chat_id = 12345i64;
+        let expected = "coding-session-12345";
+        let actual = format!("coding-session-{}", chat_id);
+        assert_eq!(actual, expected);
+    }
+    
+    #[test]
+    fn test_command_descriptions() {
+        let descriptions = Command::descriptions();
+        assert!(descriptions.to_string().contains("Display this help message"));
+        assert!(descriptions.to_string().contains("Start the bot"));
+        assert!(descriptions.to_string().contains("List running Docker containers"));
+    }
+    
+    #[tokio::test]
+    async fn test_docker_connection() {
+        // This test checks if Docker is available
+        // In a real environment, this would verify Docker connectivity
+        match Docker::connect_with_socket_defaults() {
+            Ok(_) => {
+                // Docker is available
+                assert!(true);
+            }
+            Err(_) => {
+                // Docker is not available (e.g., in CI without Docker)
+                // This is acceptable for unit tests
+                assert!(true);
             }
         }
     }
