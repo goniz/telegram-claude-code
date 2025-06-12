@@ -14,6 +14,12 @@ enum Command {
     StartSession,
     #[command(description = "Clear the current session (stops and removes container)")]
     ClearSession,
+    #[command(description = "Echo the provided text")]
+    Echo(String),
+    #[command(description = "List running Docker containers")]
+    ListContainers,
+    #[command(description = "Show Docker system information")]
+    DockerInfo,
 }
 
 // Main bot logic
@@ -42,6 +48,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
         Command::Help => {
             bot.send_message(msg.chat.id, Command::descriptions().to_string())
                 .await?;
+        }
         Command::StartSession => {
             let chat_id = msg.chat.id.0;
             let container_name = format!("coding-session-{}", chat_id);
@@ -165,7 +172,7 @@ async fn start_coding_session(docker: &Docker, container_name: &str) -> Result<S
             "CODEX_ENV_GO_VERSION=1.23.8",
             "CODEX_ENV_SWIFT_VERSION=6.1",
         ]),
-        cmd: Some(vec!["/bin/bash".to_string()]),
+        cmd: Some(vec!["/bin/bash"]),
         ..Default::default()
     };
     
