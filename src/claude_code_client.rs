@@ -1,7 +1,7 @@
 use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecOptions};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeCodeResult {
@@ -17,6 +17,7 @@ pub struct ClaudeCodeResult {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ClaudeCodeConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
@@ -38,12 +39,14 @@ impl Default for ClaudeCodeConfig {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ClaudeCodeClient {
     docker: Docker,
     container_id: String,
     config: ClaudeCodeConfig,
 }
 
+#[allow(dead_code)]
 impl ClaudeCodeClient {
     /// Create a new Claude Code client for the specified container
     pub fn new(docker: Docker, container_id: String, config: ClaudeCodeConfig) -> Self {
@@ -318,6 +321,9 @@ impl ClaudeCodeClient {
             "logout".to_string(),
         ];
 
+        self.exec_command(command).await
+    }
+
     /// Check Claude Code version and availability
     pub async fn check_availability(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec!["claude".to_string(), "--version".to_string()];
@@ -341,7 +347,7 @@ impl ClaudeCodeClient {
             cmd: Some(command),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
-            working_dir: self.config.working_directory.as_deref(),
+            working_dir: self.config.working_directory.clone(),
             ..Default::default()
         };
 
@@ -353,18 +359,23 @@ impl ClaudeCodeClient {
         };
 
         let mut output = String::new();
-        let mut exec_stream = self.docker.start_exec(&exec.id, Some(start_config)).await?;
-
-        while let Some(msg) = exec_stream.next().await {
-            match msg {
-                Ok(bollard::container::LogOutput::StdOut { message }) => {
-                    output.push_str(&String::from_utf8_lossy(&message));
+        
+        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+            bollard::exec::StartExecResults::Attached { output: mut output_stream, .. } => {
+                while let Some(Ok(msg)) = output_stream.next().await {
+                    match msg {
+                        bollard::container::LogOutput::StdOut { message } => {
+                            output.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        bollard::container::LogOutput::StdErr { message } => {
+                            output.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        _ => {}
+                    }
                 }
-                Ok(bollard::container::LogOutput::StdErr { message }) => {
-                    output.push_str(&String::from_utf8_lossy(&message));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
+            }
+            bollard::exec::StartExecResults::Detached => {
+                return Err("Unexpected detached execution".into());
             }
         }
 
@@ -391,6 +402,7 @@ impl ClaudeCodeClient {
 }
 
 // Usage example for integration with the Telegram bot
+#[allow(dead_code)]
 impl ClaudeCodeClient {
     /// Helper method to create a client for a coding session
     pub async fn for_session(docker: Docker, container_name: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
