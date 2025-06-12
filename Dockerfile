@@ -7,27 +7,21 @@ FROM rust:1.87-slim AS builder
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    ca-certificates \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
 WORKDIR /app
 
-# Copy dependency files first for better caching
+# Copy dependency files and source code
 COPY Cargo.toml Cargo.lock ./
-
-# Create a dummy main.rs to build dependencies
-RUN mkdir src && echo "fn main() {}" > src/main.rs
-
-# Build dependencies (this layer will be cached)
-RUN cargo build --release && rm -rf src
-
-# Copy source code
 COPY src ./src
 
 # Build the application
-# Remove the dummy target directory and rebuild with actual source
-RUN rm -rf target/release/deps/telegram_bot* && \
-    cargo build --release
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+ENV CARGO_HTTP_CHECK_REVOKE=false
+RUN cargo build --release
 
 # Stage 2: Runtime stage
 FROM debian:bookworm-slim
