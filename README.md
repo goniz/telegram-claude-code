@@ -29,8 +29,8 @@ The bot currently supports these commands:
 - `/start` - Welcome message
 - `/help` - Show available commands
 - `/echo <text>` - Echo back the provided text
-- `/listcontainers` - List all running Docker containers
-- `/dockerinfo` - Show Docker system information
+- `/startsession` - Starts a new coding session with Claude Code (Starts a new dev container)
+- `/endsession` - Ends the current active session (Removes dev container)
 
 ## Project Structure
 
