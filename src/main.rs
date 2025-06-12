@@ -5,7 +5,7 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use futures_util::StreamExt;
 
 mod claude_code_client;
-use claude_code_client::ClaudeCodeClient;
+use claude_code_client::{ClaudeCodeClient, ClaudeCodeConfig};
 
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
@@ -194,29 +194,7 @@ async fn wait_for_container_ready(docker: &Docker, container_id: &str) -> Result
     Err("Container failed to become ready after 30 seconds".into())
 }
 
-// Helper function to install Claude Code via npm
-async fn install_claude_code(docker: &Docker, container_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    log::info!("Starting Claude Code installation...");
-    
-    let install_command = vec![
-        "npm".to_string(),
-        "install".to_string(),
-        "-g".to_string(),
-        "@anthropic-ai/claude-code".to_string()
-    ];
-    
-    match exec_command_in_container(docker, container_id, install_command).await {
-        Ok(output) => {
-            log::info!("Claude Code installation completed successfully");
-            log::debug!("Installation output: {}", output);
-            Ok(())
-        }
-        Err(e) => {
-            log::error!("Claude Code installation failed: {}", e);
-            Err(format!("Failed to install Claude Code: {}", e).into())
-        }
-    }
-}
+
 
 // Function to start a new coding session container
 async fn start_coding_session(docker: &Docker, container_name: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -252,8 +230,9 @@ async fn start_coding_session(docker: &Docker, container_name: &str) -> Result<S
     // Wait for container to be ready
     wait_for_container_ready(docker, &container.id).await?;
     
-    // Install Claude Code via npm
-    install_claude_code(docker, &container.id).await?;
+    // Install Claude Code via npm using ClaudeCodeClient
+    let claude_client = ClaudeCodeClient::new(docker.clone(), container.id.clone(), ClaudeCodeConfig::default());
+    claude_client.install().await?;
     
     Ok(container.id)
 }
