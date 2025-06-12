@@ -2,10 +2,34 @@
 
 # Test script for docker-compose.yml validation
 # This script validates the docker-compose configuration and tests basic functionality
+# Usage: ./test-docker-compose.sh [--use-published-image]
 
 set -e
 
-echo "🔍 Testing docker-compose.yml configuration..."
+USE_PUBLISHED_IMAGE=false
+COMPOSE_FILE="docker-compose.yml"
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --use-published-image)
+      USE_PUBLISHED_IMAGE=true
+      COMPOSE_FILE="docker-compose.test.yml"
+      shift
+      ;;
+    *)
+      echo "Unknown option $1"
+      echo "Usage: $0 [--use-published-image]"
+      exit 1
+      ;;
+  esac
+done
+
+if [ "$USE_PUBLISHED_IMAGE" = true ]; then
+    echo "🔍 Testing docker-compose.test.yml configuration with published image..."
+else
+    echo "🔍 Testing docker-compose.yml configuration with source build..."
+fi
 
 # Create test environment if it doesn't exist
 if [ ! -f .env ]; then
@@ -16,12 +40,12 @@ fi
 
 # Test 1: Validate syntax
 echo "✅ Test 1: Validating Docker Compose syntax..."
-docker compose config --quiet
+docker compose -f "$COMPOSE_FILE" config --quiet
 echo "✅ Syntax validation passed"
 
 # Test 2: Check configuration structure
 echo "✅ Test 2: Checking configuration structure..."
-CONFIG=$(docker compose config)
+CONFIG=$(docker compose -f "$COMPOSE_FILE" config)
 
 # Check required sections exist
 echo "$CONFIG" | grep -q "telegram-bot" || { echo "❌ Service 'telegram-bot' not found"; exit 1; }
@@ -37,7 +61,7 @@ echo "✅ Test 3: Testing environment variable handling..."
 # Test required variable validation by creating a minimal env file without the token
 TMP_ENV_FILE=$(mktemp)
 echo "RUST_LOG=debug" > "$TMP_ENV_FILE"
-if docker compose --env-file "$TMP_ENV_FILE" config 2>&1 | grep -q "required variable TELOXIDE_TOKEN is missing"; then
+if docker compose -f "$COMPOSE_FILE" --env-file "$TMP_ENV_FILE" config 2>&1 | grep -q "required variable TELOXIDE_TOKEN is missing"; then
     echo "✅ Required environment variable validation working"
 else
     echo "❌ Required environment variable validation failed"
@@ -48,7 +72,7 @@ rm "$TMP_ENV_FILE"
 
 # Test environment variable substitution
 export TELOXIDE_TOKEN="test_validation_token"
-if docker compose config | grep -q "test_validation_token"; then
+if docker compose -f "$COMPOSE_FILE" config | grep -q "test_validation_token"; then
     echo "✅ Environment variable substitution working"
 else
     echo "❌ Environment variable substitution failed"
@@ -108,6 +132,12 @@ echo ""
 echo "🎉 All docker-compose.yml validation tests passed!"
 echo ""
 echo "📋 Configuration Summary:"
+echo "  - File tested: $COMPOSE_FILE"
+if [ "$USE_PUBLISHED_IMAGE" = true ]; then
+    echo "  - Image source: Published GitHub image (ghcr.io/goniz/telegram-claude-code:main)"
+else
+    echo "  - Image source: Built from source"
+fi
 echo "  - Syntax: Valid"
 echo "  - Environment variables: Properly handled with defaults"
 echo "  - Resource limits: 256M memory, 0.5 CPU"
