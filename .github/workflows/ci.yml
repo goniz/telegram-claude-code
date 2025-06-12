@@ -47,7 +47,7 @@ jobs:
       
     - name: Create test environment file
       run: |
-        echo "TELOXIDE_TOKEN=test_token_for_ci" > .env
+        echo "TELOXIDE_TOKEN=${{ secrets.STAGING_TOKEN }}" > .env
         echo "RUST_LOG=info" >> .env
         
     - name: Validate Docker Compose syntax
@@ -55,21 +55,10 @@ jobs:
       
     - name: Test Docker Compose up
       run: |
-        echo "Testing docker compose up..."
-        # Use --wait to wait for services to be running, but expect health check to fail with test token
-        if timeout 30s docker compose up -d --wait; then
-          echo "✅ Container started successfully and is healthy"
-        else
-          # Check if container at least started (proving Docker setup works)
-          if docker compose ps --format json | jq -r '.State' | grep -E "(running|restarting)"; then
-            echo "✅ Container started successfully (health check failed as expected with test token)"
-          else
-            echo "❌ Container failed to start"
-            docker compose logs
-            docker compose down --volumes
-            exit 1
-          fi
-        fi
+        echo "Testing docker compose up with staging token..."
+        # Use --wait to wait for services to be healthy
+        docker compose up -d --wait
+        echo "✅ Container started successfully and is healthy"
         
         # Cleanup
         docker compose down --volumes
