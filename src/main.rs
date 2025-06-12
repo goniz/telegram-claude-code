@@ -2,6 +2,9 @@ use teloxide::{prelude::*, utils::command::BotCommands};
 use bollard::Docker;
 use bollard::container::{CreateContainerOptions, Config, RemoveContainerOptions};
 
+mod claude_code_client;
+use claude_code_client::ClaudeCodeClient;
+
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "These commands are supported:")]
@@ -14,6 +17,8 @@ enum Command {
     StartSession,
     #[command(description = "Clear the current session (stops and removes container)")]
     ClearSession,
+    #[command(description = "Check Claude Code availability")]
+    ClaudeStatus,
 }
 
 // Main bot logic
@@ -85,6 +90,35 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
         Command::Start => {
             bot.send_message(msg.chat.id, "Hello! I'm your Telegram bot with Docker support 🤖🐳")
                 .await?;
+        }
+        Command::ClaudeStatus => {
+            let chat_id = msg.chat.id.0;
+            let container_name = format!("coding-session-{}", chat_id);
+            
+            match ClaudeCodeClient::for_session(docker.clone(), &container_name).await {
+                Ok(client) => {
+                    match client.check_availability().await {
+                        Ok(version) => {
+                            bot.send_message(
+                                msg.chat.id, 
+                                format!("✅ Claude Code is available!\n\nVersion: {}", version)
+                            ).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                msg.chat.id, 
+                                format!("❌ Claude Code check failed: {}", e)
+                            ).await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id, 
+                        format!("❌ No active coding session found: {}", e)
+                    ).await?;
+                }
+            }
         }
     }
 
