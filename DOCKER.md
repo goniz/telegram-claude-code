@@ -143,10 +143,41 @@ docker-compose logs -f -t telegram-bot
 docker-compose restart telegram-bot
 ```
 
+## CI/CD Pipeline
+
+The repository includes a GitHub Actions workflow that automatically builds and publishes Docker images to GitHub Container Registry (ghcr.io) when code is pushed to the main branch.
+
+### Automated Docker Image Publishing
+
+- **Trigger**: Push to main branch
+- **Registry**: GitHub Container Registry (ghcr.io)
+- **Image Tags**: 
+  - `ghcr.io/goniz/telegram-claude-code:main` (latest main branch)
+  - `ghcr.io/goniz/telegram-claude-code:main-<commit-sha>` (specific commit)
+- **Authentication**: Uses `GITHUB_TOKEN` (automatically provided by GitHub Actions)
+
+### Using Published Images
+
+```bash
+# Pull the latest main branch image
+docker pull ghcr.io/goniz/telegram-claude-code:main
+
+# Pull a specific commit version
+docker pull ghcr.io/goniz/telegram-claude-code:main-abc1234
+
+# Run using the published image
+docker run -d \
+  --name telegram-bot \
+  --restart unless-stopped \
+  -e TELOXIDE_TOKEN=your_bot_token_here \
+  -e RUST_LOG=info \
+  ghcr.io/goniz/telegram-claude-code:main
+```
+
 ## Production Considerations
 
 1. **Environment Variables**: Use Docker secrets or external configuration management
 2. **Logging**: Configure log rotation and centralized logging
 3. **Monitoring**: Add application metrics and monitoring
-4. **Updates**: Implement automated builds and deployments
+4. **Updates**: Use published Docker images for automated deployments
 5. **Backup**: Consider backing up any persistent data
