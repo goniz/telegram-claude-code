@@ -38,9 +38,43 @@ jobs:
     - name: Build Docker image
       run: docker build .
 
+  test-docker-compose:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Create test environment file
+      run: |
+        echo "TELOXIDE_TOKEN=test_token_for_ci" > .env
+        echo "RUST_LOG=info" >> .env
+        
+    - name: Validate Docker Compose syntax
+      run: docker compose config --quiet
+      
+    - name: Build services with Docker Compose
+      run: docker compose build
+      
+    - name: Start services for integration testing
+      run: |
+        docker compose up -d
+        sleep 10
+        
+    - name: Check service health and logs
+      run: |
+        docker compose ps
+        docker compose logs telegram-bot
+        # Verify the container started (even if it exits due to invalid token)
+        docker compose ps --format "table {{.Service}}\t{{.Status}}" | grep telegram-bot
+        
+    - name: Tear down services
+      run: docker compose down --volumes
+      if: always()
+
   push-docker:
     runs-on: ubuntu-latest
-    needs: [build-rust, build-docker]
+    needs: [build-rust, build-docker, test-docker-compose]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
