@@ -1,8 +1,6 @@
 services:
   telegram-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/goniz/telegram-claude-code:main
     container_name: telegram-bot
     restart: unless-stopped
     environment:
@@ -13,15 +11,6 @@ services:
     volumes:
       - ./logs:/app/logs:rw
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    # Resource limits - optimized for Telegram bot workload
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.5'
-        reservations:
-          memory: 128M
-          cpus: '0.1'
     # Health check - monitors bot process and responsiveness
     healthcheck:
       test: ["CMD", "sh", "-c", "pgrep -x telegram-bot && kill -0 $(pgrep -x telegram-bot)"]

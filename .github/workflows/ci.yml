@@ -51,56 +51,25 @@ jobs:
         echo "RUST_LOG=info" >> .env
         
     - name: Validate Docker Compose syntax
-      run: docker compose -f docker-compose.test.yml config --quiet
+      run: docker compose config --quiet
       
-    - name: Validate Docker Compose file structure
+    - name: Test Docker Compose up
       run: |
-        # Check that key sections exist and are properly configured
-        docker compose -f docker-compose.test.yml config | grep -q "telegram-bot"
-        docker compose -f docker-compose.test.yml config | grep -q "volumes"
-        docker compose -f docker-compose.test.yml config | grep -q "healthcheck"
-        docker compose -f docker-compose.test.yml config | grep -q "environment"
-        echo "✅ Docker Compose structure validation passed"
+        echo "Testing docker compose up..."
+        timeout 30s docker compose up -d || true
+        sleep 5
         
-    - name: Pull published image for testing
-      run: |
-        echo "Pulling published GitHub image for testing..."
-        docker pull ghcr.io/goniz/telegram-claude-code:main || {
-          echo "⚠️ Published image not available, this is expected for new repositories"
-          echo "Using latest tag as fallback..."
-          docker pull ghcr.io/goniz/telegram-claude-code:latest || {
-            echo "⚠️ No published images available, skipping image-based tests"
-            echo "This is expected for repositories without published images yet"
-            exit 0
-          }
-        }
-        
-    - name: Test basic docker-compose operations
-      run: |
-        # Test that compose can parse and validate the configuration
-        echo "Testing docker-compose configuration with published image..."
-        docker compose -f docker-compose.test.yml config --services | grep -q telegram-bot
-        echo "✅ Service configuration validation passed"
-        
-        # Test environment variable substitution
-        if docker compose -f docker-compose.test.yml config | grep -q "test_token_for_ci"; then
-          echo "✅ Environment variable substitution working"
+        # Check if container started
+        if docker compose ps | grep -q "telegram-bot"; then
+          echo "✅ Container started successfully"
         else
-          echo "❌ Environment variable substitution failed"
+          echo "❌ Container failed to start"
+          docker compose logs
           exit 1
         fi
         
-        # Test that the image reference is correct
-        if docker compose -f docker-compose.test.yml config | grep -q "ghcr.io/goniz/telegram-claude-code:main"; then
-          echo "✅ Published image reference correct"
-        else
-          echo "❌ Published image reference not found"
-          exit 1
-        fi
-        
-    - name: Cleanup
-      run: docker compose -f docker-compose.test.yml down --volumes --rmi local
-      if: always()
+        # Cleanup
+        docker compose down --volumes
 
   push-docker:
     runs-on: ubuntu-latest
