@@ -34,7 +34,7 @@ echo "✅ Configuration structure validation passed"
 
 # Test 3: Check environment variable handling
 echo "✅ Test 3: Testing environment variable handling..."
-# Test required variable validation
+# Test required variable validation by creating a minimal env file without the token
 TMP_ENV_FILE=$(mktemp)
 echo "RUST_LOG=debug" > "$TMP_ENV_FILE"
 if docker compose --env-file "$TMP_ENV_FILE" config 2>&1 | grep -q "required variable TELOXIDE_TOKEN is missing"; then
