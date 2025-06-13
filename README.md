@@ -28,9 +28,10 @@ A Telegram bot built with Rust using the `teloxide` crate with Docker integratio
 The bot currently supports these commands:
 - `/start` - Welcome message
 - `/help` - Show available commands
-- `/echo <text>` - Echo back the provided text
 - `/startsession` - Starts a new coding session with Claude Code (Starts a new dev container)
-- `/endsession` - Ends the current active session (Removes dev container)
+- `/clearsession` - Ends the current active session (Removes dev container)
+- `/claudestatus` - Check Claude Code availability
+- `/authenticateclaude` - Authenticate Claude using your Claude account credentials (OAuth flow)
 
 ## Project Structure
 

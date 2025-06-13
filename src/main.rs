@@ -18,6 +18,8 @@ enum Command {
     ClearSession,
     #[command(description = "Check Claude Code availability")]
     ClaudeStatus,
+    #[command(description = "Authenticate Claude using your Claude account credentials (OAuth flow)")]
+    AuthenticateClaude,
 }
 
 // Main bot logic
@@ -121,6 +123,41 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                     bot.send_message(
                         msg.chat.id, 
                         format!("❌ No active coding session found: {}", e)
+                    ).await?;
+                }
+            }
+        }
+        Command::AuthenticateClaude => {
+            let chat_id = msg.chat.id.0;
+            let container_name = format!("coding-session-{}", chat_id);
+            
+            match ClaudeCodeClient::for_session(docker.clone(), &container_name).await {
+                Ok(client) => {
+                    // Send initial message
+                    bot.send_message(
+                        msg.chat.id,
+                        "🔐 Starting Claude account authentication process...\n\n⏳ Initiating OAuth flow..."
+                    ).await?;
+                    
+                    match client.authenticate_claude_account().await {
+                        Ok(auth_info) => {
+                            bot.send_message(
+                                msg.chat.id, 
+                                auth_info
+                            ).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                msg.chat.id, 
+                                format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
+                            ).await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id, 
+                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
                     ).await?;
                 }
             }
