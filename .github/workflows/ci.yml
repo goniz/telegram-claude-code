@@ -23,7 +23,7 @@ jobs:
       run: cargo build --verbose
       
     - name: Test
-      run: cargo test --verbose --nocapture
+      run: cargo test --verbose -- --nocapture
 
   build-docker:
     runs-on: ubuntu-latest
