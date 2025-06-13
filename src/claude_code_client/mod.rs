@@ -398,6 +398,12 @@ impl ClaudeCodeClient {
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),
+            env: Some(vec![
+                // Set up PATH to include NVM Node.js installation and standard paths
+                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:/root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+                // Ensure Node.js modules are available
+                "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
+            ]),
             ..Default::default()
         };
 
