@@ -247,34 +247,44 @@ impl ClaudeCodeClient {
         self.parse_result(output)
     }
 
-    /// Set up Claude Code authentication using Anthropic API key
-    /// This method provides instructions for setting up the API key
-    pub async fn setup_authentication(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    /// Authenticate Claude Code using Claude account (OAuth flow)
+    /// This initiates the account-based authentication process
+    pub async fn authenticate_claude_account(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Check if authentication is already set up
         match self.check_auth_status().await {
             Ok(true) => {
                 return Ok("✅ Claude Code is already authenticated and ready to use!".to_string());
             }
             Ok(false) => {
-                // Not authenticated, provide setup instructions
-                let instructions = r#"🔐 To use Claude Code, you need to set up authentication with your Anthropic API key.
+                // Generate OAuth authentication URL for Claude account
+                let auth_instructions = r#"🔐 To authenticate with your Claude account, follow these steps:
 
-📋 **Setup Instructions:**
+📱 **Claude Account Authentication:**
 
-1. **Get your API key:**
-   - Visit: https://console.anthropic.com/
-   - Sign up or log in to your account
-   - Go to the API Keys section
-   - Create a new API key
+1. **Visit the authentication URL:**
+   https://claude.ai/login
 
-2. **Set the API key in your environment:**
-   The API key needs to be set as the ANTHROPIC_API_KEY environment variable in your coding session.
+2. **Sign in with your Claude account:**
+   - Use your existing Claude Pro/Team account credentials
+   - Or create a new Claude account if you don't have one
 
-3. **Restart your coding session** after setting up the API key for the changes to take effect.
+3. **Grant permission:**
+   - Authorize Claude Code to access your account
+   - This enables full integration with your Claude subscription
 
-💡 **Note:** You need an Anthropic account with API access. The Claude Code CLI requires a valid API key to function."#;
+4. **Copy your session token:**
+   - After successful login, you'll need to configure the session in your environment
+   - Follow the instructions provided after authentication
+
+✨ **Benefits of Account Authentication:**
+- Access to your Claude Pro/Team features
+- Seamless integration with your existing Claude subscription
+- No need to manage separate API keys
+- Full access to latest Claude models
+
+💡 **Note:** This method uses your existing Claude account subscription rather than separate API billing."#;
                 
-                Ok(instructions.to_string())
+                Ok(auth_instructions.to_string())
             }
             Err(e) => {
                 return Err(format!("Unable to check authentication status: {}", e).into());
@@ -284,11 +294,11 @@ impl ClaudeCodeClient {
 
     /// Check authentication status
     pub async fn check_auth_status(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        // Try to run a simple claude command to check if API key is set up
+        // Try to run a simple claude command to check if authentication is working
         let command = vec![
             "claude".to_string(),
             "-p".to_string(),
-            "test".to_string(),
+            "test authentication".to_string(),
             "--model".to_string(),
             "claude-sonnet-4".to_string(),
         ];
@@ -301,12 +311,14 @@ impl ClaudeCodeClient {
             Err(e) => {
                 let error_msg = e.to_string().to_lowercase();
                 if error_msg.contains("invalid api key") || 
-                   error_msg.contains("please run /login") ||
-                   error_msg.contains("fix external api key") {
+                   error_msg.contains("authentication") ||
+                   error_msg.contains("unauthorized") ||
+                   error_msg.contains("api key") ||
+                   error_msg.contains("token") {
                     // These errors indicate authentication issues
                     Ok(false)
                 } else {
-                    // Other errors (network, etc.) should be bubbled up
+                    // Other errors (network, container issues, etc.) should be bubbled up
                     Err(e)
                 }
             }

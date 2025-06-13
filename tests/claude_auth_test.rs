@@ -36,28 +36,28 @@ async fn test_claude_authentication_command_workflow(docker: Docker) {
     assert!(auth_client_result.is_ok(), "for_session should find the container: {:?}", auth_client_result);
     let auth_client = auth_client_result.unwrap();
     
-    // Step 3: Test the authentication setup method (core of /authenticateclaude command)
-    println!("=== STEP 3: Testing Claude authentication setup ===");
+    // Step 3: Test the Claude account authentication method (core of /authenticateclaude command)
+    println!("=== STEP 3: Testing Claude account authentication ===");
     
-    let auth_result = auth_client.setup_authentication().await;
+    let auth_result = auth_client.authenticate_claude_account().await;
     
-    // The authentication setup method should always return instructions or success status
+    // The account authentication method should always return instructions or success status
     match auth_result {
         Ok(instructions) => {
-            println!("✅ Authentication setup result: {}", instructions);
+            println!("✅ Claude account authentication result: {}", instructions);
             // Verify the response contains useful information
             assert!(!instructions.is_empty(), "Authentication instructions should not be empty");
             assert!(
-                instructions.contains("API key") || 
+                instructions.contains("Claude account") || 
                 instructions.contains("authenticated") ||
-                instructions.contains("ANTHROPIC_API_KEY") ||
-                instructions.contains("console.anthropic.com"),
-                "Instructions should contain relevant authentication information: {}", instructions
+                instructions.contains("OAuth") ||
+                instructions.contains("claude.ai/login"),
+                "Instructions should contain relevant Claude account authentication information: {}", instructions
             );
         }
         Err(e) => {
             // In test environment, this might fail due to container/network issues, but it should be a real error
-            println!("⚠️  Authentication setup failed: {}", e);
+            println!("⚠️  Claude account authentication failed: {}", e);
             let error_msg = e.to_string();
             assert!(
                 !error_msg.contains("command not found") && !error_msg.contains("auth login"),

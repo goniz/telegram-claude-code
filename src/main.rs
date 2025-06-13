@@ -18,7 +18,7 @@ enum Command {
     ClearSession,
     #[command(description = "Check Claude Code availability")]
     ClaudeStatus,
-    #[command(description = "Check Claude Code authentication setup and get API key instructions")]
+    #[command(description = "Authenticate Claude using your Claude account credentials (OAuth flow)")]
     AuthenticateClaude,
 }
 
@@ -136,20 +136,20 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                     // Send initial message
                     bot.send_message(
                         msg.chat.id,
-                        "🔐 Checking Claude Code authentication setup..."
+                        "🔐 Starting Claude account authentication process...\n\n⏳ Initiating OAuth flow..."
                     ).await?;
                     
-                    match client.setup_authentication().await {
-                        Ok(instructions) => {
+                    match client.authenticate_claude_account().await {
+                        Ok(auth_info) => {
                             bot.send_message(
                                 msg.chat.id, 
-                                instructions
+                                auth_info
                             ).await?;
                         }
                         Err(e) => {
                             bot.send_message(
                                 msg.chat.id, 
-                                format!("❌ Failed to check authentication setup: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
+                                format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
                             ).await?;
                         }
                     }

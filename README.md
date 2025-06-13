@@ -31,7 +31,7 @@ The bot currently supports these commands:
 - `/startsession` - Starts a new coding session with Claude Code (Starts a new dev container)
 - `/clearsession` - Ends the current active session (Removes dev container)
 - `/claudestatus` - Check Claude Code availability
-- `/authenticateclaude` - Authenticate Claude using Claude account credentials (OAuth flow)
+- `/authenticateclaude` - Authenticate Claude using your Claude account credentials (OAuth flow)
 
 ## Project Structure
 
