@@ -29,9 +29,9 @@ pub struct ClaudeCodeConfig {
 impl Default for ClaudeCodeConfig {
     fn default() -> Self {
         Self {
-            model: "claude-3-5-sonnet-4".to_string(),
-            max_tokens: Some(4096),
-            temperature: Some(0.3),
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: None,
+            temperature: None,
             working_directory: Some("/workspace".to_string()),
         }
     }

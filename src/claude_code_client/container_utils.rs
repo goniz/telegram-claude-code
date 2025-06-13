@@ -5,8 +5,8 @@ use bollard::image::CreateImageOptions;
 use futures_util::StreamExt;
 
 /// Container image used by the main application
-/// This image provides Node.js runtime needed for Claude Code npm package
-pub const MAIN_CONTAINER_IMAGE: &str = "node:20";
+/// This is the Codex Universal image that provides multi-language development environment
+pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/openai/codex-universal:latest";
 
 /// Helper function to execute a command in a container
 pub async fn exec_command_in_container(docker: &Docker, container_id: &str, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
