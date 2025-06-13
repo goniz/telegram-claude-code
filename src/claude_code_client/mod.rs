@@ -2,6 +2,7 @@ use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 
 pub mod container_utils;
 
@@ -248,7 +249,7 @@ impl ClaudeCodeClient {
     }
 
     /// Authenticate Claude Code using Claude account (OAuth flow)
-    /// This initiates the account-based authentication process
+    /// This initiates the account-based authentication process through interactive CLI
     pub async fn authenticate_claude_account(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Check if authentication is already set up
         match self.check_auth_status().await {
@@ -256,40 +257,181 @@ impl ClaudeCodeClient {
                 return Ok("✅ Claude Code is already authenticated and ready to use!".to_string());
             }
             Ok(false) => {
-                // Generate OAuth authentication URL for Claude account
-                let auth_instructions = r#"🔐 To authenticate with your Claude account, follow these steps:
-
-📱 **Claude Account Authentication:**
-
-1. **Visit the authentication URL:**
-   https://claude.ai/login
-
-2. **Sign in with your Claude account:**
-   - Use your existing Claude Pro/Team account credentials
-   - Or create a new Claude account if you don't have one
-
-3. **Grant permission:**
-   - Authorize Claude Code to access your account
-   - This enables full integration with your Claude subscription
-
-4. **Copy your session token:**
-   - After successful login, you'll need to configure the session in your environment
-   - Follow the instructions provided after authentication
-
-✨ **Benefits of Account Authentication:**
-- Access to your Claude Pro/Team features
-- Seamless integration with your existing Claude subscription
-- No need to manage separate API keys
-- Full access to latest Claude models
-
-💡 **Note:** This method uses your existing Claude account subscription rather than separate API billing."#;
-                
-                Ok(auth_instructions.to_string())
+                // Launch Claude CLI in interactive mode and perform account authentication
+                return self.interactive_claude_login().await;
             }
             Err(e) => {
                 return Err(format!("Unable to check authentication status: {}", e).into());
             }
         }
+    }
+
+    /// Interactive Claude login using TTY to get OAuth URL
+    async fn interactive_claude_login(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        use bollard::exec::{CreateExecOptions, StartExecOptions};
+        use futures_util::StreamExt;
+        use std::time::Duration;
+        use tokio::time::sleep;
+
+        // Create exec with TTY enabled for interactive mode
+        let exec_config = CreateExecOptions {
+            cmd: Some(vec!["claude".to_string()]),
+            attach_stdin: Some(true),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            tty: Some(true),
+            working_dir: self.config.working_directory.clone(),
+            env: Some(vec![
+                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:/root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+                "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
+                "TERM=xterm".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let exec = self.docker.create_exec(&self.container_id, exec_config).await?;
+        
+        let start_config = StartExecOptions {
+            detach: false,
+            tty: true,
+            ..Default::default()
+        };
+
+        let mut oauth_url = String::new();
+        let mut authentication_found = false;
+        
+        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+            bollard::exec::StartExecResults::Attached { mut output, input } => {
+                // Give some time for the interactive CLI to start
+                sleep(Duration::from_millis(500)).await;
+                
+                // Send the /login command
+                {
+                    let mut stdin = input;
+                    stdin.write_all(b"/login\n").await?;
+                    stdin.flush().await?;
+                    
+                    // Wait a bit for the login options to appear
+                    sleep(Duration::from_millis(1000)).await;
+                    
+                    // Send option 1 for account auth
+                    stdin.write_all(b"1\n").await?;
+                    stdin.flush().await?;
+                }
+                
+                // Read output and look for OAuth URL
+                let timeout = tokio::time::timeout(Duration::from_secs(10), async {
+                    while let Some(Ok(msg)) = output.next().await {
+                        match msg {
+                            bollard::container::LogOutput::StdOut { message } => {
+                                let text = String::from_utf8_lossy(&message);
+                                log::debug!("Claude CLI output: {}", text);
+                                
+                                // Look for OAuth URL patterns
+                                if text.contains("https://") && (text.contains("claude.ai") || text.contains("anthropic") || text.contains("oauth") || text.contains("auth")) {
+                                    // Extract the URL
+                                    for line in text.lines() {
+                                        if line.trim().starts_with("https://") {
+                                            oauth_url = line.trim().to_string();
+                                            authentication_found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // Also look for any authentication-related instructions
+                                if text.contains("Visit") || text.contains("Open") || text.contains("browser") {
+                                    oauth_url.push_str(&text);
+                                    authentication_found = true;
+                                }
+                                
+                                if authentication_found {
+                                    break;
+                                }
+                            }
+                            bollard::container::LogOutput::StdErr { message } => {
+                                let text = String::from_utf8_lossy(&message);
+                                log::debug!("Claude CLI stderr: {}", text);
+                                
+                                // Sometimes OAuth URL might come through stderr
+                                if text.contains("https://") && (text.contains("claude.ai") || text.contains("anthropic")) {
+                                    for line in text.lines() {
+                                        if line.trim().starts_with("https://") {
+                                            oauth_url = line.trim().to_string();
+                                            authentication_found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }).await;
+                
+                match timeout {
+                    Ok(_) => {
+                        if authentication_found && !oauth_url.is_empty() {
+                            return Ok(format!(
+                                "🔐 **Claude Account Authentication**\n\n\
+                                To complete authentication with your Claude account:\n\n\
+                                **1. Visit this authentication URL:**\n{}\n\n\
+                                **2. Sign in with your Claude account:**\n\
+                                - Use your existing Claude Pro/Team account credentials\n\
+                                - Or create a new Claude account if you don't have one\n\n\
+                                **3. Complete the OAuth flow:**\n\
+                                - Grant permission to Claude Code\n\
+                                - Follow any additional instructions\n\n\
+                                **4. Return to continue using Claude Code**\n\n\
+                                ✨ This will enable full access to your Claude subscription features!",
+                                oauth_url
+                            ));
+                        } else {
+                            // Fallback to manual instructions if we couldn't extract the URL
+                            return Ok(self.get_fallback_auth_instructions().await);
+                        }
+                    }
+                    Err(_) => {
+                        log::warn!("Timeout waiting for OAuth URL from Claude CLI");
+                        return Ok(self.get_fallback_auth_instructions().await);
+                    }
+                }
+            }
+            bollard::exec::StartExecResults::Detached => {
+                return Err("Unexpected detached execution in interactive mode".into());
+            }
+        }
+    }
+
+    /// Fallback authentication instructions if interactive mode fails
+    async fn get_fallback_auth_instructions(&self) -> String {
+        r#"🔐 **Claude Account Authentication**
+
+To authenticate with your Claude account, please follow these steps:
+
+**1. Start Claude CLI interactively:**
+   Run `claude` in your terminal
+
+**2. Use the login command:**
+   Type `/login` and press Enter
+
+**3. Select account authentication:**
+   Choose option 1 for "Account authentication"
+
+**4. Follow the OAuth flow:**
+   - Visit the provided authentication URL
+   - Sign in with your Claude Pro/Team account
+   - Complete the authorization process
+
+**5. Return to Claude Code:**
+   Once authenticated, Claude Code will have access to your account
+
+✨ **Benefits:**
+- Full integration with your Claude subscription
+- Access to all your Claude Pro/Team features
+- No separate API key management required
+
+💡 **Note:** If you encounter issues, ensure you have a valid Claude account and subscription."#.to_string()
     }
 
     /// Check authentication status
