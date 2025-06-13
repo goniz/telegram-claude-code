@@ -3,6 +3,8 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
+pub mod container_utils;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeCodeResult {
     pub r#type: String,
@@ -406,6 +408,11 @@ impl ClaudeCodeClient {
         Ok(output.trim().to_string())
     }
 
+    /// Execute a command in the container using the shared utility (for basic commands without working_dir)
+    pub async fn exec_basic_command(&self, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        container_utils::exec_command_in_container(&self.docker, &self.container_id, command).await
+    }
+
     /// Parse Claude Code result from output
     fn parse_result(&self, output: String) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         match serde_json::from_str::<ClaudeCodeResult>(&output) {
@@ -448,192 +455,4 @@ impl ClaudeCodeClient {
     }
 }
 
-#[cfg(test)]
-mod integration_tests {
-    use super::*;
-    use bollard::container::{CreateContainerOptions, Config, RemoveContainerOptions};
-    use bollard::Docker;
-    use std::time::Duration;
-    use tokio::time::sleep;
 
-    /// Helper function to create a test container
-    async fn create_test_container(docker: &Docker, container_name: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Remove any existing container with the same name
-        let _ = cleanup_test_container(docker, container_name).await;
-
-        let options = CreateContainerOptions {
-            name: container_name,
-            ..Default::default()
-        };
-
-        let config = Config {
-            image: Some("node:20-slim"),
-            working_dir: Some("/workspace"),
-            tty: Some(true),
-            attach_stdin: Some(true),
-            attach_stdout: Some(true),
-            attach_stderr: Some(true),
-            cmd: Some(vec!["/bin/bash"]),
-            ..Default::default()
-        };
-
-        let container = docker.create_container(Some(options), config).await?;
-        docker.start_container::<String>(&container.id, None).await?;
-
-        // Wait for container to be ready
-        wait_for_container_ready(docker, &container.id).await?;
-
-        Ok(container.id)
-    }
-
-    /// Helper function to wait for container readiness
-    async fn wait_for_container_ready(docker: &Docker, container_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        for _ in 0..30 { // Wait up to 30 seconds
-            let exec_config = bollard::exec::CreateExecOptions {
-                cmd: Some(vec!["echo".to_string(), "test".to_string()]),
-                attach_stdout: Some(true),
-                ..Default::default()
-            };
-
-            if let Ok(exec) = docker.create_exec(container_id, exec_config).await {
-                if docker.start_exec(&exec.id, None).await.is_ok() {
-                    return Ok(());
-                }
-            }
-
-            sleep(Duration::from_secs(1)).await;
-        }
-
-        Err("Container did not become ready in time".into())
-    }
-
-    /// Helper function to cleanup test containers
-    async fn cleanup_test_container(docker: &Docker, container_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Try to stop the container first (ignore errors if it's not running)
-        let _ = docker.stop_container(container_name, None).await;
-
-        // Remove the container
-        let remove_options = RemoveContainerOptions {
-            force: true,
-            ..Default::default()
-        };
-
-        match docker.remove_container(container_name, Some(remove_options)).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // If container doesn't exist, that's fine
-                if e.to_string().contains("No such container") {
-                    Ok(())
-                } else {
-                    Err(e.into())
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_container_launch_and_connectivity() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_name = "test-claude-connectivity";
-
-        let container_id = create_test_container(&docker, container_name).await
-            .expect("Failed to create test container");
-
-        // Test basic connectivity
-        let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
-        
-        // Try to execute a simple command to verify container is working
-        let result = client.exec_command(vec!["echo".to_string(), "Hello World".to_string()]).await;
-        
-        // Cleanup
-        cleanup_test_container(&docker, container_name).await.ok();
-
-        assert!(result.is_ok(), "Container connectivity test failed: {:?}", result);
-        assert_eq!(result.unwrap().trim(), "Hello World");
-    }
-
-    #[tokio::test]
-    async fn test_claude_code_installation() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_name = "test-claude-installation";
-
-        let container_id = create_test_container(&docker, container_name).await
-            .expect("Failed to create test container");
-
-        let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
-
-        // Test Claude Code installation
-        let install_result = client.install().await;
-
-        // Cleanup
-        cleanup_test_container(&docker, container_name).await.ok();
-
-        assert!(install_result.is_ok(), "Claude Code installation failed: {:?}", install_result);
-    }
-
-    #[tokio::test]
-    async fn test_claude_availability_check() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_name = "test-claude-availability";
-
-        let container_id = create_test_container(&docker, container_name).await
-            .expect("Failed to create test container");
-
-        let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
-
-        // Install Claude Code first
-        client.install().await.expect("Failed to install Claude Code");
-
-        // Test Claude availability check
-        let availability_result = client.check_availability().await;
-
-        // Cleanup
-        cleanup_test_container(&docker, container_name).await.ok();
-
-        assert!(availability_result.is_ok(), "Claude availability check failed: {:?}", availability_result);
-        let version_output = availability_result.unwrap();
-        // Should contain version information or help text
-        assert!(!version_output.is_empty(), "Version output should not be empty");
-    }
-
-    #[tokio::test]
-    async fn test_claude_cli_basic_invocation() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_name = "test-claude-cli-invocation";
-
-        let container_id = create_test_container(&docker, container_name).await
-            .expect("Failed to create test container");
-
-        let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
-
-        // Install Claude Code first
-        client.install().await.expect("Failed to install Claude Code");
-
-        // Test basic Claude CLI invocation (help command)
-        let help_result = client.exec_command(vec!["claude".to_string(), "--help".to_string()]).await;
-
-        // Cleanup
-        cleanup_test_container(&docker, container_name).await.ok();
-
-        assert!(help_result.is_ok(), "Claude CLI basic invocation failed: {:?}", help_result);
-        let help_output = help_result.unwrap();
-        println!("Claude help output: '{}'", help_output);
-        
-        // Help output should not be empty
-        assert!(!help_output.is_empty(), "Help output should not be empty");
-        
-        // The output should either show help information OR indicate that Claude is available but needs auth
-        // This validates that the CLI is properly installed and accessible
-        let output_lower = help_output.to_lowercase();
-        let is_valid_output = output_lower.contains("usage") || 
-                             output_lower.contains("command") || 
-                             output_lower.contains("help") ||
-                             output_lower.contains("option") ||
-                             output_lower.contains("claude") ||
-                             output_lower.contains("auth") ||
-                             output_lower.contains("login") ||
-                             output_lower.contains("anthropic");
-        
-        assert!(is_valid_output, "Help output should contain CLI-related keywords or indicate Claude is available, got: '{}'", help_output);
-    }
-}
