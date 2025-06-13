@@ -4,7 +4,7 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use futures_util::StreamExt;
 
 /// Container image used by the main application
-pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/openai/codex-universal:latest";
+pub const MAIN_CONTAINER_IMAGE: &str = "node:20-slim";
 
 /// Helper function to execute a command in a container
 pub async fn exec_command_in_container(docker: &Docker, container_id: &str, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -68,9 +68,8 @@ pub async fn wait_for_container_ready(docker: &Docker, container_id: &str) -> Re
 }
 
 /// Function to start a new coding session container
-pub async fn start_coding_session(docker: &Docker, container_name: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn start_coding_session(docker: &Docker, container_name: &str, claude_config: crate::ClaudeCodeConfig) -> Result<crate::ClaudeCodeClient, Box<dyn std::error::Error + Send + Sync>> {
     use crate::ClaudeCodeClient;
-    use crate::ClaudeCodeConfig;
     
     // First, try to remove any existing container with the same name
     let _ = clear_coding_session(docker, container_name).await;
@@ -104,11 +103,11 @@ pub async fn start_coding_session(docker: &Docker, container_name: &str) -> Resu
     // Wait for container to be ready
     wait_for_container_ready(docker, &container.id).await?;
     
-    // Install Claude Code via npm using ClaudeCodeClient
-    let claude_client = ClaudeCodeClient::new(docker.clone(), container.id.clone(), ClaudeCodeConfig::default());
+    // Create Claude Code client and install
+    let claude_client = ClaudeCodeClient::new(docker.clone(), container.id.clone(), claude_config);
     claude_client.install().await?;
     
-    Ok(container.id)
+    Ok(claude_client)
 }
 
 /// Function to clear (stop and remove) a coding session container

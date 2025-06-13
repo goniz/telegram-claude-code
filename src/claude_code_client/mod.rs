@@ -19,23 +19,20 @@ pub struct ClaudeCodeResult {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ClaudeCodeConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub working_directory: Option<String>,
-    pub timeout_seconds: Option<u64>,
 }
 
 impl Default for ClaudeCodeConfig {
     fn default() -> Self {
         Self {
-            model: "claude-opus-4".to_string(),
+            model: "claude-3-5-sonnet-20241022".to_string(),
             max_tokens: Some(4096),
-            temperature: Some(0.7),
+            temperature: Some(0.3),
             working_directory: Some("/workspace".to_string()),
-            timeout_seconds: Some(300), // 5 minutes
         }
     }
 }
@@ -57,6 +54,11 @@ impl ClaudeCodeClient {
             container_id,
             config,
         }
+    }
+
+    /// Get the container ID
+    pub fn container_id(&self) -> &str {
+        &self.container_id
     }
 
     /// Execute a single prompt using Claude Code in print mode
@@ -120,81 +122,108 @@ impl ClaudeCodeClient {
             "sh".to_string(),
             "-c".to_string(),
             format!(
-                "claude -p '{}' --output-format json --model {} < {}",
+                "claude -p '{}' --output-format json --model {} {} < {}",
                 prompt.replace("'", "'\"'\"'"),
                 self.config.model,
+                self.config.max_tokens.map_or(String::new(), |t| format!("--max-tokens {}", t)),
                 temp_file
             ),
         ];
 
         let output = self.exec_command(command).await?;
-
+        
         // Clean up temporary file
         let cleanup_command = vec!["rm".to_string(), temp_file];
-        let _ = self.exec_command(cleanup_command).await;
+        let _ = self.exec_command(cleanup_command).await; // Ignore cleanup errors
 
-        // Parse result
+        self.parse_result(output)
+    }
+
+    /// Execute a Claude Code chat command (interactive mode)
+    pub async fn start_chat_session(&self, initial_message: Option<&str>) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+        let mut command = vec![
+            "claude".to_string(),
+            "chat".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+            "--model".to_string(),
+            self.config.model.clone(),
+        ];
+
+        if let Some(message) = initial_message {
+            command.extend_from_slice(&["--message".to_string(), message.to_string()]);
+        }
+
+        let output = self.exec_command(command).await?;
+        self.parse_result(output)
+    }
+
+    /// Send a message to an existing chat session
+    pub async fn send_chat_message(&self, session_id: &str, message: &str) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+        let command = vec![
+            "claude".to_string(),
+            "chat".to_string(),
+            "--session-id".to_string(),
+            session_id.to_string(),
+            "--message".to_string(),
+            message.to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+        ];
+
+        let output = self.exec_command(command).await?;
+        self.parse_result(output)
+    }
+
+    /// Run Claude Code in coding mode with a specific task
+    pub async fn run_coding_task(&self, task: &str, files: Vec<&str>) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+        let mut command = vec![
+            "claude".to_string(),
+            "code".to_string(),
+            "--task".to_string(),
+            task.to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+            "--model".to_string(),
+            self.config.model.clone(),
+        ];
+
+        for file in files {
+            command.extend_from_slice(&["--file".to_string(), file.to_string()]);
+        }
+
+        let output = self.exec_command(command).await?;
+        self.parse_result(output)
+    }
+
+    /// Parse the output from Claude Code and handle different response formats
+    fn parse_result(&self, output: String) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         match serde_json::from_str::<ClaudeCodeResult>(&output) {
             Ok(result) => Ok(result),
-            Err(_) => Ok(ClaudeCodeResult {
-                r#type: "result".to_string(),
-                subtype: "success".to_string(),
-                cost_usd: 0.0,
-                is_error: false,
-                duration_ms: 0,
-                duration_api_ms: 0,
-                num_turns: 1,
-                result: output,
-                session_id: "unknown".to_string(),
-            }),
+            Err(_) => {
+                // If JSON parsing fails, create a simple result with the raw output
+                Ok(ClaudeCodeResult {
+                    r#type: "result".to_string(),
+                    subtype: if output.to_lowercase().contains("error") { "error" } else { "success" }.to_string(),
+                    cost_usd: 0.0,
+                    is_error: output.to_lowercase().contains("error"),
+                    duration_ms: 0,
+                    duration_api_ms: 0,
+                    num_turns: 1,
+                    result: output,
+                    session_id: "unknown".to_string(),
+                })
+            }
         }
     }
 
-    /// Execute a code review on a file
-    pub async fn review_code(&self, file_path: &str) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    /// Show current session status
+    pub async fn get_session_status(&self) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!(
-                "claude -p 'Review this code for bugs, improvements, and best practices:' --output-format json --model {} < {}",
-                self.config.model,
-                file_path
-            ),
-        ];
-
-        let output = self.exec_command(command).await?;
-        self.parse_result(output)
-    }
-
-    /// Generate documentation for code
-    pub async fn generate_docs(&self, file_path: &str) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
-        let command = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!(
-                "claude -p 'Generate comprehensive documentation for this code:' --output-format json --model {} < {}",
-                self.config.model,
-                file_path
-            ),
-        ];
-
-        let output = self.exec_command(command).await?;
-        self.parse_result(output)
-    }
-
-    /// Fix issues in code
-    pub async fn fix_code(&self, file_path: &str, issue_description: &str) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
-        let prompt = format!("Fix the following issue in this code: {}", issue_description);
-        
-        let command = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!(
-                "claude -p '{}' --output-format json --model {} < {}",
-                prompt.replace("'", "'\"'\"'"),
-                self.config.model,
-                file_path
-            ),
+            "claude".to_string(),
+            "status".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
         ];
 
         let output = self.exec_command(command).await?;
@@ -279,20 +308,15 @@ impl ClaudeCodeClient {
         let mut verification_url = String::new();
         
         for line in output.lines() {
-            if line.to_lowercase().contains("device code") || line.to_lowercase().contains("user code") {
-                if let Some(code) = line.split(':').nth(1) {
-                    device_code = code.trim().to_string();
-                }
-            }
-            if line.contains("http") {
-                if let Some(url_start) = line.find("http") {
-                    verification_url = line[url_start..].split_whitespace().next().unwrap_or("").to_string();
-                }
+            if line.contains("device code:") {
+                device_code = line.split(':').nth(1).unwrap_or("").trim().to_string();
+            } else if line.contains("verification URL:") || line.contains("url:") {
+                verification_url = line.split(':').nth(1).unwrap_or("").trim().to_string();
             }
         }
         
         if device_code.is_empty() || verification_url.is_empty() {
-            return Err("Could not parse device authentication response".into());
+            return Err(format!("Failed to parse device code response: {}", output).into());
         }
         
         Ok((device_code, verification_url))
@@ -408,27 +432,10 @@ impl ClaudeCodeClient {
         Ok(output.trim().to_string())
     }
 
-    /// Execute a command in the container using the shared utility (for basic commands without working_dir)
+    /// Helper method for basic command execution (used in tests)
+    #[allow(dead_code)]
     pub async fn exec_basic_command(&self, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        container_utils::exec_command_in_container(&self.docker, &self.container_id, command).await
-    }
-
-    /// Parse Claude Code result from output
-    fn parse_result(&self, output: String) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
-        match serde_json::from_str::<ClaudeCodeResult>(&output) {
-            Ok(result) => Ok(result),
-            Err(_) => Ok(ClaudeCodeResult {
-                r#type: "result".to_string(),
-                subtype: "success".to_string(),
-                cost_usd: 0.0,
-                is_error: false,
-                duration_ms: 0,
-                duration_api_ms: 0,
-                num_turns: 1,
-                result: output,
-                session_id: "unknown".to_string(),
-            }),
-        }
+        self.exec_command(command).await
     }
 }
 
@@ -454,5 +461,3 @@ impl ClaudeCodeClient {
         Ok(Self::new(docker, container_id, ClaudeCodeConfig::default()))
     }
 }
-
-

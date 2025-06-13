@@ -57,12 +57,12 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                 "🚀 Starting new coding session...\n\n⏳ Creating container and installing Claude Code..."
             ).await?;
             
-            match container_utils::start_coding_session(&docker, &container_name).await {
-                Ok(container_id) => {
+            match container_utils::start_coding_session(&docker, &container_name, ClaudeCodeConfig::default()).await {
+                Ok(claude_client) => {
                     bot.send_message(
                         msg.chat.id, 
                         format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code has been installed and is ready to use!\n\nYou can now run code and manage your development environment.", 
-                                container_id.chars().take(12).collect::<String>(), container_name)
+                                claude_client.container_id().chars().take(12).collect::<String>(), container_name)
                     ).await?;
                 }
                 Err(e) => {
