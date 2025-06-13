@@ -1,11 +1,8 @@
 use teloxide::{prelude::*, utils::command::BotCommands};
 use bollard::Docker;
-use bollard::container::{CreateContainerOptions, Config, RemoveContainerOptions};
-use bollard::exec::{CreateExecOptions, StartExecOptions};
-use futures_util::StreamExt;
 
 mod claude_code_client;
-use claude_code_client::{ClaudeCodeClient, ClaudeCodeConfig};
+use claude_code_client::{ClaudeCodeClient, ClaudeCodeConfig, container_utils};
 
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
@@ -60,12 +57,12 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                 "🚀 Starting new coding session...\n\n⏳ Creating container and installing Claude Code..."
             ).await?;
             
-            match start_coding_session(&docker, &container_name).await {
-                Ok(container_id) => {
+            match container_utils::start_coding_session(&docker, &container_name, ClaudeCodeConfig::default()).await {
+                Ok(claude_client) => {
                     bot.send_message(
                         msg.chat.id, 
                         format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code has been installed and is ready to use!\n\nYou can now run code and manage your development environment.", 
-                                container_id.chars().take(12).collect::<String>(), container_name)
+                                claude_client.container_id().chars().take(12).collect::<String>(), container_name)
                     ).await?;
                 }
                 Err(e) => {
@@ -80,7 +77,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
             let chat_id = msg.chat.id.0;
             let container_name = format!("coding-session-{}", chat_id);
             
-            match clear_coding_session(&docker, &container_name).await {
+            match container_utils::clear_coding_session(&docker, &container_name).await {
                 Ok(()) => {
                     bot.send_message(
                         msg.chat.id, 
@@ -131,132 +128,4 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
     }
 
     Ok(())
-}
-
-// Helper function to execute a command in a container
-async fn exec_command_in_container(docker: &Docker, container_id: &str, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let exec_config = CreateExecOptions {
-        cmd: Some(command),
-        attach_stdout: Some(true),
-        attach_stderr: Some(true),
-        ..Default::default()
-    };
-
-    let exec = docker.create_exec(container_id, exec_config).await?;
-    
-    let start_config = StartExecOptions {
-        detach: false,
-        ..Default::default()
-    };
-
-    let mut output = String::new();
-    
-    match docker.start_exec(&exec.id, Some(start_config)).await? {
-        bollard::exec::StartExecResults::Attached { output: mut output_stream, .. } => {
-            while let Some(Ok(msg)) = output_stream.next().await {
-                match msg {
-                    bollard::container::LogOutput::StdOut { message } => {
-                        output.push_str(&String::from_utf8_lossy(&message));
-                    }
-                    bollard::container::LogOutput::StdErr { message } => {
-                        output.push_str(&String::from_utf8_lossy(&message));
-                    }
-                    _ => {}
-                }
-            }
-        }
-        bollard::exec::StartExecResults::Detached => {
-            return Err("Unexpected detached execution".into());
-        }
-    }
-
-    Ok(output.trim().to_string())
-}
-
-// Helper function to wait for container readiness
-async fn wait_for_container_ready(docker: &Docker, container_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    log::info!("Waiting for container to be ready...");
-    
-    // Try up to 30 times with 1 second delays (30 seconds total)
-    for attempt in 1..=30 {
-        match exec_command_in_container(docker, container_id, vec!["echo".to_string(), "ready".to_string()]).await {
-            Ok(_) => {
-                log::info!("Container is ready after {} attempts", attempt);
-                return Ok(());
-            }
-            Err(e) => {
-                log::debug!("Container readiness check failed (attempt {}): {}", attempt, e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            }
-        }
-    }
-    
-    Err("Container failed to become ready after 30 seconds".into())
-}
-
-
-
-// Function to start a new coding session container
-async fn start_coding_session(docker: &Docker, container_name: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // First, try to remove any existing container with the same name
-    let _ = clear_coding_session(docker, container_name).await;
-    
-    let options = CreateContainerOptions {
-        name: container_name,
-        ..Default::default()
-    };
-    
-    let config = Config {
-        image: Some("ghcr.io/openai/codex-universal:latest"),
-        working_dir: Some("/workspace"),
-        tty: Some(true),
-        attach_stdin: Some(true),
-        attach_stdout: Some(true),
-        attach_stderr: Some(true),
-        env: Some(vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=20", 
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-            "CODEX_ENV_SWIFT_VERSION=6.1",
-        ]),
-        cmd: Some(vec!["/bin/bash"]),
-        ..Default::default()
-    };
-    
-    let container = docker.create_container(Some(options), config).await?;
-    docker.start_container::<String>(&container.id, None).await?;
-    
-    // Wait for container to be ready
-    wait_for_container_ready(docker, &container.id).await?;
-    
-    // Install Claude Code via npm using ClaudeCodeClient
-    let claude_client = ClaudeCodeClient::new(docker.clone(), container.id.clone(), ClaudeCodeConfig::default());
-    claude_client.install().await?;
-    
-    Ok(container.id)
-}
-
-// Function to clear (stop and remove) a coding session container
-async fn clear_coding_session(docker: &Docker, container_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Try to stop the container first (ignore errors if it's not running)
-    let _ = docker.stop_container(container_name, None).await;
-    
-    // Remove the container
-    let remove_options = RemoveContainerOptions {
-        force: true,
-        ..Default::default()
-    };
-    
-    match docker.remove_container(container_name, Some(remove_options)).await {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // If container doesn't exist, that's fine
-            if e.to_string().contains("No such container") {
-                Ok(())
-            } else {
-                Err(e.into())
-            }
-        }
-    }
 }
