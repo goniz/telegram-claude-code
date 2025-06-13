@@ -247,107 +247,80 @@ impl ClaudeCodeClient {
         self.parse_result(output)
     }
 
-    /// Authenticate Claude Code using Claude account (Pro/Max plan)
-    /// This initiates the OAuth flow and returns the authentication URL
-    pub async fn authenticate_claude_account(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let command = vec![
-            "claude".to_string(),
-            "auth".to_string(),
-            "login".to_string(),
-            "--provider".to_string(),
-            "claude".to_string(),
-            "--no-browser".to_string(), // Prevent opening browser in container
-        ];
-
-        let output = self.exec_command(command).await?;
-        
-        // Extract the authentication URL from the output
-        // Claude Code typically outputs something like "Visit this URL to authenticate: https://..."
-        if let Some(url_line) = output.lines().find(|line| line.contains("http")) {
-            if let Some(url_start) = url_line.find("http") {
-                let url = url_line[url_start..].split_whitespace().next().unwrap_or("");
-                Ok(url.to_string())
-            } else {
-                Err("Authentication URL not found in output".into())
+    /// Set up Claude Code authentication using Anthropic API key
+    /// This method provides instructions for setting up the API key
+    pub async fn setup_authentication(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // Check if authentication is already set up
+        match self.check_auth_status().await {
+            Ok(true) => {
+                return Ok("✅ Claude Code is already authenticated and ready to use!".to_string());
             }
-        } else {
-            Err(format!("Could not parse authentication response: {}", output).into())
+            Ok(false) => {
+                // Not authenticated, provide setup instructions
+                let instructions = r#"🔐 To use Claude Code, you need to set up authentication with your Anthropic API key.
+
+📋 **Setup Instructions:**
+
+1. **Get your API key:**
+   - Visit: https://console.anthropic.com/
+   - Sign up or log in to your account
+   - Go to the API Keys section
+   - Create a new API key
+
+2. **Set the API key in your environment:**
+   The API key needs to be set as the ANTHROPIC_API_KEY environment variable in your coding session.
+
+3. **Restart your coding session** after setting up the API key for the changes to take effect.
+
+💡 **Note:** You need an Anthropic account with API access. The Claude Code CLI requires a valid API key to function."#;
+                
+                Ok(instructions.to_string())
+            }
+            Err(e) => {
+                return Err(format!("Unable to check authentication status: {}", e).into());
+            }
         }
     }
 
     /// Check authentication status
     pub async fn check_auth_status(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        // Try to run a simple claude command to check if API key is set up
         let command = vec![
             "claude".to_string(),
-            "auth".to_string(),
-            "status".to_string(),
+            "-p".to_string(),
+            "test".to_string(),
+            "--model".to_string(),
+            "claude-sonnet-4".to_string(),
         ];
 
-        let output = self.exec_command(command).await?;
-        
-        // Check if the output indicates successful authentication
-        Ok(output.to_lowercase().contains("authenticated") || 
-           output.to_lowercase().contains("logged in") ||
-           output.to_lowercase().contains("valid"))
-    }
-
-    /// Authenticate using device code flow for unattended authentication
-    pub async fn authenticate_device_flow(&self) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
-        let command = vec![
-            "claude".to_string(),
-            "auth".to_string(),
-            "device".to_string(),
-            "--provider".to_string(),
-            "claude".to_string(),
-        ];
-
-        let output = self.exec_command(command).await?;
-        
-        // Parse device code and verification URL
-        let mut device_code = String::new();
-        let mut verification_url = String::new();
-        
-        for line in output.lines() {
-            if line.contains("device code:") {
-                device_code = line.split(':').nth(1).unwrap_or("").trim().to_string();
-            } else if line.contains("verification URL:") || line.contains("url:") {
-                verification_url = line.split(':').nth(1).unwrap_or("").trim().to_string();
+        match self.exec_command(command).await {
+            Ok(_) => {
+                // If the command succeeds, authentication is working
+                Ok(true)
+            }
+            Err(e) => {
+                let error_msg = e.to_string().to_lowercase();
+                if error_msg.contains("invalid api key") || 
+                   error_msg.contains("please run /login") ||
+                   error_msg.contains("fix external api key") {
+                    // These errors indicate authentication issues
+                    Ok(false)
+                } else {
+                    // Other errors (network, etc.) should be bubbled up
+                    Err(e)
+                }
             }
         }
-        
-        if device_code.is_empty() || verification_url.is_empty() {
-            return Err(format!("Failed to parse device code response: {}", output).into());
-        }
-        
-        Ok((device_code, verification_url))
     }
 
-    /// Wait for device authentication to complete
-    pub async fn wait_for_device_auth(&self, timeout_seconds: u64) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        let start_time = std::time::Instant::now();
-        let timeout_duration = std::time::Duration::from_secs(timeout_seconds);
-        
-        while start_time.elapsed() < timeout_duration {
-            if self.check_auth_status().await? {
-                return Ok(true);
-            }
-            
-            // Wait 5 seconds before checking again
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    /// Get current authentication info
+    pub async fn get_auth_info(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // Check if authenticated and return status
+        match self.check_auth_status().await {
+            Ok(true) => Ok("✅ Claude Code is authenticated and ready to use".to_string()),
+            Ok(false) => Ok("❌ Claude Code is not authenticated. Please set up your Anthropic API key.".to_string()),
+            Err(e) => Err(format!("Unable to check authentication status: {}", e).into()),
         }
-        
-        Ok(false) // Timeout reached
-    }
-
-    /// Logout from Claude Code
-    pub async fn logout(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let command = vec![
-            "claude".to_string(),
-            "auth".to_string(),
-            "logout".to_string(),
-        ];
-
-        self.exec_command(command).await
     }
 
     /// Install Claude Code via npm
@@ -377,17 +350,6 @@ impl ClaudeCodeClient {
     /// Check Claude Code version and availability
     pub async fn check_availability(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec!["claude".to_string(), "--version".to_string()];
-        self.exec_command(command).await
-    }
-
-    /// Get current authentication info
-    pub async fn get_auth_info(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let command = vec![
-            "claude".to_string(),
-            "auth".to_string(),
-            "whoami".to_string(),
-        ];
-
         self.exec_command(command).await
     }
 
