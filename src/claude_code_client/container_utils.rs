@@ -1,10 +1,12 @@
 use bollard::Docker;
 use bollard::container::{CreateContainerOptions, Config, RemoveContainerOptions};
 use bollard::exec::{CreateExecOptions, StartExecOptions};
+use bollard::image::CreateImageOptions;
 use futures_util::StreamExt;
 
 /// Container image used by the main application
-pub const MAIN_CONTAINER_IMAGE: &str = "node:20-slim";
+/// This image provides Node.js runtime needed for Claude Code npm package
+pub const MAIN_CONTAINER_IMAGE: &str = "node:20";
 
 /// Helper function to execute a command in a container
 pub async fn exec_command_in_container(docker: &Docker, container_id: &str, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -74,6 +76,23 @@ pub async fn start_coding_session(docker: &Docker, container_name: &str, claude_
     // First, try to remove any existing container with the same name
     let _ = clear_coding_session(docker, container_name).await;
     
+    // Pull the image if it doesn't exist
+    let create_image_options = CreateImageOptions {
+        from_image: MAIN_CONTAINER_IMAGE,
+        ..Default::default()
+    };
+    
+    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
+    while let Some(result) = pull_stream.next().await {
+        match result {
+            Ok(_) => {}, // Image pull progress, continue
+            Err(e) => {
+                log::warn!("Image pull warning (might already exist): {}", e);
+                break; // Continue even if pull fails (image might already exist)
+            }
+        }
+    }
+    
     let options = CreateContainerOptions {
         name: container_name,
         ..Default::default()
@@ -135,10 +154,28 @@ pub async fn clear_coding_session(docker: &Docker, container_name: &str) -> Resu
 }
 
 /// Create a test container using the same configuration as the main application
+/// This is a lightweight version for tests that need a container but not Claude Code installation
 #[allow(dead_code)]
 pub async fn create_test_container(docker: &Docker, container_name: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Remove any existing container with the same name
     let _ = clear_coding_session(docker, container_name).await;
+
+    // Pull the image if it doesn't exist
+    let create_image_options = CreateImageOptions {
+        from_image: MAIN_CONTAINER_IMAGE,
+        ..Default::default()
+    };
+    
+    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
+    while let Some(result) = pull_stream.next().await {
+        match result {
+            Ok(_) => {}, // Image pull progress, continue
+            Err(e) => {
+                log::warn!("Image pull warning (might already exist): {}", e);
+                break; // Continue even if pull fails (image might already exist)
+            }
+        }
+    }
 
     let options = CreateContainerOptions {
         name: container_name,
