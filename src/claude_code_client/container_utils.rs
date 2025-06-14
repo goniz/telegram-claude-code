@@ -5,8 +5,8 @@ use bollard::image::CreateImageOptions;
 use futures_util::StreamExt;
 
 /// Container image used by the main application
-/// This is the Codex Universal image that provides multi-language development environment
-pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/openai/codex-universal:latest";
+/// This is the Claude Code runtime image that provides multi-language development environment with Claude Code pre-installed
+pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/goniz/claude-code-runtime:latest";
 
 /// Helper function to execute a command in a container
 pub async fn exec_command_in_container(docker: &Docker, container_id: &str, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -122,9 +122,8 @@ pub async fn start_coding_session(docker: &Docker, container_name: &str, claude_
     // Wait for container to be ready
     wait_for_container_ready(docker, &container.id).await?;
     
-    // Create Claude Code client and install
+    // Create Claude Code client (Claude Code is pre-installed in the runtime image)
     let claude_client = ClaudeCodeClient::new(docker.clone(), container.id.clone(), claude_config);
-    claude_client.install().await?;
     
     Ok(claude_client)
 }

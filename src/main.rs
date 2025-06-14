@@ -1,5 +1,7 @@
 use teloxide::{prelude::*, utils::command::BotCommands};
 use bollard::Docker;
+use bollard::image::CreateImageOptions;
+use futures_util::StreamExt;
 
 mod claude_code_client;
 use claude_code_client::{ClaudeCodeClient, ClaudeCodeConfig, container_utils};
@@ -35,6 +37,29 @@ async fn main() {
         .expect("Failed to connect to Docker daemon");
 
     log::info!("Connected to Docker daemon");
+
+    // Pull the latest runtime image on startup
+    log::info!("Pulling latest runtime image: {}", container_utils::MAIN_CONTAINER_IMAGE);
+    let create_image_options = CreateImageOptions {
+        from_image: container_utils::MAIN_CONTAINER_IMAGE,
+        ..Default::default()
+    };
+    
+    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
+    while let Some(result) = pull_stream.next().await {
+        match result {
+            Ok(info) => {
+                if let Some(status) = &info.status {
+                    log::debug!("Image pull progress: {}", status);
+                }
+            }
+            Err(e) => {
+                log::warn!("Image pull warning (might already exist): {}", e);
+                break; // Continue even if pull fails (image might already exist)
+            }
+        }
+    }
+    log::info!("Runtime image pull completed");
 
     Command::repl(bot, move |bot, msg, cmd| {
         let docker = docker.clone();
