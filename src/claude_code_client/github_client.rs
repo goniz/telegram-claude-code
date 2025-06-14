@@ -118,15 +118,34 @@ impl GithubClient {
 
         match self.exec_command(clone_command).await {
             Ok(output) => {
-                log::info!("Repository cloned successfully");
-                log::debug!("Clone output: {}", output);
+                log::debug!("Clone command output: {}", output);
                 
-                Ok(GithubCloneResult {
-                    success: true,
-                    repository: repository.to_string(),
-                    target_directory,
-                    message: format!("Successfully cloned {}", repository),
-                })
+                // Check if the output contains error patterns
+                let is_error = output.contains("exec failed") || 
+                              output.contains("executable file not found") ||
+                              output.contains("not found") ||
+                              output.contains("permission denied") ||
+                              output.contains("authentication required") ||
+                              output.contains("repository not found") ||
+                              output.contains("404");
+                
+                if is_error {
+                    log::error!("Repository clone failed with error in output: {}", output);
+                    Ok(GithubCloneResult {
+                        success: false,
+                        repository: repository.to_string(),
+                        target_directory,
+                        message: format!("Clone failed: {}", output),
+                    })
+                } else {
+                    log::info!("Repository cloned successfully");
+                    Ok(GithubCloneResult {
+                        success: true,
+                        repository: repository.to_string(),
+                        target_directory,
+                        message: format!("Successfully cloned {}", repository),
+                    })
+                }
             }
             Err(e) => {
                 log::error!("Repository clone failed: {}", e);
