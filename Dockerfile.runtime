@@ -15,11 +15,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
 ENV PATH="/usr/local/bin:$PATH"
 
 # Install Claude Code via npm globally
-RUN nvm use default && \
-		npm install -g @anthropic-ai/claude-code
+RUN /opt/entrypoint.sh -c \
+		"nvm use default && npm install -g @anthropic-ai/claude-code"
 
 # Set working directory
 WORKDIR /workspace
-
-# Default command to keep container running
-CMD ["/bin/bash"]
