@@ -130,6 +130,48 @@ docker inspect telegram-bot | grep -A 5 Health
    - Clear Docker cache: `docker system prune -a`
    - Check internet connection for dependency downloads
 
+4. **Container termination during Claude authentication:**
+   ```
+   Error: Container health check failed / Container may have terminated
+   ```
+   Solution: 
+   - Check system resources (memory, CPU, disk space)
+   - Try restarting the coding session: `/clearsession` then `/startsession`
+   - Verify Docker daemon has sufficient resources
+   - Check for resource limits in docker-compose.yml
+
+5. **Docker 409 Conflict errors:**
+   ```
+   Error: 409 Conflict - container name already in use
+   ```
+   Solution: The application now includes automatic retry logic, but if persistent:
+   - Manual cleanup: `docker rm -f container-name`
+   - Check for orphaned containers: `docker ps -a`
+
+6. **Container image pull failures:**
+   ```
+   Error: failed to pull image / timeout
+   ```
+   Solution:
+   - Check internet connectivity
+   - Try pulling manually: `docker pull ghcr.io/openai/codex-universal:latest`
+   - Consider using a smaller base image for testing
+
+### Container Health Monitoring
+
+The application now includes enhanced container health checks:
+
+```bash
+# Check container status and health
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.State}}"
+
+# Monitor container resource usage
+docker stats --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+
+# View container logs for debugging
+docker logs coding-session-<chat-id> --follow
+```
+
 ### Debugging
 
 ```bash
