@@ -11,14 +11,14 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
+# Ensure the claude binary is in PATH
+ENV PATH="/usr/local/bin:$NVM_BIN:$PATH"
+
 # Install Claude Code via npm globally
 RUN npm install -g @anthropic-ai/claude-code
 
 # Set working directory
 WORKDIR /workspace
-
-# Ensure the claude binary is in PATH
-ENV PATH="/usr/local/bin:$PATH"
 
 # Default command to keep container running
 CMD ["/bin/bash"]
