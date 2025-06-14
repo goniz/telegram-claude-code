@@ -46,20 +46,20 @@ async fn test_container_launch_and_connectivity(
 
 #[rstest]
 #[tokio::test]
-async fn test_claude_code_installation(
+async fn test_claude_code_preinstalled(
     #[future] test_container: (Docker, String, String)
 ) {
     let (docker, container_id, container_name) = test_container.await;
     
     let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
     
-    // Test Claude Code installation
-    let install_result = client.install().await;
+    // Test that Claude Code is pre-installed and available
+    let availability_result = client.check_availability().await;
     
     // Cleanup
     cleanup_container(&docker, &container_name).await;
     
-    assert!(install_result.is_ok(), "Claude Code installation failed: {:?}", install_result);
+    assert!(availability_result.is_ok(), "Claude Code should be pre-installed and available: {:?}", availability_result);
 }
 
 #[rstest]
@@ -71,9 +71,7 @@ async fn test_claude_availability_check(
     
     let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
     
-    // Install Claude Code first
-    client.install().await.expect("Failed to install Claude Code");
-    
+    // Claude Code should be pre-installed in the runtime image
     // Test Claude availability check
     let availability_result = client.check_availability().await;
     
@@ -95,9 +93,7 @@ async fn test_claude_cli_basic_invocation_and_binary_presence(
     
     let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
     
-    // Install Claude Code first
-    client.install().await.expect("Failed to install Claude Code");
-    
+    // Claude Code should be pre-installed in the runtime image
     // Debug: Check what's in the PATH and npm global bin
     let npm_bin_result = client.exec_basic_command(vec!["npm".to_string(), "bin".to_string(), "-g".to_string()]).await;
     println!("npm global bin directory: {:?}", npm_bin_result);

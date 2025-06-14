@@ -460,7 +460,14 @@ To authenticate with your Claude account, please follow these steps:
                    error_msg.contains("authentication") ||
                    error_msg.contains("unauthorized") ||
                    error_msg.contains("api key") ||
-                   error_msg.contains("token") {
+                   error_msg.contains("token") ||
+                   error_msg.contains("not authenticated") ||
+                   error_msg.contains("login required") ||
+                   error_msg.contains("please log in") ||
+                   error_msg.contains("auth required") ||
+                   error_msg.contains("permission denied") ||
+                   error_msg.contains("access denied") ||
+                   error_msg.contains("forbidden") {
                     // These errors indicate authentication issues
                     Ok(false)
                 } else {
@@ -552,6 +559,15 @@ To authenticate with your Claude account, please follow these steps:
             }
             bollard::exec::StartExecResults::Detached => {
                 return Err("Unexpected detached execution".into());
+            }
+        }
+
+        // Check the exit code of the executed command
+        let exec_inspect = self.docker.inspect_exec(&exec.id).await?;
+        if let Some(exit_code) = exec_inspect.exit_code {
+            if exit_code != 0 {
+                // Command failed - return error with the output
+                return Err(format!("Command failed with exit code {}: {}", exit_code, output.trim()).into());
             }
         }
 

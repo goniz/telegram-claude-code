@@ -26,18 +26,14 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 
 #[rstest]
 #[tokio::test]
-async fn test_claude_status_command_after_installation(
+async fn test_claude_status_command_with_preinstalled_claude(
     #[future] test_container: (Docker, String, String)
 ) {
     let (docker, container_id, container_name) = test_container.await;
     
     let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
     
-    // Simulate the /startsession workflow - install Claude Code
-    println!("Installing Claude Code...");
-    let install_result = client.install().await;
-    assert!(install_result.is_ok(), "Claude Code installation should succeed: {:?}", install_result);
-    
+    // Claude Code should be pre-installed in the runtime image
     // Simulate the /claudestatus workflow - check availability  
     println!("Checking Claude availability...");
     let availability_result = client.check_availability().await;
