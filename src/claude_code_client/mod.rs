@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
 pub mod container_utils;
+pub mod github_client;
+
+#[allow(unused_imports)]
+pub use github_client::{GithubClient, GithubClientConfig, GithubAuthResult, GithubCloneResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeCodeResult {
