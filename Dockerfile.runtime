@@ -1,0 +1,38 @@
+# Runtime Dockerfile for development session containers
+# This image pre-installs Claude Code and GitHub CLI for faster container startup
+
+FROM ghcr.io/openai/codex-universal:latest
+
+# Install dependencies for npm and gh CLI
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    nodejs \
+    npm \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code via npm globally
+RUN npm config set registry https://registry.npmjs.org/ && \
+    npm config set ca null && \
+    npm config set strict-ssl false && \
+    npm install -g @anthropic-ai/claude-code
+
+# Set working directory
+WORKDIR /workspace
+
+# Ensure the claude binary is in PATH
+ENV PATH="/usr/local/bin:$PATH"
+
+# Default command to keep container running
+CMD ["/bin/bash"]

@@ -4,7 +4,8 @@ This guide covers how to build and run the Telegram bot using Docker.
 
 ## Files Overview
 
-- `Dockerfile` - Multi-stage build configuration
+- `Dockerfile` - Multi-stage build configuration for the main bot
+- `Dockerfile.runtime` - Pre-built runtime image for development session containers
 - `.dockerignore` - Files to exclude from Docker build context
 - `docker-compose.yml` - Docker Compose configuration
 - `DOCKER.md` - This documentation
@@ -51,6 +52,32 @@ This guide covers how to build and run the Telegram bot using Docker.
      -e RUST_LOG=info \
      telegram-bot
    ```
+
+## Runtime Container Image
+
+The repository includes a `Dockerfile.runtime` for building pre-configured development session containers.
+
+### Building the Runtime Image
+
+```bash
+docker build -f Dockerfile.runtime -t telegram-claude-runtime:latest .
+```
+
+### Runtime Image Features
+
+- **Base Image**: Uses `ghcr.io/openai/codex-universal:latest` for multi-language development
+- **Pre-installed Tools**:
+  - Claude Code CLI (`@anthropic-ai/claude-code`) via npm
+  - GitHub CLI (`gh`) for repository management
+- **Optimized for Development**: Reduces container startup time by pre-installing common tools
+- **Working Directory**: Set to `/workspace` for development sessions
+
+### Usage
+
+The runtime image is designed for use with the bot's development session containers, providing:
+- Faster container startup (tools already installed)
+- Consistent development environment
+- GitHub integration capabilities
 
 3. **View logs:**
    ```bash
