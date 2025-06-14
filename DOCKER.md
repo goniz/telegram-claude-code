@@ -65,7 +65,7 @@ docker build -f Dockerfile.runtime -t telegram-claude-runtime:latest .
 
 ### Runtime Image Features
 
-- **Base Image**: Uses `ghcr.io/goniz/claude-code-runtime:latest` for multi-language development with Claude Code pre-installed
+- **Base Image**: Uses `ghcr.io/goniz/telegram-claude-code-runtime:main` for multi-language development with Claude Code pre-installed
 - **Pre-installed Tools**:
   - Claude Code CLI (`@anthropic-ai/claude-code`) via npm
   - GitHub CLI (`gh`) for repository management
