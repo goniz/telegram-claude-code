@@ -367,6 +367,14 @@ impl GithubClient {
             }
         }
 
+        // Check the exit code of the command
+        let inspect_exec = self.docker.inspect_exec(&exec.id).await?;
+        if let Some(exit_code) = inspect_exec.exit_code {
+            if exit_code != 0 {
+                return Err(format!("Command failed with exit code {}: {}", exit_code, output.trim()).into());
+            }
+        }
+
         Ok(output.trim().to_string())
     }
 
