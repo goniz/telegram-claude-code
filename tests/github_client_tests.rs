@@ -5,14 +5,7 @@ use telegram_bot::{GithubClient, GithubClientConfig, container_utils};
 /// Test fixture that provides a Docker client
 #[fixture]
 pub fn docker() -> Docker {
-    #[cfg(unix)]
-    {
-        Docker::connect_with_socket_defaults().expect("Failed to connect to Docker")
-    }
-    #[cfg(windows)]
-    {
-        Docker::connect_with_named_pipe_defaults().expect("Failed to connect to Docker")
-    }
+    Docker::connect_with_socket_defaults().expect("Failed to connect to Docker")
 }
 
 /// Test fixture that creates a test container and cleans it up
@@ -63,24 +56,18 @@ async fn test_gh_availability_check(
     // Cleanup
     cleanup_container(&docker, &container_name).await;
     
-    // The availability check should return a result (either success or error)
+    // The availability check should return a result
     assert!(availability_result.is_ok(), "gh CLI availability check should return a result: {:?}", availability_result);
     let version_output = availability_result.unwrap();
     
-    // Should contain some output (either version info if gh is installed, or error message if not)
+    // Should contain some output
     assert!(!version_output.is_empty(), "Version output should not be empty");
     
-    // In the test container, gh may not be installed, which is expected
-    // We're testing that the method works and handles both cases gracefully
-    println!("gh availability result: {}", version_output);
-    
-    // The test passes as long as we get a coherent response
+    // Check that gh CLI is actually installed and working
+    // If it's not found, the test should fail
     assert!(
-        version_output.contains("gh version") || 
-        version_output.contains("usage") || 
-        version_output.contains("not found") ||
-        version_output.contains("executable file not found"),
-        "Output should contain expected patterns: {}", version_output
+        version_output.contains("gh version"), 
+        "gh CLI must be installed and working. Got: {}", version_output
     );
 }
 
@@ -105,15 +92,12 @@ async fn test_github_auth_status_check(
     // Should have a valid response structure
     assert!(!auth_result.message.is_empty(), "Auth status message should not be empty");
     
-    // In test environment without gh CLI, we expect authentication to be false
-    // and this is the correct behavior to test
-    println!("Auth status result: {:?}", auth_result);
+    // gh CLI must be installed for this to work
+    // If gh CLI is missing, we should fail the test
+    assert!(!auth_result.message.contains("not found") && !auth_result.message.contains("executable file not found"), 
+            "gh CLI must be installed. Auth status failed with: {}", auth_result.message);
     
-    // The method should handle missing gh CLI gracefully
-    if auth_result.message.contains("not found") || auth_result.message.contains("executable file not found") {
-        assert!(!auth_result.authenticated, "Should not be authenticated when gh CLI is missing");
-        assert_eq!(auth_result.username, None, "Username should be None when gh CLI is missing");
-    }
+    println!("Auth status result: {:?}", auth_result);
 }
 
 #[rstest]
@@ -137,15 +121,14 @@ async fn test_github_basic_command_execution(
 
 #[rstest]
 #[tokio::test]
-async fn test_github_login_interactive_flow(
+async fn test_github_login_oauth_url_generation(
     #[future] test_container: (Docker, String, String)
 ) {
     let (docker, container_id, container_name) = test_container.await;
     
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
     
-    // Test the login flow - this will likely fail in CI without user interaction
-    // but tests that the method works and handles errors gracefully
+    // Test the login flow to verify it returns a valid OAuth2 URL
     let login_result = client.login().await;
     
     // Cleanup
@@ -154,12 +137,30 @@ async fn test_github_login_interactive_flow(
     assert!(login_result.is_ok(), "Login method should return a result: {:?}", login_result);
     let auth_result = login_result.unwrap();
     
-    // In automated tests, we expect this to fail (no user interaction)
-    // but the structure should be valid
+    // Should have a valid message
     assert!(!auth_result.message.is_empty(), "Login result message should not be empty");
     
-    // The login likely failed due to no user interaction in CI
-    // This is expected behavior - we're testing the method structure and error handling
+    // If not already authenticated, should provide OAuth details
+    if !auth_result.authenticated {
+        // Should have an OAuth URL for the user to visit
+        assert!(auth_result.oauth_url.is_some(), "OAuth URL should be provided for login");
+        
+        let oauth_url = auth_result.oauth_url.as_ref().unwrap();
+        assert!(oauth_url.contains("github.com"), "OAuth URL should be a GitHub URL: {}", oauth_url);
+        assert!(oauth_url.starts_with("https://"), "OAuth URL should be HTTPS: {}", oauth_url);
+        
+        // Should have a device code for the user
+        assert!(auth_result.device_code.is_some(), "Device code should be provided for login");
+        
+        let device_code = auth_result.device_code.as_ref().unwrap();
+        assert!(!device_code.is_empty(), "Device code should not be empty");
+        
+        println!("OAuth URL: {}", oauth_url);
+        println!("Device code: {}", device_code);
+    } else {
+        println!("Already authenticated: {:?}", auth_result.username);
+    }
+    
     println!("Login result: {:?}", auth_result);
 }
 

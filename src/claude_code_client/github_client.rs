@@ -8,6 +8,8 @@ pub struct GithubAuthResult {
     pub authenticated: bool,
     pub username: Option<String>,
     pub message: String,
+    pub oauth_url: Option<String>,
+    pub device_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +72,7 @@ impl GithubClient {
             }
         }
 
-        // Perform GitHub login using gh auth login with device flow
+        // Start the OAuth device flow using gh auth login --web
         let login_command = vec![
             "gh".to_string(),
             "auth".to_string(),
@@ -78,13 +80,27 @@ impl GithubClient {
             "--web".to_string(),
         ];
 
-        match self.exec_command(login_command).await {
+        match self.exec_command_interactive(login_command).await {
             Ok(output) => {
                 log::info!("GitHub login command executed successfully");
                 log::debug!("Login output: {}", output);
                 
-                // Verify authentication was successful
-                self.check_auth_status().await
+                // Parse the output to extract OAuth URL and device code
+                let (oauth_url, device_code) = self.parse_oauth_response(&output);
+                
+                if let (Some(url), Some(code)) = (&oauth_url, &device_code) {
+                    log::info!("OAuth flow initiated - URL: {}, Code: {}", url, code);
+                    Ok(GithubAuthResult {
+                        authenticated: false, // User needs to complete OAuth flow
+                        username: None,
+                        message: format!("Please visit {} and enter code: {}", url, code),
+                        oauth_url: oauth_url,
+                        device_code: device_code,
+                    })
+                } else {
+                    // If we can't parse OAuth details, check if authentication was somehow completed
+                    self.check_auth_status().await
+                }
             }
             Err(e) => {
                 log::error!("GitHub login failed: {}", e);
@@ -92,6 +108,8 @@ impl GithubClient {
                     authenticated: false,
                     username: None,
                     message: format!("Login failed: {}", e),
+                    oauth_url: None,
+                    device_code: None,
                 })
             }
         }
@@ -179,12 +197,16 @@ impl GithubClient {
                         authenticated: true,
                         username,
                         message: "Authenticated with GitHub".to_string(),
+                        oauth_url: None,
+                        device_code: None,
                     })
                 } else {
                     Ok(GithubAuthResult {
                         authenticated: false,
                         username: None,
                         message: "Not authenticated with GitHub".to_string(),
+                        oauth_url: None,
+                        device_code: None,
                     })
                 }
             }
@@ -194,6 +216,8 @@ impl GithubClient {
                     authenticated: false,
                     username: None,
                     message: format!("Auth status check failed: {}", e),
+                    oauth_url: None,
+                    device_code: None,
                 })
             }
         }
@@ -213,6 +237,90 @@ impl GithubClient {
     #[allow(dead_code)]
     pub async fn exec_basic_command(&self, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         self.exec_command(command).await
+    }
+
+    /// Execute a command in the container and return output (for interactive OAuth flow)
+    async fn exec_command_interactive(&self, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // For the OAuth flow, we need to simulate providing default inputs to gh
+        // We'll create a command that pipes default responses to gh auth login
+        let wrapped_command = vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            format!("echo '' | {} 2>&1", command.join(" ")),
+        ];
+        
+        let exec_config = CreateExecOptions {
+            cmd: Some(wrapped_command),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            working_dir: self.config.working_directory.clone(),
+            env: Some(vec![
+                // Set up PATH to include standard paths and potential gh installation locations
+                "PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string(),
+                // Set HOME directory for gh configuration
+                "HOME=/root".to_string(),
+                // Ensure we get the device flow output
+                "TERM=xterm".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let exec = self.docker.create_exec(&self.container_id, exec_config).await?;
+        
+        let start_config = StartExecOptions {
+            detach: false,
+            ..Default::default()
+        };
+
+        let mut output = String::new();
+        
+        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+            bollard::exec::StartExecResults::Attached { output: mut output_stream, .. } => {
+                while let Some(Ok(msg)) = output_stream.next().await {
+                    match msg {
+                        bollard::container::LogOutput::StdOut { message } => {
+                            output.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        bollard::container::LogOutput::StdErr { message } => {
+                            output.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            bollard::exec::StartExecResults::Detached => {
+                return Err("Unexpected detached execution".into());
+            }
+        }
+
+        Ok(output.trim().to_string())
+    }
+
+    /// Parse OAuth response to extract URL and device code
+    fn parse_oauth_response(&self, output: &str) -> (Option<String>, Option<String>) {
+        let mut oauth_url = None;
+        let mut device_code = None;
+        
+        for line in output.lines() {
+            // Look for lines like "! First copy your one-time code: D023-3C2D"
+            if line.contains("First copy your one-time code:") {
+                if let Some(code_part) = line.split("code:").nth(1) {
+                    device_code = Some(code_part.trim().to_string());
+                }
+            }
+            
+            // Look for lines like "Open this URL to continue in your web browser: https://github.com/login/device"
+            if line.contains("Open this URL to continue") || line.contains("https://github.com/login/device") {
+                if let Some(url_part) = line.split("browser:").nth(1) {
+                    oauth_url = Some(url_part.trim().to_string());
+                } else if line.contains("https://github.com/login/device") {
+                    // Extract URL directly if it's just the URL
+                    oauth_url = Some("https://github.com/login/device".to_string());
+                }
+            }
+        }
+        
+        (oauth_url, device_code)
     }
 
     /// Execute a command in the container and return output
