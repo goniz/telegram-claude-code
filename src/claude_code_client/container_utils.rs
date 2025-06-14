@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 
 /// Container image used by the main application
 /// This is the Claude Code runtime image that provides multi-language development environment with Claude Code pre-installed
-pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/goniz/claude-code-runtime:latest";
+pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/goniz/telegram-claude-code-runtime:main";
 
 /// Helper function to execute a command in a container
 pub async fn exec_command_in_container(docker: &Docker, container_id: &str, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
