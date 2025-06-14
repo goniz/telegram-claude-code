@@ -1,5 +1,7 @@
 use teloxide::{prelude::*, utils::command::BotCommands};
 use bollard::Docker;
+use bollard::image::CreateImageOptions;
+use futures_util::StreamExt;
 
 mod claude_code_client;
 use claude_code_client::{ClaudeCodeClient, ClaudeCodeConfig, container_utils};
@@ -36,6 +38,29 @@ async fn main() {
 
     log::info!("Connected to Docker daemon");
 
+    // Pull the latest runtime image on startup
+    log::info!("Pulling latest runtime image: {}", container_utils::MAIN_CONTAINER_IMAGE);
+    let create_image_options = CreateImageOptions {
+        from_image: container_utils::MAIN_CONTAINER_IMAGE,
+        ..Default::default()
+    };
+    
+    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
+    while let Some(result) = pull_stream.next().await {
+        match result {
+            Ok(info) => {
+                if let Some(status) = &info.status {
+                    log::debug!("Image pull progress: {}", status);
+                }
+            }
+            Err(e) => {
+                log::warn!("Image pull warning (might already exist): {}", e);
+                break; // Continue even if pull fails (image might already exist)
+            }
+        }
+    }
+    log::info!("Runtime image pull completed");
+
     Command::repl(bot, move |bot, msg, cmd| {
         let docker = docker.clone();
         answer(bot, msg, cmd, docker)
@@ -56,21 +81,21 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
             // Send initial message
             bot.send_message(
                 msg.chat.id,
-                "🚀 Starting new coding session...\n\n⏳ Creating container and installing Claude Code..."
+                "🚀 Starting new coding session...\n\n⏳ Creating container with pre-installed Claude Code..."
             ).await?;
             
             match container_utils::start_coding_session(&docker, &container_name, ClaudeCodeConfig::default()).await {
                 Ok(claude_client) => {
                     bot.send_message(
                         msg.chat.id, 
-                        format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code has been installed and is ready to use!\n\nYou can now run code and manage your development environment.", 
+                        format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code is pre-installed and ready to use!\n\nYou can now run code and manage your development environment.", 
                                 claude_client.container_id().chars().take(12).collect::<String>(), container_name)
                     ).await?;
                 }
                 Err(e) => {
                     bot.send_message(
                         msg.chat.id, 
-                        format!("❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container creation failure\n• Claude Code installation failure\n• Network connectivity issues", e)
+                        format!("❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container creation failure\n• Runtime image pull failure\n• Network connectivity issues", e)
                     ).await?;
                 }
             }
