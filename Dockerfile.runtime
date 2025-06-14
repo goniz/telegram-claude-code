@@ -3,17 +3,6 @@
 
 FROM ghcr.io/openai/codex-universal:latest
 
-# Install dependencies for npm and gh CLI
-RUN apt-get update && apt-get install -y \
-    curl \
-    ca-certificates \
-    gnupg \
-    lsb-release \
-    nodejs \
-    npm \
-    && update-ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -23,10 +12,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code via npm globally
-RUN npm config set registry https://registry.npmjs.org/ && \
-    npm config set ca null && \
-    npm config set strict-ssl false && \
-    npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code
 
 # Set working directory
 WORKDIR /workspace
