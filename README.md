@@ -33,9 +33,65 @@ The bot currently supports these commands:
 - `/claudestatus` - Check Claude Code availability
 - `/authenticateclaude` - Authenticate Claude using your Claude account credentials (OAuth flow)
 
+### GitHub Integration
+
+The project includes a comprehensive GitHub client that provides authentication and repository management capabilities through the GitHub CLI (`gh`):
+
+#### GithubClient Features
+- **Authentication**: Login to GitHub using the `gh auth login` command with web-based OAuth flow
+- **Repository Cloning**: Clone repositories using the `gh repo clone` command
+- **Authentication Status**: Check current GitHub authentication status
+- **Error Handling**: Graceful handling of missing `gh` CLI or authentication failures
+- **Container Support**: Designed to work within development containers
+
+#### Usage Example
+
+```rust
+use telegram_bot::{GithubClient, GithubClientConfig};
+use bollard::Docker;
+
+// Create a GitHub client for a container
+let docker = Docker::connect_with_socket_defaults()?;
+let config = GithubClientConfig::default();
+let github_client = GithubClient::new(docker, container_id, config);
+
+// Authenticate with GitHub
+let auth_result = github_client.login().await?;
+if auth_result.authenticated {
+    println!("Successfully authenticated as: {:?}", auth_result.username);
+}
+
+// Clone a repository
+let clone_result = github_client.repo_clone("owner/repo", Some("target-dir")).await?;
+if clone_result.success {
+    println!("Repository cloned to: {}", clone_result.target_directory);
+}
+```
+
+#### Configuration
+
+The `GithubClientConfig` allows customization of:
+- **Working Directory**: Set the container working directory for git operations (default: `/workspace`)
+
+#### Development Container Requirements
+
+For the GitHub client to work in development containers:
+1. The `gh` CLI must be installed in the container
+2. Container must have network access for GitHub API calls
+3. Interactive authentication requires web browser access (handled via device flow)
+
 ## Project Structure
 
 - `src/main.rs` - Main bot logic and command handlers with Docker integration
+- `src/lib.rs` - Library exports for all client modules
+- `src/claude_code_client/` - Claude Code and GitHub client implementations
+  - `mod.rs` - Module definitions and exports
+  - `container_utils.rs` - Docker container management utilities
+  - `github_client.rs` - GitHub authentication and repository management client
+- `tests/` - Comprehensive test suite
+  - `github_client_tests.rs` - Tests for GitHub client functionality
+  - `claude_integration_tests.rs` - Tests for Claude Code integration
+  - `claude_auth_test.rs` - Authentication workflow tests
 - `Cargo.toml` - Dependencies and project configuration
 - `.env` - Environment variables (bot token)
 
