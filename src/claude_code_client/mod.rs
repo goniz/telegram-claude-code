@@ -251,6 +251,11 @@ impl ClaudeCodeClient {
     /// Authenticate Claude Code using Claude account (OAuth flow)
     /// This initiates the account-based authentication process through interactive CLI
     pub async fn authenticate_claude_account(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // First validate container health before attempting authentication
+        if let Err(e) = self.validate_container_health().await {
+            return Err(format!("Container health check failed: {}. The container may have terminated unexpectedly. Please try restarting your coding session.", e).into());
+        }
+
         // Check if authentication is already set up
         match self.check_auth_status().await {
             Ok(true) => {
@@ -261,6 +266,10 @@ impl ClaudeCodeClient {
                 return self.interactive_claude_login().await;
             }
             Err(e) => {
+                // Check if this is a container-related error
+                if self.is_container_error(&e) {
+                    return Err(format!("Container issue detected during authentication check: {}. The container may have terminated. Please restart your coding session.", e).into());
+                }
                 return Err(format!("Unable to check authentication status: {}", e).into());
             }
         }
@@ -272,6 +281,11 @@ impl ClaudeCodeClient {
         use futures_util::StreamExt;
         use std::time::Duration;
         use tokio::time::sleep;
+
+        // Validate container health before attempting interactive session
+        if let Err(e) = self.validate_container_health().await {
+            return Err(format!("Container health check failed before authentication: {}. The container may have terminated. Please restart your coding session.", e).into());
+        }
 
         // Create exec with TTY enabled for interactive mode
         let exec_config = CreateExecOptions {
@@ -289,7 +303,20 @@ impl ClaudeCodeClient {
             ..Default::default()
         };
 
-        let exec = self.docker.create_exec(&self.container_id, exec_config).await?;
+        let exec_result = self.docker.create_exec(&self.container_id, exec_config).await;
+        let exec = match exec_result {
+            Ok(exec) => exec,
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.to_lowercase().contains("container") && (
+                    error_msg.contains("not found") || 
+                    error_msg.contains("not running") || 
+                    error_msg.contains("terminated")) {
+                    return Err(format!("Failed to create exec session - container may have terminated: {}. Please restart your coding session.", error_msg).into());
+                }
+                return Err(format!("Failed to create exec session: {}", error_msg).into());
+            }
+        };
         
         let start_config = StartExecOptions {
             detach: false,
@@ -596,6 +623,92 @@ impl ClaudeCodeClient {
 
         let container_id = container.id.as_ref().ok_or("Container ID not found")?.clone();
         
-        Ok(Self::new(docker, container_id, ClaudeCodeConfig::default()))
+        // Validate container is running and healthy
+        let client = Self::new(docker, container_id, ClaudeCodeConfig::default());
+        client.validate_container_health().await?;
+        
+        Ok(client)
+    }
+
+    /// Validate that the container is running and healthy
+    pub async fn validate_container_health(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Check container state
+        let inspect_result = self.docker.inspect_container(&self.container_id, None).await;
+        match inspect_result {
+            Ok(container_info) => {
+                // Check if container is running
+                if let Some(state) = container_info.state {
+                    if !state.running.unwrap_or(false) {
+                        let exit_code = state.exit_code.unwrap_or(-1);
+                        let error = state.error.unwrap_or_else(|| "Unknown error".to_string());
+                        return Err(format!("Container is not running (exit code: {}, error: {})", exit_code, error).into());
+                    }
+                    
+                    // Check if container is healthy (not in restarting state)
+                    if state.restarting.unwrap_or(false) {
+                        return Err("Container is in restarting state".into());
+                    }
+                    
+                    // Check if container has been running for a reasonable amount of time
+                    if let Some(_started_at) = state.started_at {
+                        // Container just started, give it a moment to stabilize
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                }
+                
+                // Perform a basic connectivity test
+                self.test_container_connectivity().await?;
+                
+                Ok(())
+            }
+            Err(e) => {
+                if e.to_string().contains("No such container") {
+                    Err("Container not found or has been removed".into())
+                } else {
+                    Err(format!("Failed to inspect container: {}", e).into())
+                }
+            }
+        }
+    }
+
+    /// Test basic connectivity to the container
+    async fn test_container_connectivity(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Try a simple echo command to test container responsiveness
+        let test_command = vec!["echo".to_string(), "health_check".to_string()];
+        
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            self.exec_command(test_command)
+        ).await {
+            Ok(Ok(output)) => {
+                if output.trim() == "health_check" {
+                    Ok(())
+                } else {
+                    Err(format!("Container connectivity test failed: unexpected output '{}'", output).into())
+                }
+            }
+            Ok(Err(e)) => {
+                Err(format!("Container connectivity test failed: {}", e).into())
+            }
+            Err(_) => {
+                Err("Container connectivity test timed out".into())
+            }
+        }
+    }
+
+    /// Check if an error is related to container issues (termination, not found, etc.)
+    fn is_container_error(&self, error: &Box<dyn std::error::Error + Send + Sync>) -> bool {
+        let error_msg = error.to_string().to_lowercase();
+        error_msg.contains("container") && (
+            error_msg.contains("not found") ||
+            error_msg.contains("not running") ||
+            error_msg.contains("terminated") ||
+            error_msg.contains("stopped") ||
+            error_msg.contains("exited") ||
+            error_msg.contains("no such container") ||
+            error_msg.contains("container is not running") ||
+            error_msg.contains("409") || // Docker conflict
+            error_msg.contains("timeout")
+        )
     }
 }

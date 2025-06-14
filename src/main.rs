@@ -147,18 +147,44 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                             ).await?;
                         }
                         Err(e) => {
-                            bot.send_message(
-                                msg.chat.id, 
-                                format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
-                            ).await?;
+                            let error_msg = e.to_string();
+                            // Check if this is a container-related error
+                            if error_msg.contains("Container health check failed") || 
+                               error_msg.contains("container may have terminated") ||
+                               error_msg.contains("Container is not running") ||
+                               error_msg.contains("container may have terminated") {
+                                bot.send_message(
+                                    msg.chat.id, 
+                                    format!("❌ Container issue detected during authentication: {}\n\n🔄 **Recommended actions:**\n• Try restarting your coding session with /clearsession followed by /startsession\n• Check if there are sufficient system resources available\n• If the issue persists, there may be Docker configuration problems", error_msg)
+                                ).await?;
+                            } else {
+                                bot.send_message(
+                                    msg.chat.id, 
+                                    format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
+                                ).await?;
+                            }
                         }
                     }
                 }
                 Err(e) => {
-                    bot.send_message(
-                        msg.chat.id, 
-                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
-                    ).await?;
+                    let error_msg = e.to_string();
+                    if error_msg.contains("Container not found") {
+                        bot.send_message(
+                            msg.chat.id, 
+                            "❌ No active coding session found.\n\nPlease start a coding session first using /startsession"
+                        ).await?;
+                    } else if error_msg.contains("Container health check failed") ||
+                              error_msg.contains("Container is not running") {
+                        bot.send_message(
+                            msg.chat.id, 
+                            format!("❌ Container health issue detected: {}\n\n🔄 **Recommended actions:**\n• Try restarting your coding session with /clearsession followed by /startsession\n• The container may have terminated unexpectedly due to resource constraints", error_msg)
+                        ).await?;
+                    } else {
+                        bot.send_message(
+                            msg.chat.id, 
+                            format!("❌ Failed to connect to coding session: {}\n\nPlease try restarting your session with /clearsession followed by /startsession", e)
+                        ).await?;
+                    }
                 }
             }
         }
