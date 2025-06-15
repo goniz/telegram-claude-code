@@ -57,11 +57,14 @@ pub struct InteractiveLoginSession {
 pub struct ClaudeAuthProcess {
     exec_id: String,
     docker: std::sync::Arc<Docker>,
+    container_id: String,
+    config: ClaudeCodeConfig,
 }
 
 #[allow(dead_code)]
 impl ClaudeAuthProcess {
     /// Wait for the authentication process to complete with a timeout
+    /// This method drives the state machine by continuing to read output and send appropriate inputs
     pub async fn wait_for_completion(&self, timeout_secs: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Duration;
         use tokio::time::timeout;
@@ -69,17 +72,173 @@ impl ClaudeAuthProcess {
         let timeout_duration = Duration::from_secs(timeout_secs);
         
         timeout(timeout_duration, async {
-            // Wait for the exec process to complete
-            loop {
-                let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
-                if let Some(false) = inspect_result.running {
-                    // Process has completed
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(500)).await;
+            // First check if the original process is still running
+            let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
+            if let Some(false) = inspect_result.running {
+                // Process has already completed
+                return Ok(());
             }
+            
+            // The original process might be hanging waiting for input
+            // Create a new exec session to continue driving the authentication state machine
+            let exec_config = CreateExecOptions {
+                cmd: Some(vec!["claude".to_string()]),
+                attach_stdin: Some(true),
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                tty: Some(true),
+                working_dir: self.config.working_directory.clone(),
+                env: Some(vec![
+                    "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:/root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+                    "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
+                    "TERM=xterm".to_string(),
+                ]),
+                ..Default::default()
+            };
+
+            let exec = self.docker.create_exec(&self.container_id, exec_config).await?;
+            let start_config = StartExecOptions {
+                detach: false,
+                tty: true,
+                ..Default::default()
+            };
+
+            match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+                bollard::exec::StartExecResults::Attached { mut output, input } => {
+                    let mut stdin = input;
+                    let mut current_state = InteractiveLoginState::DarkMode;
+                    
+                    // Give some time for the CLI to start
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    // Drive the state machine to completion
+                    while let Some(Ok(msg)) = output.next().await {
+                        let text = match msg {
+                            bollard::container::LogOutput::StdOut { message } => {
+                                String::from_utf8_lossy(&message).to_string()
+                            }
+                            bollard::container::LogOutput::StdErr { message } => {
+                                String::from_utf8_lossy(&message).to_string()
+                            }
+                            _ => continue,
+                        };
+
+                        // Parse the output to determine new state
+                        let new_state = self.parse_cli_output_for_state(&text);
+                        
+                        match &new_state {
+                            InteractiveLoginState::DarkMode => {
+                                if !matches!(current_state, InteractiveLoginState::DarkMode) {
+                                    stdin.write_all(b"\n").await?;
+                                    stdin.flush().await?;
+                                    current_state = new_state;
+                                }
+                            }
+                            InteractiveLoginState::SelectLoginMethod => {
+                                stdin.write_all(b"1\n").await?;
+                                stdin.flush().await?;
+                                current_state = new_state;
+                            }
+                            InteractiveLoginState::LoginSuccessful => {
+                                stdin.write_all(b"\n").await?;
+                                stdin.flush().await?;
+                                current_state = new_state;
+                            }
+                            InteractiveLoginState::SecurityNotes => {
+                                stdin.write_all(b"\n").await?;
+                                stdin.flush().await?;
+                                current_state = new_state;
+                            }
+                            InteractiveLoginState::TrustFiles => {
+                                stdin.write_all(b"\n").await?;
+                                stdin.flush().await?;
+                                current_state = InteractiveLoginState::Completed;
+                            }
+                            InteractiveLoginState::Completed => {
+                                break;
+                            }
+                            InteractiveLoginState::ProvideUrl(_) => {
+                                // This state requires user interaction, cannot be driven automatically
+                                current_state = new_state;
+                            }
+                            InteractiveLoginState::WaitingForCode => {
+                                // This state requires user interaction, cannot be driven automatically
+                                current_state = new_state;
+                            }
+                            InteractiveLoginState::Error(_) => {
+                                // Error state, stop processing
+                                break;
+                            }
+                        }
+
+                        // Small delay between state transitions
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        
+                        // Check if original process completed while we were driving
+                        let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
+                        if let Some(false) = inspect_result.running {
+                            break;
+                        }
+                    }
+                }
+                bollard::exec::StartExecResults::Detached => {
+                    // If detached, just wait for the original process to complete
+                    loop {
+                        let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
+                        if let Some(false) = inspect_result.running {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
+            
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         }).await.map_err(|_| -> Box<dyn std::error::Error + Send + Sync> { "Claude authentication process timed out".into() })?
+    }
+    
+    /// Parse CLI output to determine the current state (helper method for state machine)
+    fn parse_cli_output_for_state(&self, output: &str) -> InteractiveLoginState {
+        let output_lower = output.to_lowercase();
+
+        if output_lower.contains("dark mode") {
+            InteractiveLoginState::DarkMode
+        } else if output_lower.contains("select login method") {
+            InteractiveLoginState::SelectLoginMethod
+        } else if output_lower.contains("use the url below to sign in") {
+            // Extract URL from output
+            for line in output.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("https://") {
+                    return InteractiveLoginState::ProvideUrl(trimmed.to_string());
+                }
+            }
+
+            // If no URL found on separate line, look for URL pattern in the text
+            if let Some(url_start) = output.find("https://") {
+                let url_part = &output[url_start..];
+                if let Some(url_end) = url_part.find(char::is_whitespace) {
+                    let url = &url_part[..url_end];
+                    return InteractiveLoginState::ProvideUrl(url.to_string());
+                } else {
+                    // URL goes to end of string
+                    return InteractiveLoginState::ProvideUrl(url_part.trim().to_string());
+                }
+            }
+
+            InteractiveLoginState::Error("URL not found in sign-in output".to_string())
+        } else if output_lower.contains("paste code here if prompted") {
+            InteractiveLoginState::WaitingForCode
+        } else if output_lower.contains("login successful") {
+            InteractiveLoginState::LoginSuccessful
+        } else if output_lower.contains("security notes") {
+            InteractiveLoginState::SecurityNotes
+        } else if output_lower.contains("do you trust the files in this folder") {
+            InteractiveLoginState::TrustFiles
+        } else {
+            // Don't treat everything as an error, just continue with current state
+            InteractiveLoginState::DarkMode // Default state to continue processing
+        }
     }
 
     /// Terminate the authentication process gracefully
@@ -414,6 +573,8 @@ impl ClaudeCodeClient {
         let _auth_process = ClaudeAuthProcess {
             exec_id: exec.id.clone(),
             docker: Arc::new(self.docker.clone()),
+            container_id: self.container_id.clone(),
+            config: self.config.clone(),
         };
 
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
@@ -640,6 +801,8 @@ impl ClaudeCodeClient {
         let _auth_process = ClaudeAuthProcess {
             exec_id: exec.id.clone(),
             docker: Arc::new(self.docker.clone()),
+            container_id: self.container_id.clone(),
+            config: self.config.clone(),
         };
 
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
