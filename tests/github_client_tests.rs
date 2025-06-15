@@ -289,6 +289,7 @@ async fn test_github_client_working_directory_config(
     // Test with custom working directory
     let custom_config = GithubClientConfig {
         working_directory: Some("/tmp".to_string()),
+        exec_timeout_secs: 30,
     };
 
     let client = GithubClient::new(docker.clone(), container_id, custom_config);

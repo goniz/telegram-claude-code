@@ -2,6 +2,7 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GithubAuthResult {
@@ -23,12 +24,14 @@ pub struct GithubCloneResult {
 #[derive(Debug, Clone)]
 pub struct GithubClientConfig {
     pub working_directory: Option<String>,
+    pub exec_timeout_secs: u64,
 }
 
 impl Default for GithubClientConfig {
     fn default() -> Self {
         Self {
             working_directory: Some("/workspace".to_string()),
+            exec_timeout_secs: 60, // 60 seconds timeout for auth operations
         }
     }
 }
@@ -258,7 +261,7 @@ impl GithubClient {
         // Just launch the gh command without any wrappers or input provision
 
         let exec_config = CreateExecOptions {
-            cmd: Some(command),
+            cmd: Some(command.clone()),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),
@@ -285,29 +288,42 @@ impl GithubClient {
 
         let mut output = String::new();
 
-        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
-            bollard::exec::StartExecResults::Attached {
-                output: mut output_stream,
-                ..
-            } => {
-                while let Some(Ok(msg)) = output_stream.next().await {
-                    match msg {
-                        bollard::container::LogOutput::StdOut { message } => {
-                            output.push_str(&String::from_utf8_lossy(&message));
+        // Wrap the exec operation in a timeout
+        let timeout_duration = Duration::from_secs(self.config.exec_timeout_secs);
+        
+        let exec_result = timeout(timeout_duration, async {
+            match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+                bollard::exec::StartExecResults::Attached {
+                    output: mut output_stream,
+                    ..
+                } => {
+                    while let Some(Ok(msg)) = output_stream.next().await {
+                        match msg {
+                            bollard::container::LogOutput::StdOut { message } => {
+                                output.push_str(&String::from_utf8_lossy(&message));
+                            }
+                            bollard::container::LogOutput::StdErr { message } => {
+                                output.push_str(&String::from_utf8_lossy(&message));
+                            }
+                            _ => {}
                         }
-                        bollard::container::LogOutput::StdErr { message } => {
-                            output.push_str(&String::from_utf8_lossy(&message));
-                        }
-                        _ => {}
                     }
                 }
+                bollard::exec::StartExecResults::Detached => {
+                    return Err("Unexpected detached execution".into());
+                }
             }
-            bollard::exec::StartExecResults::Detached => {
-                return Err("Unexpected detached execution".into());
-            }
-        }
+            Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output)
+        }).await;
 
-        Ok(output.trim().to_string())
+        match exec_result {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "Command timed out after {} seconds: {}", 
+                self.config.exec_timeout_secs,
+                command.join(" ")
+            ).into()),
+        }
     }
 
     /// Parse OAuth response to extract URL and device code from interactive flow
@@ -354,7 +370,7 @@ impl GithubClient {
         command: Vec<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let exec_config = CreateExecOptions {
-            cmd: Some(command),
+            cmd: Some(command.clone()),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),
@@ -379,42 +395,56 @@ impl GithubClient {
 
         let mut output = String::new();
 
-        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
-            bollard::exec::StartExecResults::Attached {
-                output: mut output_stream,
-                ..
-            } => {
-                while let Some(Ok(msg)) = output_stream.next().await {
-                    match msg {
-                        bollard::container::LogOutput::StdOut { message } => {
-                            output.push_str(&String::from_utf8_lossy(&message));
+        // Wrap the exec operation in a timeout
+        let timeout_duration = Duration::from_secs(self.config.exec_timeout_secs);
+        
+        let exec_result = timeout(timeout_duration, async {
+            match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+                bollard::exec::StartExecResults::Attached {
+                    output: mut output_stream,
+                    ..
+                } => {
+                    while let Some(Ok(msg)) = output_stream.next().await {
+                        match msg {
+                            bollard::container::LogOutput::StdOut { message } => {
+                                output.push_str(&String::from_utf8_lossy(&message));
+                            }
+                            bollard::container::LogOutput::StdErr { message } => {
+                                output.push_str(&String::from_utf8_lossy(&message));
+                            }
+                            _ => {}
                         }
-                        bollard::container::LogOutput::StdErr { message } => {
-                            output.push_str(&String::from_utf8_lossy(&message));
-                        }
-                        _ => {}
                     }
                 }
+                bollard::exec::StartExecResults::Detached => {
+                    return Err("Unexpected detached execution".into());
+                }
             }
-            bollard::exec::StartExecResults::Detached => {
-                return Err("Unexpected detached execution".into());
-            }
-        }
 
-        // Check the exit code of the command
-        let inspect_exec = self.docker.inspect_exec(&exec.id).await?;
-        if let Some(exit_code) = inspect_exec.exit_code {
-            if exit_code != 0 {
-                return Err(format!(
-                    "Command failed with exit code {}: {}",
-                    exit_code,
-                    output.trim()
-                )
-                .into());
+            // Check the exit code of the command
+            let inspect_exec = self.docker.inspect_exec(&exec.id).await?;
+            if let Some(exit_code) = inspect_exec.exit_code {
+                if exit_code != 0 {
+                    return Err(format!(
+                        "Command failed with exit code {}: {}",
+                        exit_code,
+                        output.trim()
+                    )
+                    .into());
+                }
             }
-        }
 
-        Ok(output.trim().to_string())
+            Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output.trim().to_string())
+        }).await;
+
+        match exec_result {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "Command timed out after {} seconds: {}", 
+                self.config.exec_timeout_secs,
+                command.join(" ")
+            ).into()),
+        }
     }
 
     /// Extract username from auth status output
