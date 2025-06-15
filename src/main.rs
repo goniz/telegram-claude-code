@@ -34,6 +34,8 @@ enum Command {
     AuthCode { code: String },
     #[command(description = "Authenticate with GitHub using OAuth flow")]
     GitHubAuth,
+    #[command(description = "Check GitHub authentication status")]
+    GitHubStatus,
 }
 
 // Authentication session state
@@ -412,7 +414,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                                     "✅ GitHub authentication successful!\n\n🎯 You can now use GitHub features in your coding session.".to_string()
                                 }
                             } else if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
-                                format!("🔗 **GitHub OAuth Authentication Required**\n\n**Please follow these steps:**\n\n1️⃣ **Visit this URL:** {}\n\n2️⃣ **Enter this device code:** `{}`\n\n3️⃣ **Sign in to your GitHub account** and authorize the application\n\n4️⃣ **Return here** - authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly.", oauth_url, device_code)
+                                format!("🔗 **GitHub OAuth Authentication Required**\n\n**Please follow these steps:**\n\n1️⃣ **Visit this URL:** {}\n\n2️⃣ **Enter this device code:** `{}`\n\n3️⃣ **Sign in to your GitHub account** and authorize the application\n\n4️⃣ **Return here** - authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly.\n\n💡 **Tip:** Use `/githubstatus` to check if authentication completed successfully.", oauth_url, device_code)
                             } else {
                                 format!("ℹ️ GitHub authentication status: {}", auth_result.message)
                             };
@@ -428,6 +430,47 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                             };
                             
                             bot.send_message(msg.chat.id, user_message).await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id, 
+                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
+                    ).await?;
+                }
+            }
+        }
+        Command::GitHubStatus => {
+            let container_name = format!("coding-session-{}", chat_id);
+            
+            match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                Ok(client) => {
+                    let github_client = GithubClient::new(
+                        bot_state.docker.clone(), 
+                        client.container_id().to_string(), 
+                        GithubClientConfig::default()
+                    );
+                    
+                    match github_client.check_auth_status().await {
+                        Ok(auth_result) => {
+                            let message = if auth_result.authenticated {
+                                if let Some(username) = &auth_result.username {
+                                    format!("✅ **GitHub Authentication Status: Authenticated**\n\n👤 **Logged in as:** {}\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands", username)
+                                } else {
+                                    "✅ **GitHub Authentication Status: Authenticated**\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands".to_string()
+                                }
+                            } else {
+                                "❌ **GitHub Authentication Status: Not Authenticated**\n\n🔐 Use `/githubauth` to start the authentication process.\n\nYou'll receive an OAuth URL and device code to complete authentication in your browser.".to_string()
+                            };
+                            
+                            bot.send_message(msg.chat.id, message).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                msg.chat.id,
+                                format!("❌ Failed to check GitHub authentication status: {}\n\nThis could be due to:\n• GitHub CLI not being available\n• Network connectivity issues\n• Container problems", e)
+                            ).await?;
                         }
                     }
                 }

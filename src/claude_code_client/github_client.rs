@@ -2,6 +2,7 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,6 +12,12 @@ pub struct GithubAuthResult {
     pub message: String,
     pub oauth_url: Option<String>,
     pub device_code: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct OAuthProcess {
+    exec_id: String,
+    docker: Arc<Docker>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +40,34 @@ impl Default for GithubClientConfig {
             working_directory: Some("/workspace".to_string()),
             exec_timeout_secs: 60, // 60 seconds timeout for auth operations
         }
+    }
+}
+
+impl OAuthProcess {
+    /// Wait for the OAuth process to complete with a timeout
+    pub async fn wait_for_completion(&self, timeout_secs: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let timeout_duration = Duration::from_secs(timeout_secs);
+        
+        timeout(timeout_duration, async {
+            // Wait for the exec process to complete
+            loop {
+                let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
+                if let Some(false) = inspect_result.running {
+                    // Process has completed
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        }).await.map_err(|_| -> Box<dyn std::error::Error + Send + Sync> { "OAuth process timed out".into() })?
+    }
+
+    /// Terminate the OAuth process gracefully
+    #[allow(dead_code)]
+    pub async fn terminate(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Note: Docker exec doesn't have a direct kill method, but the process should
+        // terminate when the user completes OAuth or when the container is stopped
+        Ok(())
     }
 }
 
@@ -60,7 +95,7 @@ impl GithubClient {
         &self.container_id
     }
 
-    /// Authenticate with GitHub using gh client
+    /// Authenticate with GitHub using gh client (refactored OAuth flow)
     pub async fn login(
         &self,
     ) -> Result<GithubAuthResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -86,27 +121,12 @@ impl GithubClient {
             "https".to_string(),
         ];
 
-        match self.exec_command_interactive(login_command).await {
-            Ok(output) => {
-                log::info!("GitHub login command executed successfully");
-                log::debug!("Login output: {}", output);
-
-                // Parse the output to extract OAuth URL and device code
-                let (oauth_url, device_code) = self.parse_oauth_response(&output);
-
-                if let (Some(url), Some(code)) = (&oauth_url, &device_code) {
-                    log::info!("OAuth flow initiated - URL: {}, Code: {}", url, code);
-                    Ok(GithubAuthResult {
-                        authenticated: false, // User needs to complete OAuth flow
-                        username: None,
-                        message: format!("Please visit {} and enter code: {}", url, code),
-                        oauth_url: oauth_url,
-                        device_code: device_code,
-                    })
-                } else {
-                    // If we can't parse OAuth details, check if authentication was somehow completed
-                    self.check_auth_status().await
-                }
+        match self.start_oauth_flow_with_early_return(login_command).await {
+            Ok((auth_result, _oauth_process)) => {
+                // We've successfully extracted OAuth URL and device code
+                // The process is still running in the background
+                log::info!("OAuth flow initiated successfully");
+                Ok(auth_result)
             }
             Err(e) => {
                 log::error!("GitHub login failed: {}", e);
@@ -119,6 +139,132 @@ impl GithubClient {
                 })
             }
         }
+    }
+
+    /// Start OAuth flow with early return of credentials and background process
+    async fn start_oauth_flow_with_early_return(
+        &self,
+        command: Vec<String>,
+    ) -> Result<(GithubAuthResult, OAuthProcess), Box<dyn std::error::Error + Send + Sync>> {
+        let exec_config = CreateExecOptions {
+            cmd: Some(command.clone()),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            working_dir: self.config.working_directory.clone(),
+            env: Some(vec![
+                "PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string(),
+                "HOME=/root".to_string(),
+                "TERM=xterm".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let exec = self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await?;
+
+        let start_config = StartExecOptions {
+            detach: false,
+            ..Default::default()
+        };
+
+        let mut output_buffer = String::new();
+        let mut oauth_url = None;
+        let mut device_code = None;
+
+        // Create OAuth process handle for later waiting/cleanup
+        let oauth_process = OAuthProcess {
+            exec_id: exec.id.clone(),
+            docker: Arc::new(self.docker.clone()),
+        };
+
+        // Start the exec process
+        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+            bollard::exec::StartExecResults::Attached {
+                output: mut output_stream,
+                ..
+            } => {
+                // Stream output and look for OAuth credentials
+                let timeout_duration = Duration::from_secs(30); // Short timeout for credential detection
+                
+                let stream_result = timeout(timeout_duration, async {
+                    while let Some(Ok(msg)) = output_stream.next().await {
+                        match msg {
+                            bollard::container::LogOutput::StdOut { message } => {
+                                let new_output = String::from_utf8_lossy(&message);
+                                output_buffer.push_str(&new_output);
+                                log::debug!("OAuth output: {}", new_output);
+                            }
+                            bollard::container::LogOutput::StdErr { message } => {
+                                let new_output = String::from_utf8_lossy(&message);
+                                output_buffer.push_str(&new_output);
+                                log::debug!("OAuth stderr: {}", new_output);
+                            }
+                            _ => {}
+                        }
+
+                        // Parse current output for OAuth credentials
+                        let (url, code) = self.parse_oauth_response(&output_buffer);
+                        if url.is_some() && code.is_some() {
+                            oauth_url = url;
+                            device_code = code;
+                            log::info!("Found OAuth credentials, returning early");
+                            break;
+                        }
+                    }
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                }).await;
+
+                match stream_result {
+                    Ok(_) => {
+                        if let (Some(url), Some(code)) = (&oauth_url, &device_code) {
+                            log::info!("OAuth flow initiated - URL: {}, Code: {}", url, code);
+                            let auth_result = GithubAuthResult {
+                                authenticated: false, // User needs to complete OAuth flow
+                                username: None,
+                                message: format!("Please visit {} and enter code: {}", url, code),
+                                oauth_url: oauth_url,
+                                device_code: device_code,
+                            };
+                            Ok((auth_result, oauth_process))
+                        } else {
+                            // If we didn't find OAuth credentials in the initial output, 
+                            // check if authentication was somehow completed
+                            let auth_result = self.check_auth_status().await.unwrap_or_else(|e| {
+                                GithubAuthResult {
+                                    authenticated: false,
+                                    username: None,
+                                    message: format!("Failed to parse OAuth response: {}", e),
+                                    oauth_url: None,
+                                    device_code: None,
+                                }
+                            });
+                            Ok((auth_result, oauth_process))
+                        }
+                    }
+                    Err(_) => {
+                        Err("Timeout waiting for OAuth credentials in command output".into())
+                    }
+                }
+            }
+            bollard::exec::StartExecResults::Detached => {
+                Err("Unexpected detached execution".into())
+            }
+        }
+    }
+
+    /// Wait for OAuth process to complete (utility method for callers)
+    #[allow(dead_code)]
+    pub async fn wait_for_oauth_completion(
+        &self,
+        oauth_process: OAuthProcess,
+    ) -> Result<GithubAuthResult, Box<dyn std::error::Error + Send + Sync>> {
+        // Wait for the OAuth process to complete with 60-second timeout
+        oauth_process.wait_for_completion(60).await?;
+        
+        // Check final authentication status
+        self.check_auth_status().await
     }
 
     /// Clone a repository using gh client
