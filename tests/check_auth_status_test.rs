@@ -2,6 +2,8 @@
 /// and demonstrates the issue where exec_command doesn't check exit codes.
 #[cfg(test)]
 mod tests {
+    use telegram_bot::claude_code_client::ClaudeCodeResult;
+
     /// Test to verify the issue exists: exec_command should fail when commands return non-zero exit codes
     /// This is a unit test that doesn't require Docker containers to be running
     #[test]
@@ -89,5 +91,104 @@ mod tests {
         }
 
         println!("✅ Auth error pattern recognition test passed");
+    }
+
+    /// Test JSON parsing for authentication success case
+    #[test]
+    fn test_json_auth_success_parsing() {
+        let success_json = r#"{
+            "type": "result",
+            "subtype": "success",
+            "cost_usd": 0.001,
+            "is_error": false,
+            "duration_ms": 1500,
+            "duration_api_ms": 1200,
+            "num_turns": 1,
+            "result": "Authentication test successful",
+            "session_id": "test-session-123"
+        }"#;
+
+        let parsed: Result<ClaudeCodeResult, _> = serde_json::from_str(success_json);
+        assert!(parsed.is_ok(), "Should parse success JSON correctly");
+        
+        let result = parsed.unwrap();
+        assert!(!result.is_error, "is_error should be false for successful auth");
+        assert_eq!(result.result, "Authentication test successful");
+        
+        println!("✅ JSON success parsing test passed");
+    }
+
+    /// Test JSON parsing for authentication failure case
+    #[test]
+    fn test_json_auth_failure_parsing() {
+        let failure_json = r#"{
+            "type": "result",
+            "subtype": "error",
+            "cost_usd": 0.0,
+            "is_error": true,
+            "duration_ms": 500,
+            "duration_api_ms": 100,
+            "num_turns": 1,
+            "result": "Authentication failed: invalid API key",
+            "session_id": "test-session-456"
+        }"#;
+
+        let parsed: Result<ClaudeCodeResult, _> = serde_json::from_str(failure_json);
+        assert!(parsed.is_ok(), "Should parse failure JSON correctly");
+        
+        let result = parsed.unwrap();
+        assert!(result.is_error, "is_error should be true for failed auth");
+        assert!(result.result.contains("Authentication failed"));
+        
+        println!("✅ JSON failure parsing test passed");
+    }
+
+    /// Test the logic for determining auth status from JSON response
+    #[test]
+    fn test_auth_status_determination() {
+        // Test successful authentication (is_error = false should return true)
+        let success_result = ClaudeCodeResult {
+            r#type: "result".to_string(),
+            subtype: "success".to_string(),
+            cost_usd: 0.001,
+            is_error: false,
+            duration_ms: 1500,
+            duration_api_ms: 1200,
+            num_turns: 1,
+            result: "Authentication successful".to_string(),
+            session_id: "test-session".to_string(),
+        };
+        
+        let auth_status = !success_result.is_error;
+        assert!(auth_status, "Authentication should be successful when is_error is false");
+
+        // Test failed authentication (is_error = true should return false)
+        let failure_result = ClaudeCodeResult {
+            r#type: "result".to_string(),
+            subtype: "error".to_string(),
+            cost_usd: 0.0,
+            is_error: true,
+            duration_ms: 500,
+            duration_api_ms: 100,
+            num_turns: 1,
+            result: "Authentication failed".to_string(),
+            session_id: "test-session".to_string(),
+        };
+        
+        let auth_status = !failure_result.is_error;
+        assert!(!auth_status, "Authentication should fail when is_error is true");
+
+        println!("✅ Auth status determination test passed");
+    }
+
+    /// Test invalid JSON handling
+    #[test]
+    fn test_invalid_json_handling() {
+        let invalid_json = "{ invalid json content }";
+        
+        let parsed: Result<ClaudeCodeResult, _> = serde_json::from_str(invalid_json);
+        assert!(parsed.is_err(), "Should fail to parse invalid JSON");
+        
+        println!("✅ Invalid JSON handling test passed");
     }
 }
