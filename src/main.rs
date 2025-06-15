@@ -111,13 +111,33 @@ async fn main() {
     .await;
 }
 
+// Generate help text in BotFather format from command descriptions
+fn generate_help_text() -> String {
+    let descriptions = Command::descriptions().to_string();
+    
+    // Parse the default descriptions and convert to BotFather format
+    descriptions
+        .lines()
+        .skip(2) // Skip the header "These commands are supported:" and empty line
+        .map(|line| {
+            // Remove the leading slash and replace em dash with hyphen
+            line.trim()
+                .strip_prefix('/')
+                .unwrap_or(line.trim())
+                .replace(" — ", " - ")
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
 // Handler function for bot commands
 async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
 
     match cmd {
         Command::Help => {
-            bot.send_message(msg.chat.id, Command::descriptions().to_string())
+            let help_text = generate_help_text();
+            bot.send_message(msg.chat.id, help_text)
                 .await?;
         }
         Command::ClearSession => {
@@ -406,4 +426,38 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod help_format_tests {
+    use super::*;
+    use regex::Regex;
+
+    #[test]
+    fn test_help_format_matches_botfather_requirements() {
+        // Get the dynamically generated help text
+        let help_text = generate_help_text();
+        
+        // Regex to match the pattern "command - description"
+        // Command: lowercase letters (no slash prefix)
+        // Separator: " - " (space-hyphen-space)
+        // Description: any non-empty text
+        let line_pattern = Regex::new(r"^[a-z]+ - .+$").unwrap();
+        
+        // Verify each line follows the pattern "command - description"
+        for line in help_text.lines() {
+            assert!(!line.is_empty(), "Line should not be empty");
+            assert!(line_pattern.is_match(line), 
+                "Line should match pattern 'command - description': {}", line);
+            
+            // Additional validation: ensure separator exists and splits correctly
+            let parts: Vec<&str> = line.split(" - ").collect();
+            assert_eq!(parts.len(), 2, "Line should have exactly one ' - ' separator: {}", line);
+            assert!(!parts[0].is_empty(), "Command part should not be empty: {}", line);
+            assert!(!parts[1].is_empty(), "Description part should not be empty: {}", line);
+        }
+        
+        // Verify we have a non-empty help text
+        assert!(!help_text.is_empty(), "Help text should not be empty");
+    }
 }
