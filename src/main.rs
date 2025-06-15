@@ -18,10 +18,8 @@ use claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, Gi
 enum Command {
     #[command(description = "Display this help message")]
     Help,
-    #[command(description = "Start the bot")]
+    #[command(description = "Start the bot and create a new coding session")]
     Start,
-    #[command(description = "Start a new coding session (creates a new container)")]
-    StartSession,
     #[command(description = "Clear the current session (stops and removes container)")]
     ClearSession,
     #[command(description = "Check Claude Code availability")]
@@ -117,37 +115,6 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
             bot.send_message(msg.chat.id, Command::descriptions().to_string())
                 .await?;
         }
-        Command::StartSession => {
-            let container_name = format!("coding-session-{}", chat_id);
-
-            // Send initial message
-            bot.send_message(
-                msg.chat.id,
-                "🚀 Starting new coding session...\n\n⏳ Creating container with pre-installed Claude Code..."
-            ).await?;
-
-            match container_utils::start_coding_session(
-                &bot_state.docker,
-                &container_name,
-                ClaudeCodeConfig::default(),
-            )
-            .await
-            {
-                Ok(claude_client) => {
-                    bot.send_message(
-                        msg.chat.id,
-                        format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code is pre-installed and ready to use!\n\nYou can now run code and manage your development environment.",
-                                claude_client.container_id().chars().take(12).collect::<String>(), container_name)
-                    ).await?;
-                }
-                Err(e) => {
-                    bot.send_message(
-                        msg.chat.id,
-                        format!("❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container creation failure\n• Runtime image pull failure\n• Network connectivity issues", e)
-                    ).await?;
-                }
-            }
-        }
         Command::ClearSession => {
             let container_name = format!("coding-session-{}", chat_id);
 
@@ -171,11 +138,35 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
             }
         }
         Command::Start => {
+            let container_name = format!("coding-session-{}", chat_id);
+
+            // Send initial welcome message
             bot.send_message(
                 msg.chat.id,
-                "Hello! I'm your Telegram bot with Docker support 🤖🐳",
+                "Hello! I'm your Telegram bot with Docker support 🤖🐳\n\n🚀 Starting new coding session...\n\n⏳ Creating container with pre-installed Claude Code..."
+            ).await?;
+
+            match container_utils::start_coding_session(
+                &bot_state.docker,
+                &container_name,
+                ClaudeCodeConfig::default(),
             )
-            .await?;
+            .await
+            {
+                Ok(claude_client) => {
+                    bot.send_message(
+                        msg.chat.id,
+                        format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code is pre-installed and ready to use!\n\nYou can now run code and manage your development environment.",
+                                claude_client.container_id().chars().take(12).collect::<String>(), container_name)
+                    ).await?;
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id,
+                        format!("❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container creation failure\n• Runtime image pull failure\n• Network connectivity issues", e)
+                    ).await?;
+                }
+            }
         }
         Command::ClaudeStatus => {
             let container_name = format!("coding-session-{}", chat_id);
@@ -302,7 +293,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 Err(e) => {
                     bot.send_message(
                         msg.chat.id,
-                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
+                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
                     ).await?;
                 }
             }
@@ -357,7 +348,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 Err(e) => {
                     bot.send_message(
                         msg.chat.id, 
-                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
+                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
                     ).await?;
                 }
             }
@@ -398,7 +389,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 Err(e) => {
                     bot.send_message(
                         msg.chat.id, 
-                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
+                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
                     ).await?;
                 }
             }

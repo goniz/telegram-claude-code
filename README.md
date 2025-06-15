@@ -26,9 +26,8 @@ A Telegram bot built with Rust using the `teloxide` crate with Docker integratio
 ## Features
 
 The bot currently supports these commands:
-- `/start` - Welcome message
+- `/start` - Welcome message and start a new coding session with Claude Code (Starts a new dev container)
 - `/help` - Show available commands
-- `/startsession` - Starts a new coding session with Claude Code (Starts a new dev container)
 - `/clearsession` - Ends the current active session (Removes dev container)
 - `/claudestatus` - Check Claude Code availability
 - `/authenticateclaude` - Authenticate Claude using your Claude account credentials (OAuth flow)
@@ -42,7 +41,7 @@ The project includes a comprehensive GitHub client that provides authentication 
 
 The `/githubauth` command provides an easy way to authenticate with GitHub from within your coding session:
 
-1. **Start a coding session** using `/startsession`
+1. **Start a coding session** using `/start`
 2. **Run the GitHub auth command** with `/githubauth`
 3. **Follow the OAuth flow**:
    - The bot will provide you with a GitHub OAuth URL
@@ -52,7 +51,13 @@ The `/githubauth` command provides an easy way to authenticate with GitHub from 
 
 **Example workflow:**
 ```
-User: /startsession
+User: /start
+Bot: Hello! I'm your Telegram bot with Docker support 🤖🐳
+
+🚀 Starting new coding session...
+
+⏳ Creating container with pre-installed Claude Code...
+
 Bot: ✅ Coding session started successfully!
 
 User: /githubauth
