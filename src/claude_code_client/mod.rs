@@ -57,14 +57,11 @@ pub struct InteractiveLoginSession {
 pub struct ClaudeAuthProcess {
     exec_id: String,
     docker: std::sync::Arc<Docker>,
-    container_id: String,
-    config: ClaudeCodeConfig,
 }
 
 #[allow(dead_code)]
 impl ClaudeAuthProcess {
     /// Wait for the authentication process to complete with a timeout
-    /// This method drives the state machine by continuing to read output and send appropriate inputs
     pub async fn wait_for_completion(&self, timeout_secs: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Duration;
         use tokio::time::timeout;
@@ -72,173 +69,17 @@ impl ClaudeAuthProcess {
         let timeout_duration = Duration::from_secs(timeout_secs);
         
         timeout(timeout_duration, async {
-            // First check if the original process is still running
-            let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
-            if let Some(false) = inspect_result.running {
-                // Process has already completed
-                return Ok(());
-            }
-            
-            // The original process might be hanging waiting for input
-            // Create a new exec session to continue driving the authentication state machine
-            let exec_config = CreateExecOptions {
-                cmd: Some(vec!["claude".to_string()]),
-                attach_stdin: Some(true),
-                attach_stdout: Some(true),
-                attach_stderr: Some(true),
-                tty: Some(true),
-                working_dir: self.config.working_directory.clone(),
-                env: Some(vec![
-                    "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:/root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
-                    "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
-                    "TERM=xterm".to_string(),
-                ]),
-                ..Default::default()
-            };
-
-            let exec = self.docker.create_exec(&self.container_id, exec_config).await?;
-            let start_config = StartExecOptions {
-                detach: false,
-                tty: true,
-                ..Default::default()
-            };
-
-            match self.docker.start_exec(&exec.id, Some(start_config)).await? {
-                bollard::exec::StartExecResults::Attached { mut output, input } => {
-                    let mut stdin = input;
-                    let mut current_state = InteractiveLoginState::DarkMode;
-                    
-                    // Give some time for the CLI to start
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-
-                    // Drive the state machine to completion
-                    while let Some(Ok(msg)) = output.next().await {
-                        let text = match msg {
-                            bollard::container::LogOutput::StdOut { message } => {
-                                String::from_utf8_lossy(&message).to_string()
-                            }
-                            bollard::container::LogOutput::StdErr { message } => {
-                                String::from_utf8_lossy(&message).to_string()
-                            }
-                            _ => continue,
-                        };
-
-                        // Parse the output to determine new state
-                        let new_state = self.parse_cli_output_for_state(&text);
-                        
-                        match &new_state {
-                            InteractiveLoginState::DarkMode => {
-                                if !matches!(current_state, InteractiveLoginState::DarkMode) {
-                                    stdin.write_all(b"\n").await?;
-                                    stdin.flush().await?;
-                                    current_state = new_state;
-                                }
-                            }
-                            InteractiveLoginState::SelectLoginMethod => {
-                                stdin.write_all(b"1\n").await?;
-                                stdin.flush().await?;
-                                current_state = new_state;
-                            }
-                            InteractiveLoginState::LoginSuccessful => {
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-                                current_state = new_state;
-                            }
-                            InteractiveLoginState::SecurityNotes => {
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-                                current_state = new_state;
-                            }
-                            InteractiveLoginState::TrustFiles => {
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-                                current_state = InteractiveLoginState::Completed;
-                            }
-                            InteractiveLoginState::Completed => {
-                                break;
-                            }
-                            InteractiveLoginState::ProvideUrl(_) => {
-                                // This state requires user interaction, cannot be driven automatically
-                                current_state = new_state;
-                            }
-                            InteractiveLoginState::WaitingForCode => {
-                                // This state requires user interaction, cannot be driven automatically
-                                current_state = new_state;
-                            }
-                            InteractiveLoginState::Error(_) => {
-                                // Error state, stop processing
-                                break;
-                            }
-                        }
-
-                        // Small delay between state transitions
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        
-                        // Check if original process completed while we were driving
-                        let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
-                        if let Some(false) = inspect_result.running {
-                            break;
-                        }
-                    }
+            // Wait for the exec process to complete
+            loop {
+                let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
+                if let Some(false) = inspect_result.running {
+                    // Process has completed
+                    break;
                 }
-                bollard::exec::StartExecResults::Detached => {
-                    // If detached, just wait for the original process to complete
-                    loop {
-                        let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
-                        if let Some(false) = inspect_result.running {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
-                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
-            
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         }).await.map_err(|_| -> Box<dyn std::error::Error + Send + Sync> { "Claude authentication process timed out".into() })?
-    }
-    
-    /// Parse CLI output to determine the current state (helper method for state machine)
-    fn parse_cli_output_for_state(&self, output: &str) -> InteractiveLoginState {
-        let output_lower = output.to_lowercase();
-
-        if output_lower.contains("dark mode") {
-            InteractiveLoginState::DarkMode
-        } else if output_lower.contains("select login method") {
-            InteractiveLoginState::SelectLoginMethod
-        } else if output_lower.contains("use the url below to sign in") {
-            // Extract URL from output
-            for line in output.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("https://") {
-                    return InteractiveLoginState::ProvideUrl(trimmed.to_string());
-                }
-            }
-
-            // If no URL found on separate line, look for URL pattern in the text
-            if let Some(url_start) = output.find("https://") {
-                let url_part = &output[url_start..];
-                if let Some(url_end) = url_part.find(char::is_whitespace) {
-                    let url = &url_part[..url_end];
-                    return InteractiveLoginState::ProvideUrl(url.to_string());
-                } else {
-                    // URL goes to end of string
-                    return InteractiveLoginState::ProvideUrl(url_part.trim().to_string());
-                }
-            }
-
-            InteractiveLoginState::Error("URL not found in sign-in output".to_string())
-        } else if output_lower.contains("paste code here if prompted") {
-            InteractiveLoginState::WaitingForCode
-        } else if output_lower.contains("login successful") {
-            InteractiveLoginState::LoginSuccessful
-        } else if output_lower.contains("security notes") {
-            InteractiveLoginState::SecurityNotes
-        } else if output_lower.contains("do you trust the files in this folder") {
-            InteractiveLoginState::TrustFiles
-        } else {
-            // Don't treat everything as an error, just continue with current state
-            InteractiveLoginState::DarkMode // Default state to continue processing
-        }
     }
 
     /// Terminate the authentication process gracefully
@@ -573,8 +414,6 @@ impl ClaudeCodeClient {
         let _auth_process = ClaudeAuthProcess {
             exec_id: exec.id.clone(),
             docker: Arc::new(self.docker.clone()),
-            container_id: self.container_id.clone(),
-            config: self.config.clone(),
         };
 
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
@@ -631,23 +470,18 @@ impl ClaudeCodeClient {
                                     To complete authentication with your Claude account:\n\n\
                                     **1. Visit this authentication URL:**\n{}\n\n\
                                     **2. Sign in with your Claude account**\n\n\
-                                    **3. Complete the OAuth flow**\n\n\
-                                    **4. Once complete, return here and continue**\n\n\
-                                    ✨ This will enable full access to your Claude subscription features!",
+                                    **3. Complete the OAuth flow in your browser**\n\n\
+                                    **4. Once complete, the authentication will be automatically detected**\n\n\
+                                    ✨ This will enable full access to your Claude subscription features!\n\n\
+                                    💡 The authentication process will continue running in the background.",
                                     url
                                 ));
                             }
                             InteractiveLoginState::WaitingForCode => {
-                                log::info!("Authentication code required");
+                                log::info!("Authentication code may be required - process will continue automatically");
                                 session.awaiting_user_code = true;
                                 session.state = new_state.clone();
-
-                                // Return code requirement to user immediately (early return)
-                                return Ok(format!(
-                                    "🔐 **Claude Authentication - Code Required**\n\n\
-                                    Please paste the authentication code you received and send it back.\n\n\
-                                    The bot will continue the authentication process with your code."
-                                ));
+                                // Don't return early - let the process continue and complete the authentication
                             }
                             InteractiveLoginState::LoginSuccessful => {
                                 log::info!("Login successful, pressing enter to continue");
@@ -760,173 +594,7 @@ impl ClaudeCodeClient {
         }
     }
 
-    /// Continue interactive login with user-provided code
-    pub async fn continue_login_with_code(
-        &self,
-        code: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        use std::time::Duration;
-        use tokio::time::sleep;
 
-        log::info!("Continuing login with user code");
-
-        // Create exec with TTY enabled for interactive mode to continue the session
-        let exec_config = CreateExecOptions {
-            cmd: Some(vec!["claude".to_string()]),
-            attach_stdin: Some(true),
-            attach_stdout: Some(true),
-            attach_stderr: Some(true),
-            tty: Some(true),
-            working_dir: self.config.working_directory.clone(),
-            env: Some(vec![
-                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:/root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
-                "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
-                "TERM=xterm".to_string(),
-            ]),
-            ..Default::default()
-        };
-
-        let exec = self
-            .docker
-            .create_exec(&self.container_id, exec_config)
-            .await?;
-
-        let start_config = StartExecOptions {
-            detach: false,
-            tty: true,
-            ..Default::default()
-        };
-
-        // Create process handle for monitoring
-        let _auth_process = ClaudeAuthProcess {
-            exec_id: exec.id.clone(),
-            docker: Arc::new(self.docker.clone()),
-            container_id: self.container_id.clone(),
-            config: self.config.clone(),
-        };
-
-        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
-            bollard::exec::StartExecResults::Attached { mut output, input } => {
-                // Give some time for the interactive CLI to start
-                sleep(Duration::from_millis(500)).await;
-
-                let mut stdin = input;
-                let mut output_buffer = String::new();
-
-                // Send the authentication code
-                log::debug!("Sending authentication code to Claude CLI");
-                stdin.write_all(format!("{}\n", code).as_bytes()).await?;
-                stdin.flush().await?;
-
-                // Process the response with increased timeout for user authentication
-                let timeout = tokio::time::timeout(Duration::from_secs(60), async {
-                    while let Some(Ok(msg)) = output.next().await {
-                        let text = match msg {
-                            bollard::container::LogOutput::StdOut { message } => {
-                                String::from_utf8_lossy(&message).to_string()
-                            }
-                            bollard::container::LogOutput::StdErr { message } => {
-                                String::from_utf8_lossy(&message).to_string()
-                            }
-                            _ => continue,
-                        };
-
-                        output_buffer.push_str(&text);
-                        log::debug!("Claude CLI code response: {}", text);
-
-                        // Check for completion states
-                        let new_state = self.parse_cli_output_for_state(&text);
-
-                        match &new_state {
-                            InteractiveLoginState::LoginSuccessful => {
-                                log::info!("Login successful after code input");
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-
-                                return Ok(format!(
-                                    "✅ **Authentication Code Accepted!**\n\n\
-                                    Claude account authentication was successful.\n\n\
-                                    You can now use Claude Code with your account privileges."
-                                ));
-                            }
-                            InteractiveLoginState::SecurityNotes => {
-                                log::debug!("Security notes detected after code, pressing enter to continue");
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-                            }
-                            InteractiveLoginState::TrustFiles => {
-                                log::info!("Trust files prompt detected, completing authentication");
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-
-                                return Ok(format!(
-                                    "✅ **Claude Authentication Completed!**\n\n\
-                                    Your Claude account has been successfully authenticated.\n\n\
-                                    You can now use Claude Code with your account privileges."
-                                ));
-                            }
-                            InteractiveLoginState::Error(err) => {
-                                log::warn!("Error after code input: {}", err);
-                                return Ok(format!(
-                                    "❌ **Authentication Error**\n\n\
-                                    There was an issue with the authentication code: {}\n\n\
-                                    Please try the authentication process again with `/authenticateclaude`",
-                                    err
-                                ));
-                            }
-                            _ => {
-                                // Continue processing other states
-                                log::debug!("Continuing to process state: {:?}", new_state);
-                            }
-                        }
-
-                        // Small delay between processing
-                        sleep(Duration::from_millis(200)).await;
-                    }
-
-                    Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output_buffer)
-                }).await;
-
-                match timeout {
-                    Ok(Ok(result)) => {
-                        if result.is_empty() {
-                            return Ok(format!(
-                                "🔐 **Code Processed**\n\n\
-                                Authentication code has been submitted.\n\n\
-                                If authentication is not complete, please check your Claude CLI session or try again."
-                            ));
-                        } else {
-                            return Ok(format!(
-                                "✅ **Authentication Process Continued**\n\n\
-                                Code has been processed. Authentication may be complete.\n\n\
-                                Try using Claude Code commands to verify authentication status."
-                            ));
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        log::error!("Error processing authentication code: {}", e);
-                        return Ok(format!(
-                            "❌ **Error Processing Code**\n\n\
-                            There was an error processing your authentication code: {}\n\n\
-                            Please try the authentication process again with `/authenticateclaude`",
-                            e
-                        ));
-                    }
-                    Err(_) => {
-                        log::warn!("Timeout processing authentication code after 60 seconds");
-                        return Ok(format!(
-                            "⏰ **Timeout Processing Code**\n\n\
-                            The authentication code processing timed out after 60 seconds.\n\n\
-                            Please check if authentication was successful or try again."
-                        ));
-                    }
-                }
-            }
-            bollard::exec::StartExecResults::Detached => {
-                return Err("Unexpected detached execution in code continuation mode".into());
-            }
-        }
-    }
 
     /// Fallback authentication instructions if interactive mode fails
     async fn get_fallback_auth_instructions(&self) -> String {
