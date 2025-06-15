@@ -3,7 +3,7 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{prelude::*, utils::command::BotCommands};
+use teloxide::{prelude::*, utils::command::BotCommands, types::ParseMode};
 use tokio::sync::Mutex;
 
 mod claude_code_client;
