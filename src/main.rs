@@ -9,6 +9,20 @@ use tokio::sync::Mutex;
 mod claude_code_client;
 use claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig};
 
+/// Escape reserved characters for Telegram MarkdownV2 formatting
+/// According to Telegram's MarkdownV2 spec, these characters must be escaped:
+/// '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
+fn escape_markdown_v2(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|' | '{' | '}' | '.' | '!' => {
+                format!("\\{}", c)
+            }
+            _ => c.to_string(),
+        })
+        .collect()
+}
+
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
 #[command(
@@ -346,14 +360,14 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                         Ok(auth_result) => {
                             let message = if auth_result.authenticated {
                                 if let Some(username) = &auth_result.username {
-                                    format!("✅ GitHub authentication successful!\n\n👤 Logged in as: {}\n\n🎯 You can now use GitHub features in your coding session.", username)
+                                    format!("✅ GitHub authentication successful\\!\n\n👤 Logged in as: {}\n\n🎯 You can now use GitHub features in your coding session\\.", escape_markdown_v2(username))
                                 } else {
-                                    "✅ GitHub authentication successful!\n\n🎯 You can now use GitHub features in your coding session.".to_string()
+                                    "✅ GitHub authentication successful\\!\n\n🎯 You can now use GitHub features in your coding session\\.".to_string()
                                 }
                             } else if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
-                                format!("🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Visit this URL:* {}\n\n2️⃣ *Enter this device code:*\n```\n{}\n```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly\\.\n\n💡 *Tip:* Use /githubstatus to check if authentication completed successfully\\.", oauth_url, device_code)
+                                format!("🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Visit this URL:* {}\n\n2️⃣ *Enter this device code:*\n```\n{}\n```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly\\.\n\n💡 *Tip:* Use /githubstatus to check if authentication completed successfully\\.", escape_markdown_v2(oauth_url), escape_markdown_v2(device_code))
                             } else {
-                                format!("ℹ️ GitHub authentication status: {}", auth_result.message)
+                                format!("ℹ️ GitHub authentication status: {}", escape_markdown_v2(&auth_result.message))
                             };
                             
                             bot.send_message(msg.chat.id, message)
@@ -395,7 +409,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                         Ok(auth_result) => {
                             let message = if auth_result.authenticated {
                                 if let Some(username) = &auth_result.username {
-                                    format!("✅ *GitHub Authentication Status: Authenticated*\n\n👤 *Logged in as:* {}\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands", username)
+                                    format!("✅ *GitHub Authentication Status: Authenticated*\n\n👤 *Logged in as:* {}\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands", escape_markdown_v2(username))
                                 } else {
                                     "✅ *GitHub Authentication Status: Authenticated*\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands".to_string()
                                 }
@@ -459,5 +473,71 @@ mod help_format_tests {
         
         // Verify we have a non-empty help text
         assert!(!help_text.is_empty(), "Help text should not be empty");
+    }
+}
+
+#[cfg(test)]
+mod markdown_v2_tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_markdown_v2_reserved_characters() {
+        // Test each reserved character is properly escaped
+        assert_eq!(escape_markdown_v2("_"), "\\_");
+        assert_eq!(escape_markdown_v2("*"), "\\*");
+        assert_eq!(escape_markdown_v2("["), "\\[");
+        assert_eq!(escape_markdown_v2("]"), "\\]");
+        assert_eq!(escape_markdown_v2("("), "\\(");
+        assert_eq!(escape_markdown_v2(")"), "\\)");
+        assert_eq!(escape_markdown_v2("~"), "\\~");
+        assert_eq!(escape_markdown_v2("`"), "\\`");
+        assert_eq!(escape_markdown_v2(">"), "\\>");
+        assert_eq!(escape_markdown_v2("#"), "\\#");
+        assert_eq!(escape_markdown_v2("+"), "\\+");
+        assert_eq!(escape_markdown_v2("-"), "\\-");
+        assert_eq!(escape_markdown_v2("="), "\\=");
+        assert_eq!(escape_markdown_v2("|"), "\\|");
+        assert_eq!(escape_markdown_v2("{"), "\\{");
+        assert_eq!(escape_markdown_v2("}"), "\\}");
+        assert_eq!(escape_markdown_v2("."), "\\.");
+        assert_eq!(escape_markdown_v2("!"), "\\!");
+    }
+
+    #[test]
+    fn test_escape_markdown_v2_non_reserved_characters() {
+        // Test non-reserved characters are not escaped
+        assert_eq!(escape_markdown_v2("a"), "a");
+        assert_eq!(escape_markdown_v2("Z"), "Z");
+        assert_eq!(escape_markdown_v2("0"), "0");
+        assert_eq!(escape_markdown_v2("9"), "9");
+        assert_eq!(escape_markdown_v2(" "), " ");
+        assert_eq!(escape_markdown_v2("\n"), "\n");
+        assert_eq!(escape_markdown_v2("🎯"), "🎯");
+    }
+
+    #[test]
+    fn test_escape_markdown_v2_mixed_text() {
+        // Test realistic examples with mixed content
+        assert_eq!(
+            escape_markdown_v2("user.name@example.com"),
+            "user\\.name@example\\.com"
+        );
+        assert_eq!(
+            escape_markdown_v2("https://github.com/user/repo"),
+            "https://github\\.com/user/repo"
+        );
+        assert_eq!(
+            escape_markdown_v2("Device code: ABC-123!"),
+            "Device code: ABC\\-123\\!"
+        );
+        assert_eq!(
+            escape_markdown_v2("Configuration [UPDATED]"),
+            "Configuration \\[UPDATED\\]"
+        );
+    }
+
+    #[test]
+    fn test_escape_markdown_v2_empty_string() {
+        assert_eq!(escape_markdown_v2(""), "");
     }
 }
