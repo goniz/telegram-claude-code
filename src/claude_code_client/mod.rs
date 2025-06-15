@@ -749,11 +749,9 @@ To authenticate with your Claude account, please follow these steps:
         let command = vec![
             "claude".to_string(),
             "-p".to_string(),
-            "test authentication".to_string(),
+            "".to_string(),
             "--output-format".to_string(),
             "json".to_string(),
-            "--model".to_string(),
-            "claude-sonnet-4".to_string(),
         ];
 
         match self.exec_command(command).await {
