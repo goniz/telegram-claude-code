@@ -797,30 +797,6 @@ To authenticate with your Claude account, please follow these steps:
         }
     }
 
-    /// Install Claude Code via npm
-    pub async fn install(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        log::info!("Starting Claude Code installation...");
-
-        let install_command = vec![
-            "npm".to_string(),
-            "install".to_string(),
-            "-g".to_string(),
-            "@anthropic-ai/claude-code".to_string(),
-        ];
-
-        match self.exec_command(install_command).await {
-            Ok(output) => {
-                log::info!("Claude Code installation completed successfully");
-                log::debug!("Installation output: {}", output);
-                Ok(())
-            }
-            Err(e) => {
-                log::error!("Claude Code installation failed: {}", e);
-                Err(format!("Failed to install Claude Code: {}", e).into())
-            }
-        }
-    }
-
     /// Check Claude Code version and availability
     pub async fn check_availability(
         &self,
