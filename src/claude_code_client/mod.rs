@@ -770,7 +770,7 @@ To authenticate with your Claude account, please follow these steps:
             }
             Err(e) => {
                 // Other errors (network, container issues, etc.) should be bubbled up
-                Err(e)
+                Ok(false)
             }
         }
     }
