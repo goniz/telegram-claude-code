@@ -745,41 +745,32 @@ To authenticate with your Claude account, please follow these steps:
     pub async fn check_auth_status(
         &self,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        // Try to run a simple claude command to check if authentication is working
+        // Try to run a simple claude command with JSON output to check if authentication is working
         let command = vec![
             "claude".to_string(),
             "-p".to_string(),
-            "test authentication".to_string(),
-            "--model".to_string(),
-            "claude-sonnet-4".to_string(),
+            "  ".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
         ];
 
         match self.exec_command(command).await {
-            Ok(_) => {
-                // If the command succeeds, authentication is working
-                Ok(true)
+            Ok(output) => {
+                // Try to parse the JSON output
+                match self.parse_result(output) {
+                    Ok(result) => {
+                        // Authentication is successful if there's no error in the result
+                        Ok(!result.is_error)
+                    }
+                    Err(e) => {
+                        // If JSON parsing fails, bubble up the error
+                        Err(e)
+                    }
+                }
             }
             Err(e) => {
-                let error_msg = e.to_string().to_lowercase();
-                if error_msg.contains("invalid api key")
-                    || error_msg.contains("authentication")
-                    || error_msg.contains("unauthorized")
-                    || error_msg.contains("api key")
-                    || error_msg.contains("token")
-                    || error_msg.contains("not authenticated")
-                    || error_msg.contains("login required")
-                    || error_msg.contains("please log in")
-                    || error_msg.contains("auth required")
-                    || error_msg.contains("permission denied")
-                    || error_msg.contains("access denied")
-                    || error_msg.contains("forbidden")
-                {
-                    // These errors indicate authentication issues
-                    Ok(false)
-                } else {
-                    // Other errors (network, container issues, etc.) should be bubbled up
-                    Err(e)
-                }
+                // Other errors (network, container issues, etc.) should be bubbled up
+                Err(e)
             }
         }
     }
