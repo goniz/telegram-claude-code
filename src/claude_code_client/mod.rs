@@ -768,7 +768,7 @@ To authenticate with your Claude account, please follow these steps:
                     }
                 }
             }
-            Err(e) => {
+            Err(_) => {
                 // Other errors (network, container issues, etc.) should be bubbled up
                 Ok(false)
             }
