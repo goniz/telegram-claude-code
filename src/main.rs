@@ -335,7 +335,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                                     "✅ GitHub authentication successful!\n\n🎯 You can now use GitHub features in your coding session.".to_string()
                                 }
                             } else if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
-                                format!("🔗 **GitHub OAuth Authentication Required**\n\n**Please follow these steps:**\n\n1️⃣ **Visit this URL:** {}\n\n2️⃣ **Enter this device code:** `{}`\n\n3️⃣ **Sign in to your GitHub account** and authorize the application\n\n4️⃣ **Return here** - authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly.\n\n💡 **Tip:** Use `/githubstatus` to check if authentication completed successfully.", oauth_url, device_code)
+                                format!("🔗 **GitHub OAuth Authentication Required**\n\n**Please follow these steps:**\n\n1️⃣ **Visit this URL:** {}\n\n2️⃣ **Enter this device code:**\n```\n{}\n```\n\n3️⃣ **Sign in to your GitHub account** and authorize the application\n\n4️⃣ **Return here** - authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly.\n\n💡 **Tip:** Use `/githubstatus` to check if authentication completed successfully.", oauth_url, device_code)
                             } else {
                                 format!("ℹ️ GitHub authentication status: {}", auth_result.message)
                             };
