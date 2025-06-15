@@ -74,12 +74,13 @@ impl GithubClient {
             }
         }
 
-        // Start the OAuth device flow using gh auth login --web
+        // Start the OAuth flow using gh auth login (interactive)
         let login_command = vec![
             "gh".to_string(),
             "auth".to_string(),
             "login".to_string(),
-            "--web".to_string(),
+            "--git-protocol".to_string(),
+            "https".to_string(),
         ];
 
         match self.exec_command_interactive(login_command).await {
@@ -254,16 +255,10 @@ impl GithubClient {
         &self,
         command: Vec<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // For the OAuth flow, we need to simulate providing default inputs to gh
-        // We'll create a command that pipes default responses to gh auth login
-        let wrapped_command = vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            format!("echo '' | {} 2>&1", command.join(" ")),
-        ];
+        // Just launch the gh command without any wrappers or input provision
 
         let exec_config = CreateExecOptions {
-            cmd: Some(wrapped_command),
+            cmd: Some(command),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),
@@ -315,28 +310,37 @@ impl GithubClient {
         Ok(output.trim().to_string())
     }
 
-    /// Parse OAuth response to extract URL and device code
+    /// Parse OAuth response to extract URL and device code from interactive flow
     fn parse_oauth_response(&self, output: &str) -> (Option<String>, Option<String>) {
         let mut oauth_url = None;
         let mut device_code = None;
 
         for line in output.lines() {
-            // Look for lines like "! First copy your one-time code: D023-3C2D"
-            if line.contains("First copy your one-time code:") {
+            // Look for device code in various formats
+            if line.contains("First copy your one-time code:") || line.contains("one-time code:") {
                 if let Some(code_part) = line.split("code:").nth(1) {
                     device_code = Some(code_part.trim().to_string());
                 }
             }
 
-            // Look for lines like "Open this URL to continue in your web browser: https://github.com/login/device"
-            if line.contains("Open this URL to continue")
-                || line.contains("https://github.com/login/device")
-            {
+            // Look for URLs in various formats
+            if line.contains("https://github.com/login/device") {
+                if let Some(url_start) = line.find("https://github.com/login/device") {
+                    let url_part = &line[url_start..];
+                    let url = url_part.split_whitespace().next().unwrap_or(url_part);
+                    oauth_url = Some(url.to_string());
+                }
+            } else if line.contains("https://github.com/login/oauth") {
+                // Handle other OAuth URLs  
+                if let Some(url_start) = line.find("https://github.com/login/oauth") {
+                    let url_part = &line[url_start..];
+                    let url = url_part.split_whitespace().next().unwrap_or(url_part);
+                    oauth_url = Some(url.to_string());
+                }
+            } else if line.contains("Open this URL to continue") || line.contains("browser:") {
+                // Fallback for other URL formats
                 if let Some(url_part) = line.split("browser:").nth(1) {
                     oauth_url = Some(url_part.trim().to_string());
-                } else if line.contains("https://github.com/login/device") {
-                    // Extract URL directly if it's just the URL
-                    oauth_url = Some("https://github.com/login/device".to_string());
                 }
             }
         }
