@@ -420,10 +420,14 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                             bot.send_message(msg.chat.id, message).await?;
                         }
                         Err(e) => {
-                            bot.send_message(
-                                msg.chat.id, 
-                                format!("❌ Failed to initiate GitHub authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• GitHub CLI (gh) is properly installed\n• Network connectivity is available", e)
-                            ).await?;
+                            let error_msg = e.to_string();
+                            let user_message = if error_msg.contains("timed out after") {
+                                format!("⏰ GitHub authentication timed out: {}\n\nThis usually means:\n• The authentication process is taking longer than expected\n• There may be network connectivity issues\n• The GitHub CLI might be unresponsive\n\nPlease try again in a few moments.", error_msg)
+                            } else {
+                                format!("❌ Failed to initiate GitHub authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• GitHub CLI (gh) is properly installed\n• Network connectivity is available", error_msg)
+                            };
+                            
+                            bot.send_message(msg.chat.id, user_message).await?;
                         }
                     }
                 }
