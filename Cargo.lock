@@ -1652,6 +1652,7 @@ dependencies = [
  "futures-util",
  "log",
  "pretty_env_logger",
+ "regex",
  "rstest",
  "serde",
  "serde_json",
