@@ -79,6 +79,8 @@ impl GithubClient {
             "gh".to_string(),
             "auth".to_string(),
             "login".to_string(),
+            "--git-protocol".to_string(),
+            "https".to_string(),
         ];
 
         match self.exec_command_interactive(login_command).await {
