@@ -31,6 +31,26 @@ pub struct ClaudeCodeConfig {
     pub working_directory: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub enum InteractiveLoginState {
+    DarkMode,
+    SelectLoginMethod,
+    ProvideUrl(String),
+    WaitingForCode,
+    LoginSuccessful,
+    SecurityNotes,
+    TrustFiles,
+    Completed,
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct InteractiveLoginSession {
+    pub state: InteractiveLoginState,
+    pub url: Option<String>,
+    pub awaiting_user_code: bool,
+}
+
 impl Default for ClaudeCodeConfig {
     fn default() -> Self {
         Self {
@@ -270,10 +290,8 @@ impl ClaudeCodeClient {
         }
     }
 
-    /// Interactive Claude login using TTY to get OAuth URL
+    /// Interactive Claude login using TTY with comprehensive state handling
     async fn interactive_claude_login(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        use bollard::exec::{CreateExecOptions, StartExecOptions};
-        use futures_util::StreamExt;
         use std::time::Duration;
         use tokio::time::sleep;
 
@@ -301,102 +319,141 @@ impl ClaudeCodeClient {
             ..Default::default()
         };
 
-        let mut oauth_url = String::new();
-        let mut authentication_found = false;
+        let mut session = InteractiveLoginSession {
+            state: InteractiveLoginState::DarkMode,
+            url: None,
+            awaiting_user_code: false,
+        };
         
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
             bollard::exec::StartExecResults::Attached { mut output, input } => {
                 // Give some time for the interactive CLI to start
                 sleep(Duration::from_millis(500)).await;
                 
-                // Send the /login command
-                {
-                    let mut stdin = input;
-                    stdin.write_all(b"/login\n").await?;
-                    stdin.flush().await?;
-                    
-                    // Wait a bit for the login options to appear
-                    sleep(Duration::from_millis(1000)).await;
-                    
-                    // Send option 1 for account auth
-                    stdin.write_all(b"1\n").await?;
-                    stdin.flush().await?;
-                }
+                let mut stdin = input;
+                let mut output_buffer = String::new();
                 
-                // Read output and look for OAuth URL
-                let timeout = tokio::time::timeout(Duration::from_secs(10), async {
+                // Initial command to start login
+                stdin.write_all(b"/login\n").await?;
+                stdin.flush().await?;
+                
+                // Process the interactive session
+                let timeout = tokio::time::timeout(Duration::from_secs(30), async {
                     while let Some(Ok(msg)) = output.next().await {
-                        match msg {
+                        let text = match msg {
                             bollard::container::LogOutput::StdOut { message } => {
-                                let text = String::from_utf8_lossy(&message);
-                                log::debug!("Claude CLI output: {}", text);
-                                
-                                // Look for OAuth URL patterns
-                                if text.contains("https://") && (text.contains("claude.ai") || text.contains("anthropic") || text.contains("oauth") || text.contains("auth")) {
-                                    // Extract the URL
-                                    for line in text.lines() {
-                                        if line.trim().starts_with("https://") {
-                                            oauth_url = line.trim().to_string();
-                                            authentication_found = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                
-                                // Also look for any authentication-related instructions
-                                if text.contains("Visit") || text.contains("Open") || text.contains("browser") {
-                                    oauth_url.push_str(&text);
-                                    authentication_found = true;
-                                }
-                                
-                                if authentication_found {
-                                    break;
-                                }
+                                String::from_utf8_lossy(&message).to_string()
                             }
                             bollard::container::LogOutput::StdErr { message } => {
-                                let text = String::from_utf8_lossy(&message);
-                                log::debug!("Claude CLI stderr: {}", text);
-                                
-                                // Sometimes OAuth URL might come through stderr
-                                if text.contains("https://") && (text.contains("claude.ai") || text.contains("anthropic")) {
-                                    for line in text.lines() {
-                                        if line.trim().starts_with("https://") {
-                                            oauth_url = line.trim().to_string();
-                                            authentication_found = true;
-                                            break;
-                                        }
-                                    }
-                                }
+                                String::from_utf8_lossy(&message).to_string()
                             }
-                            _ => {}
+                            _ => continue,
+                        };
+                        
+                        output_buffer.push_str(&text);
+                        log::debug!("Claude CLI output: {}", text);
+                        
+                        // Update state based on output
+                        let new_state = self.parse_cli_output_for_state(&text);
+                        
+                        match &new_state {
+                            InteractiveLoginState::DarkMode => {
+                                log::debug!("Dark mode detected, pressing enter");
+                                stdin.write_all(b"\n").await?;
+                                stdin.flush().await?;
+                                session.state = new_state.clone();
+                            }
+                            InteractiveLoginState::SelectLoginMethod => {
+                                log::debug!("Select login method detected, choosing option 1");
+                                stdin.write_all(b"1\n").await?;
+                                stdin.flush().await?;
+                                session.state = new_state.clone();
+                            }
+                            InteractiveLoginState::ProvideUrl(url) => {
+                                log::debug!("URL detected: {}", url);
+                                session.url = Some(url.clone());
+                                session.state = new_state.clone();
+                                
+                                // Return URL to user
+                                return Ok(format!(
+                                    "🔐 **Claude Account Authentication**\n\n\
+                                    To complete authentication with your Claude account:\n\n\
+                                    **1. Visit this authentication URL:**\n{}\n\n\
+                                    **2. Sign in with your Claude account**\n\n\
+                                    **3. Complete the OAuth flow**\n\n\
+                                    **4. Once complete, return here and continue**\n\n\
+                                    ✨ This will enable full access to your Claude subscription features!",
+                                    url
+                                ));
+                            }
+                            InteractiveLoginState::WaitingForCode => {
+                                log::debug!("Waiting for code from user");
+                                session.awaiting_user_code = true;
+                                session.state = new_state.clone();
+                                
+                                // This would need to be handled differently in a real bot scenario
+                                // For now, return an instruction to the user
+                                return Ok(format!(
+                                    "🔐 **Claude Authentication - Code Required**\n\n\
+                                    Please paste the authentication code you received and send it back.\n\n\
+                                    The bot will continue the authentication process with your code."
+                                ));
+                            }
+                            InteractiveLoginState::LoginSuccessful => {
+                                log::debug!("Login successful, pressing enter to continue");
+                                stdin.write_all(b"\n").await?;
+                                stdin.flush().await?;
+                                session.state = new_state.clone();
+                            }
+                            InteractiveLoginState::SecurityNotes => {
+                                log::debug!("Security notes detected, pressing enter to continue");
+                                stdin.write_all(b"\n").await?;
+                                stdin.flush().await?;
+                                session.state = new_state.clone();
+                            }
+                            InteractiveLoginState::TrustFiles => {
+                                log::debug!("Trust files prompt detected, pressing enter and ending session");
+                                stdin.write_all(b"\n").await?;
+                                stdin.flush().await?;
+                                session.state = InteractiveLoginState::Completed;
+                                
+                                return Ok(format!(
+                                    "✅ **Claude Authentication Completed!**\n\n\
+                                    Your Claude account has been successfully authenticated.\n\n\
+                                    You can now use Claude Code with your account privileges."
+                                ));
+                            }
+                            InteractiveLoginState::Completed => {
+                                break;
+                            }
+                            InteractiveLoginState::Error(err) => {
+                                log::warn!("Error in interactive login: {}", err);
+                                session.state = new_state.clone();
+                            }
                         }
+                        
+                        // Small delay between state transitions
+                        sleep(Duration::from_millis(200)).await;
                     }
+                    
+                    // If we get here without a clear result, return what we have
+                    Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output_buffer)
                 }).await;
                 
                 match timeout {
-                    Ok(_) => {
-                        if authentication_found && !oauth_url.is_empty() {
-                            return Ok(format!(
-                                "🔐 **Claude Account Authentication**\n\n\
-                                To complete authentication with your Claude account:\n\n\
-                                **1. Visit this authentication URL:**\n{}\n\n\
-                                **2. Sign in with your Claude account:**\n\
-                                - Use your existing Claude Pro/Team account credentials\n\
-                                - Or create a new Claude account if you don't have one\n\n\
-                                **3. Complete the OAuth flow:**\n\
-                                - Grant permission to Claude Code\n\
-                                - Follow any additional instructions\n\n\
-                                **4. Return to continue using Claude Code**\n\n\
-                                ✨ This will enable full access to your Claude subscription features!",
-                                oauth_url
-                            ));
-                        } else {
-                            // Fallback to manual instructions if we couldn't extract the URL
+                    Ok(Ok(result)) => {
+                        if result.is_empty() {
                             return Ok(self.get_fallback_auth_instructions().await);
+                        } else {
+                            return Ok(result);
                         }
                     }
+                    Ok(Err(e)) => {
+                        log::warn!("Error in interactive login: {}", e);
+                        return Ok(self.get_fallback_auth_instructions().await);
+                    }
                     Err(_) => {
-                        log::warn!("Timeout waiting for OAuth URL from Claude CLI");
+                        log::warn!("Timeout in interactive login");
                         return Ok(self.get_fallback_auth_instructions().await);
                     }
                 }
@@ -405,6 +462,71 @@ impl ClaudeCodeClient {
                 return Err("Unexpected detached execution in interactive mode".into());
             }
         }
+    }
+
+    /// Parse CLI output to determine the current state
+    fn parse_cli_output_for_state(&self, output: &str) -> InteractiveLoginState {
+        let output_lower = output.to_lowercase();
+        
+        if output_lower.contains("dark mode") {
+            InteractiveLoginState::DarkMode
+        } else if output_lower.contains("select login method") {
+            InteractiveLoginState::SelectLoginMethod
+        } else if output_lower.contains("use the url below to sign in") {
+            // Extract URL from output
+            for line in output.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("https://") {
+                    return InteractiveLoginState::ProvideUrl(trimmed.to_string());
+                }
+            }
+            
+            // If no URL found on separate line, look for URL pattern in the text
+            if let Some(url_start) = output.find("https://") {
+                let url_part = &output[url_start..];
+                if let Some(url_end) = url_part.find(char::is_whitespace) {
+                    let url = &url_part[..url_end];
+                    return InteractiveLoginState::ProvideUrl(url.to_string());
+                } else {
+                    // URL goes to end of string
+                    return InteractiveLoginState::ProvideUrl(url_part.trim().to_string());
+                }
+            }
+            
+            InteractiveLoginState::Error("URL not found in sign-in output".to_string())
+        } else if output_lower.contains("paste code here if prompted") {
+            InteractiveLoginState::WaitingForCode
+        } else if output_lower.contains("login successful") {
+            InteractiveLoginState::LoginSuccessful
+        } else if output_lower.contains("security notes") {
+            InteractiveLoginState::SecurityNotes
+        } else if output_lower.contains("do you trust the files in this folder") {
+            InteractiveLoginState::TrustFiles
+        } else {
+            // Don't treat everything as an error, just continue with current state
+            InteractiveLoginState::DarkMode  // Default state to continue processing
+        }
+    }
+
+    /// Continue interactive login with user-provided code
+    pub async fn continue_login_with_code(&self, code: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // This would be used to continue a paused login session with a user-provided code
+        // For now, this is a placeholder that would need to be integrated with the bot's state management
+        
+        log::info!("Continuing login with user code: {}", code);
+        
+        // In a real implementation, this would:
+        // 1. Restore the previous session state
+        // 2. Send the code to the waiting stdin
+        // 3. Continue processing the interactive flow
+        
+        Ok(format!(
+            "🔐 **Code Received**\n\n\
+            Authentication code '{}' has been received.\n\n\
+            The authentication process would continue here.\n\n\
+            Note: Full implementation requires session state management.",
+            code
+        ))
     }
 
     /// Fallback authentication instructions if interactive mode fails
