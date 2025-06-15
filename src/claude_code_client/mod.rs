@@ -1,5 +1,5 @@
-use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecOptions};
+use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -8,7 +8,7 @@ pub mod container_utils;
 pub mod github_client;
 
 #[allow(unused_imports)]
-pub use github_client::{GithubClient, GithubClientConfig, GithubAuthResult, GithubCloneResult};
+pub use github_client::{GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeCodeResult {
@@ -87,7 +87,10 @@ impl ClaudeCodeClient {
     }
 
     /// Execute a single prompt using Claude Code in print mode
-    pub async fn execute_prompt(&self, prompt: &str) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn execute_prompt(
+        &self,
+        prompt: &str,
+    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         let mut command = vec![
             "claude".to_string(),
             "-p".to_string(),
@@ -108,7 +111,7 @@ impl ClaudeCodeClient {
         }
 
         let output = self.exec_command(command).await?;
-        
+
         // Parse JSON response
         match serde_json::from_str::<ClaudeCodeResult>(&output) {
             Ok(result) => Ok(result),
@@ -130,15 +133,23 @@ impl ClaudeCodeClient {
     }
 
     /// Execute a prompt with stdin input (for processing files)
-    pub async fn execute_with_stdin(&self, prompt: &str, stdin_content: &str) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn execute_with_stdin(
+        &self,
+        prompt: &str,
+        stdin_content: &str,
+    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         // Create a temporary file with the stdin content
         let temp_file = format!("/tmp/claude_input_{}", uuid::Uuid::new_v4());
-        
+
         // Write content to temporary file
         let write_command = vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("echo '{}' > {}", stdin_content.replace("'", "'\"'\"'"), temp_file),
+            format!(
+                "echo '{}' > {}",
+                stdin_content.replace("'", "'\"'\"'"),
+                temp_file
+            ),
         ];
         self.exec_command(write_command).await?;
 
@@ -150,13 +161,15 @@ impl ClaudeCodeClient {
                 "claude -p '{}' --output-format json --model {} {} < {}",
                 prompt.replace("'", "'\"'\"'"),
                 self.config.model,
-                self.config.max_tokens.map_or(String::new(), |t| format!("--max-tokens {}", t)),
+                self.config
+                    .max_tokens
+                    .map_or(String::new(), |t| format!("--max-tokens {}", t)),
                 temp_file
             ),
         ];
 
         let output = self.exec_command(command).await?;
-        
+
         // Clean up temporary file
         let cleanup_command = vec!["rm".to_string(), temp_file];
         let _ = self.exec_command(cleanup_command).await; // Ignore cleanup errors
@@ -165,7 +178,10 @@ impl ClaudeCodeClient {
     }
 
     /// Execute a Claude Code chat command (interactive mode)
-    pub async fn start_chat_session(&self, initial_message: Option<&str>) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start_chat_session(
+        &self,
+        initial_message: Option<&str>,
+    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         let mut command = vec![
             "claude".to_string(),
             "chat".to_string(),
@@ -184,7 +200,11 @@ impl ClaudeCodeClient {
     }
 
     /// Send a message to an existing chat session
-    pub async fn send_chat_message(&self, session_id: &str, message: &str) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_chat_message(
+        &self,
+        session_id: &str,
+        message: &str,
+    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec![
             "claude".to_string(),
             "chat".to_string(),
@@ -201,7 +221,11 @@ impl ClaudeCodeClient {
     }
 
     /// Run Claude Code in coding mode with a specific task
-    pub async fn run_coding_task(&self, task: &str, files: Vec<&str>) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn run_coding_task(
+        &self,
+        task: &str,
+        files: Vec<&str>,
+    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         let mut command = vec![
             "claude".to_string(),
             "code".to_string(),
@@ -222,14 +246,22 @@ impl ClaudeCodeClient {
     }
 
     /// Parse the output from Claude Code and handle different response formats
-    fn parse_result(&self, output: String) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    fn parse_result(
+        &self,
+        output: String,
+    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         match serde_json::from_str::<ClaudeCodeResult>(&output) {
             Ok(result) => Ok(result),
             Err(_) => {
                 // If JSON parsing fails, create a simple result with the raw output
                 Ok(ClaudeCodeResult {
                     r#type: "result".to_string(),
-                    subtype: if output.to_lowercase().contains("error") { "error" } else { "success" }.to_string(),
+                    subtype: if output.to_lowercase().contains("error") {
+                        "error"
+                    } else {
+                        "success"
+                    }
+                    .to_string(),
                     cost_usd: 0.0,
                     is_error: output.to_lowercase().contains("error"),
                     duration_ms: 0,
@@ -243,7 +275,9 @@ impl ClaudeCodeClient {
     }
 
     /// Show current session status
-    pub async fn get_session_status(&self) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_session_status(
+        &self,
+    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec![
             "claude".to_string(),
             "status".to_string(),
@@ -256,7 +290,10 @@ impl ClaudeCodeClient {
     }
 
     /// Create a commit with Claude Code
-    pub async fn create_commit(&self, message: Option<&str>) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn create_commit(
+        &self,
+        message: Option<&str>,
+    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
         let mut command = vec![
             "claude".to_string(),
             "commit".to_string(),
@@ -274,7 +311,9 @@ impl ClaudeCodeClient {
 
     /// Authenticate Claude Code using Claude account (OAuth flow)
     /// This initiates the account-based authentication process through interactive CLI
-    pub async fn authenticate_claude_account(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn authenticate_claude_account(
+        &self,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Check if authentication is already set up
         match self.check_auth_status().await {
             Ok(true) => {
@@ -291,7 +330,9 @@ impl ClaudeCodeClient {
     }
 
     /// Interactive Claude login using TTY with comprehensive state handling
-    async fn interactive_claude_login(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    async fn interactive_claude_login(
+        &self,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Duration;
         use tokio::time::sleep;
 
@@ -311,8 +352,11 @@ impl ClaudeCodeClient {
             ..Default::default()
         };
 
-        let exec = self.docker.create_exec(&self.container_id, exec_config).await?;
-        
+        let exec = self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await?;
+
         let start_config = StartExecOptions {
             detach: false,
             tty: true,
@@ -324,18 +368,18 @@ impl ClaudeCodeClient {
             url: None,
             awaiting_user_code: false,
         };
-        
+
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
             bollard::exec::StartExecResults::Attached { mut output, input } => {
                 // Give some time for the interactive CLI to start
                 sleep(Duration::from_millis(500)).await;
-                
+
                 let mut stdin = input;
                 let mut output_buffer = String::new();
-                
+
                 // Claude CLI automatically prompts for login method on first run
                 // No need to send /login command
-                
+
                 // Process the interactive session
                 let timeout = tokio::time::timeout(Duration::from_secs(30), async {
                     while let Some(Ok(msg)) = output.next().await {
@@ -348,13 +392,13 @@ impl ClaudeCodeClient {
                             }
                             _ => continue,
                         };
-                        
+
                         output_buffer.push_str(&text);
                         log::debug!("Claude CLI output: {}", text);
-                        
+
                         // Update state based on output
                         let new_state = self.parse_cli_output_for_state(&text);
-                        
+
                         match &new_state {
                             InteractiveLoginState::DarkMode => {
                                 log::debug!("Dark mode detected, pressing enter");
@@ -372,7 +416,7 @@ impl ClaudeCodeClient {
                                 log::debug!("URL detected: {}", url);
                                 session.url = Some(url.clone());
                                 session.state = new_state.clone();
-                                
+
                                 // Return URL to user
                                 return Ok(format!(
                                     "🔐 **Claude Account Authentication**\n\n\
@@ -389,7 +433,7 @@ impl ClaudeCodeClient {
                                 log::debug!("Waiting for code from user");
                                 session.awaiting_user_code = true;
                                 session.state = new_state.clone();
-                                
+
                                 // This would need to be handled differently in a real bot scenario
                                 // For now, return an instruction to the user
                                 return Ok(format!(
@@ -415,7 +459,7 @@ impl ClaudeCodeClient {
                                 stdin.write_all(b"\n").await?;
                                 stdin.flush().await?;
                                 session.state = InteractiveLoginState::Completed;
-                                
+
                                 return Ok(format!(
                                     "✅ **Claude Authentication Completed!**\n\n\
                                     Your Claude account has been successfully authenticated.\n\n\
@@ -430,15 +474,15 @@ impl ClaudeCodeClient {
                                 session.state = new_state.clone();
                             }
                         }
-                        
+
                         // Small delay between state transitions
                         sleep(Duration::from_millis(200)).await;
                     }
-                    
+
                     // If we get here without a clear result, return what we have
                     Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output_buffer)
                 }).await;
-                
+
                 match timeout {
                     Ok(Ok(result)) => {
                         if result.is_empty() {
@@ -466,7 +510,7 @@ impl ClaudeCodeClient {
     /// Parse CLI output to determine the current state
     fn parse_cli_output_for_state(&self, output: &str) -> InteractiveLoginState {
         let output_lower = output.to_lowercase();
-        
+
         if output_lower.contains("dark mode") {
             InteractiveLoginState::DarkMode
         } else if output_lower.contains("select login method") {
@@ -479,7 +523,7 @@ impl ClaudeCodeClient {
                     return InteractiveLoginState::ProvideUrl(trimmed.to_string());
                 }
             }
-            
+
             // If no URL found on separate line, look for URL pattern in the text
             if let Some(url_start) = output.find("https://") {
                 let url_part = &output[url_start..];
@@ -491,7 +535,7 @@ impl ClaudeCodeClient {
                     return InteractiveLoginState::ProvideUrl(url_part.trim().to_string());
                 }
             }
-            
+
             InteractiveLoginState::Error("URL not found in sign-in output".to_string())
         } else if output_lower.contains("paste code here if prompted") {
             InteractiveLoginState::WaitingForCode
@@ -503,17 +547,20 @@ impl ClaudeCodeClient {
             InteractiveLoginState::TrustFiles
         } else {
             // Don't treat everything as an error, just continue with current state
-            InteractiveLoginState::DarkMode  // Default state to continue processing
+            InteractiveLoginState::DarkMode // Default state to continue processing
         }
     }
 
     /// Continue interactive login with user-provided code
-    pub async fn continue_login_with_code(&self, code: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn continue_login_with_code(
+        &self,
+        code: &str,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Duration;
         use tokio::time::sleep;
 
         log::info!("Continuing login with user code: {}", code);
-        
+
         // Create exec with TTY enabled for interactive mode to continue the session
         let exec_config = CreateExecOptions {
             cmd: Some(vec!["claude".to_string()]),
@@ -530,8 +577,11 @@ impl ClaudeCodeClient {
             ..Default::default()
         };
 
-        let exec = self.docker.create_exec(&self.container_id, exec_config).await?;
-        
+        let exec = self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await?;
+
         let start_config = StartExecOptions {
             detach: false,
             tty: true,
@@ -542,14 +592,14 @@ impl ClaudeCodeClient {
             bollard::exec::StartExecResults::Attached { mut output, input } => {
                 // Give some time for the interactive CLI to start
                 sleep(Duration::from_millis(500)).await;
-                
+
                 let mut stdin = input;
                 let mut output_buffer = String::new();
-                
+
                 // Send the authentication code
                 stdin.write_all(format!("{}\n", code).as_bytes()).await?;
                 stdin.flush().await?;
-                
+
                 // Process the response
                 let timeout = tokio::time::timeout(Duration::from_secs(20), async {
                     while let Some(Ok(msg)) = output.next().await {
@@ -562,19 +612,19 @@ impl ClaudeCodeClient {
                             }
                             _ => continue,
                         };
-                        
+
                         output_buffer.push_str(&text);
                         log::debug!("Claude CLI code response: {}", text);
-                        
+
                         // Check for completion states
                         let new_state = self.parse_cli_output_for_state(&text);
-                        
+
                         match &new_state {
                             InteractiveLoginState::LoginSuccessful => {
                                 log::debug!("Login successful after code input, pressing enter to continue");
                                 stdin.write_all(b"\n").await?;
                                 stdin.flush().await?;
-                                
+
                                 return Ok(format!(
                                     "✅ **Authentication Code Accepted!**\n\n\
                                     Claude account authentication was successful.\n\n\
@@ -590,7 +640,7 @@ impl ClaudeCodeClient {
                                 log::debug!("Trust files prompt detected, pressing enter and ending session");
                                 stdin.write_all(b"\n").await?;
                                 stdin.flush().await?;
-                                
+
                                 return Ok(format!(
                                     "✅ **Claude Authentication Completed!**\n\n\
                                     Your Claude account has been successfully authenticated.\n\n\
@@ -610,14 +660,14 @@ impl ClaudeCodeClient {
                                 // Continue processing
                             }
                         }
-                        
+
                         // Small delay between processing
                         sleep(Duration::from_millis(200)).await;
                     }
-                    
+
                     Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output_buffer)
                 }).await;
-                
+
                 match timeout {
                     Ok(Ok(result)) => {
                         if result.is_empty() {
@@ -687,11 +737,14 @@ To authenticate with your Claude account, please follow these steps:
 - Access to all your Claude Pro/Team features
 - No separate API key management required
 
-💡 **Note:** If you encounter issues, ensure you have a valid Claude account and subscription."#.to_string()
+💡 **Note:** If you encounter issues, ensure you have a valid Claude account and subscription."#
+            .to_string()
     }
 
     /// Check authentication status
-    pub async fn check_auth_status(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn check_auth_status(
+        &self,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         // Try to run a simple claude command to check if authentication is working
         let command = vec![
             "claude".to_string(),
@@ -708,18 +761,19 @@ To authenticate with your Claude account, please follow these steps:
             }
             Err(e) => {
                 let error_msg = e.to_string().to_lowercase();
-                if error_msg.contains("invalid api key") || 
-                   error_msg.contains("authentication") ||
-                   error_msg.contains("unauthorized") ||
-                   error_msg.contains("api key") ||
-                   error_msg.contains("token") ||
-                   error_msg.contains("not authenticated") ||
-                   error_msg.contains("login required") ||
-                   error_msg.contains("please log in") ||
-                   error_msg.contains("auth required") ||
-                   error_msg.contains("permission denied") ||
-                   error_msg.contains("access denied") ||
-                   error_msg.contains("forbidden") {
+                if error_msg.contains("invalid api key")
+                    || error_msg.contains("authentication")
+                    || error_msg.contains("unauthorized")
+                    || error_msg.contains("api key")
+                    || error_msg.contains("token")
+                    || error_msg.contains("not authenticated")
+                    || error_msg.contains("login required")
+                    || error_msg.contains("please log in")
+                    || error_msg.contains("auth required")
+                    || error_msg.contains("permission denied")
+                    || error_msg.contains("access denied")
+                    || error_msg.contains("forbidden")
+                {
                     // These errors indicate authentication issues
                     Ok(false)
                 } else {
@@ -735,7 +789,10 @@ To authenticate with your Claude account, please follow these steps:
         // Check if authenticated and return status
         match self.check_auth_status().await {
             Ok(true) => Ok("✅ Claude Code is authenticated and ready to use".to_string()),
-            Ok(false) => Ok("❌ Claude Code is not authenticated. Please set up your Anthropic API key.".to_string()),
+            Ok(false) => Ok(
+                "❌ Claude Code is not authenticated. Please set up your Anthropic API key."
+                    .to_string(),
+            ),
             Err(e) => Err(format!("Unable to check authentication status: {}", e).into()),
         }
     }
@@ -743,14 +800,14 @@ To authenticate with your Claude account, please follow these steps:
     /// Install Claude Code via npm
     pub async fn install(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         log::info!("Starting Claude Code installation...");
-        
+
         let install_command = vec![
             "npm".to_string(),
             "install".to_string(),
             "-g".to_string(),
-            "@anthropic-ai/claude-code".to_string()
+            "@anthropic-ai/claude-code".to_string(),
         ];
-        
+
         match self.exec_command(install_command).await {
             Ok(output) => {
                 log::info!("Claude Code installation completed successfully");
@@ -765,13 +822,18 @@ To authenticate with your Claude account, please follow these steps:
     }
 
     /// Check Claude Code version and availability
-    pub async fn check_availability(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn check_availability(
+        &self,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec!["claude".to_string(), "--version".to_string()];
         self.exec_command(command).await
     }
 
     /// Execute a command in the container and return output
-    async fn exec_command(&self, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    async fn exec_command(
+        &self,
+        command: Vec<String>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let exec_config = CreateExecOptions {
             cmd: Some(command),
             attach_stdout: Some(true),
@@ -786,17 +848,23 @@ To authenticate with your Claude account, please follow these steps:
             ..Default::default()
         };
 
-        let exec = self.docker.create_exec(&self.container_id, exec_config).await?;
-        
+        let exec = self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await?;
+
         let start_config = StartExecOptions {
             detach: false,
             ..Default::default()
         };
 
         let mut output = String::new();
-        
+
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
-            bollard::exec::StartExecResults::Attached { output: mut output_stream, .. } => {
+            bollard::exec::StartExecResults::Attached {
+                output: mut output_stream,
+                ..
+            } => {
                 while let Some(Ok(msg)) = output_stream.next().await {
                     match msg {
                         bollard::container::LogOutput::StdOut { message } => {
@@ -819,7 +887,12 @@ To authenticate with your Claude account, please follow these steps:
         if let Some(exit_code) = exec_inspect.exit_code {
             if exit_code != 0 {
                 // Command failed - return error with the output
-                return Err(format!("Command failed with exit code {}: {}", exit_code, output.trim()).into());
+                return Err(format!(
+                    "Command failed with exit code {}: {}",
+                    exit_code,
+                    output.trim()
+                )
+                .into());
             }
         }
 
@@ -828,7 +901,10 @@ To authenticate with your Claude account, please follow these steps:
 
     /// Helper method for basic command execution (used in tests)
     #[allow(dead_code)]
-    pub async fn exec_basic_command(&self, command: Vec<String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn exec_basic_command(
+        &self,
+        command: Vec<String>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         self.exec_command(command).await
     }
 }
@@ -837,21 +913,35 @@ To authenticate with your Claude account, please follow these steps:
 #[allow(dead_code)]
 impl ClaudeCodeClient {
     /// Helper method to create a client for a coding session
-    pub async fn for_session(docker: Docker, container_name: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn for_session(
+        docker: Docker,
+        container_name: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Find the container by name
-        let containers = docker.list_containers(None::<bollard::container::ListContainersOptions<String>>).await?;
-        
+        let containers = docker
+            .list_containers(None::<bollard::container::ListContainersOptions<String>>)
+            .await?;
+
         let container = containers
             .iter()
             .find(|c| {
-                c.names.as_ref()
-                    .map(|names| names.iter().any(|name| name.trim_start_matches('/') == container_name))
+                c.names
+                    .as_ref()
+                    .map(|names| {
+                        names
+                            .iter()
+                            .any(|name| name.trim_start_matches('/') == container_name)
+                    })
                     .unwrap_or(false)
             })
             .ok_or("Container not found")?;
 
-        let container_id = container.id.as_ref().ok_or("Container ID not found")?.clone();
-        
+        let container_id = container
+            .id
+            .as_ref()
+            .ok_or("Container ID not found")?
+            .clone();
+
         Ok(Self::new(docker, container_id, ClaudeCodeConfig::default()))
     }
 }

@@ -1,17 +1,20 @@
-use teloxide::{prelude::*, utils::command::BotCommands};
-use bollard::Docker;
 use bollard::image::CreateImageOptions;
+use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
+use teloxide::{prelude::*, utils::command::BotCommands};
 use tokio::sync::Mutex;
 
 mod claude_code_client;
-use claude_code_client::{ClaudeCodeClient, ClaudeCodeConfig, container_utils};
+use claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
 
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase", description = "These commands are supported:")]
+#[command(
+    rename_rule = "lowercase",
+    description = "These commands are supported:"
+)]
 enum Command {
     #[command(description = "Display this help message")]
     Help,
@@ -23,7 +26,9 @@ enum Command {
     ClearSession,
     #[command(description = "Check Claude Code availability")]
     ClaudeStatus,
-    #[command(description = "Authenticate Claude using your Claude account credentials (OAuth flow)")]
+    #[command(
+        description = "Authenticate Claude using your Claude account credentials (OAuth flow)"
+    )]
     AuthenticateClaude,
     #[command(description = "Send authentication code during login process")]
     AuthCode { code: String },
@@ -56,18 +61,21 @@ async fn main() {
     let bot = Bot::from_env();
 
     // Initialize Docker client
-    let docker = Docker::connect_with_socket_defaults()
-        .expect("Failed to connect to Docker daemon");
+    let docker =
+        Docker::connect_with_socket_defaults().expect("Failed to connect to Docker daemon");
 
     log::info!("Connected to Docker daemon");
 
     // Pull the latest runtime image on startup
-    log::info!("Pulling latest runtime image: {}", container_utils::MAIN_CONTAINER_IMAGE);
+    log::info!(
+        "Pulling latest runtime image: {}",
+        container_utils::MAIN_CONTAINER_IMAGE
+    );
     let create_image_options = CreateImageOptions {
         from_image: container_utils::MAIN_CONTAINER_IMAGE,
         ..Default::default()
     };
-    
+
     let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
     while let Some(result) = pull_stream.next().await {
         match result {
@@ -94,13 +102,14 @@ async fn main() {
     Command::repl(bot, move |bot, msg, cmd| {
         let bot_state = bot_state.clone();
         answer(bot, msg, cmd, bot_state)
-    }).await;
+    })
+    .await;
 }
 
 // Handler function for bot commands
 async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
-    
+
     match cmd {
         Command::Help => {
             bot.send_message(msg.chat.id, Command::descriptions().to_string())
@@ -108,24 +117,30 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         }
         Command::StartSession => {
             let container_name = format!("coding-session-{}", chat_id);
-            
+
             // Send initial message
             bot.send_message(
                 msg.chat.id,
                 "🚀 Starting new coding session...\n\n⏳ Creating container with pre-installed Claude Code..."
             ).await?;
-            
-            match container_utils::start_coding_session(&bot_state.docker, &container_name, ClaudeCodeConfig::default()).await {
+
+            match container_utils::start_coding_session(
+                &bot_state.docker,
+                &container_name,
+                ClaudeCodeConfig::default(),
+            )
+            .await
+            {
                 Ok(claude_client) => {
                     bot.send_message(
-                        msg.chat.id, 
-                        format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code is pre-installed and ready to use!\n\nYou can now run code and manage your development environment.", 
+                        msg.chat.id,
+                        format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code is pre-installed and ready to use!\n\nYou can now run code and manage your development environment.",
                                 claude_client.container_id().chars().take(12).collect::<String>(), container_name)
                     ).await?;
                 }
                 Err(e) => {
                     bot.send_message(
-                        msg.chat.id, 
+                        msg.chat.id,
                         format!("❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container creation failure\n• Runtime image pull failure\n• Network connectivity issues", e)
                     ).await?;
                 }
@@ -133,63 +148,65 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         }
         Command::ClearSession => {
             let container_name = format!("coding-session-{}", chat_id);
-            
+
             // Also clear any pending authentication session
             {
                 let mut sessions = bot_state.auth_sessions.lock().await;
                 sessions.remove(&chat_id);
             }
-            
+
             match container_utils::clear_coding_session(&bot_state.docker, &container_name).await {
                 Ok(()) => {
                     bot.send_message(
-                        msg.chat.id, 
+                        msg.chat.id,
                         "🧹 Coding session cleared successfully!\n\nThe container has been stopped and removed."
                     ).await?;
                 }
                 Err(e) => {
-                    bot.send_message(
-                        msg.chat.id, 
-                        format!("❌ Failed to clear session: {}", e)
-                    ).await?;
+                    bot.send_message(msg.chat.id, format!("❌ Failed to clear session: {}", e))
+                        .await?;
                 }
             }
         }
         Command::Start => {
-            bot.send_message(msg.chat.id, "Hello! I'm your Telegram bot with Docker support 🤖🐳")
-                .await?;
+            bot.send_message(
+                msg.chat.id,
+                "Hello! I'm your Telegram bot with Docker support 🤖🐳",
+            )
+            .await?;
         }
         Command::ClaudeStatus => {
             let container_name = format!("coding-session-{}", chat_id);
-            
+
             match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
-                Ok(client) => {
-                    match client.check_availability().await {
-                        Ok(version) => {
-                            bot.send_message(
-                                msg.chat.id, 
-                                format!("✅ Claude Code is available!\n\nVersion: {}", version)
-                            ).await?;
-                        }
-                        Err(e) => {
-                            bot.send_message(
-                                msg.chat.id, 
-                                format!("❌ Claude Code check failed: {}", e)
-                            ).await?;
-                        }
+                Ok(client) => match client.check_availability().await {
+                    Ok(version) => {
+                        bot.send_message(
+                            msg.chat.id,
+                            format!("✅ Claude Code is available!\n\nVersion: {}", version),
+                        )
+                        .await?;
                     }
-                }
+                    Err(e) => {
+                        bot.send_message(
+                            msg.chat.id,
+                            format!("❌ Claude Code check failed: {}", e),
+                        )
+                        .await?;
+                    }
+                },
                 Err(e) => {
                     bot.send_message(
-                        msg.chat.id, 
-                        format!("❌ No active coding session found: {}", e)
-                    ).await?;
+                        msg.chat.id,
+                        format!("❌ No active coding session found: {}", e),
+                    )
+                    .await?;
                 }
             }
         }
         Command::AuthenticateClaude => {
             let container_name = format!("coding-session-{}", chat_id);
-            
+
             match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
                 Ok(client) => {
                     // Check if there's already an authentication session in progress
@@ -213,8 +230,9 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                                         msg.chat.id,
                                         "🔐 **Authentication Code Required**\n\n\
                                         Please send your authentication code using:\n\
-                                        `/authcode <your_code>`"
-                                    ).await?;
+                                        `/authcode <your_code>`",
+                                    )
+                                    .await?;
                                     return Ok(());
                                 }
                                 _ => {
@@ -223,13 +241,13 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                             }
                         }
                     }
-                    
+
                     // Send initial message
                     bot.send_message(
                         msg.chat.id,
                         "🔐 Starting Claude account authentication process...\n\n⏳ Initiating OAuth flow..."
                     ).await?;
-                    
+
                     match client.authenticate_claude_account().await {
                         Ok(auth_info) => {
                             // Check if the authentication returned a URL or requires code
@@ -241,20 +259,24 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                                         &url_part[..url_end]
                                     } else {
                                         url_part
-                                    }.trim();
-                                    
+                                    }
+                                    .trim();
+
                                     // Store authentication session
                                     let session = AuthSession {
                                         container_name: container_name.clone(),
-                                        state: claude_code_client::InteractiveLoginState::ProvideUrl(url.to_string()),
+                                        state:
+                                            claude_code_client::InteractiveLoginState::ProvideUrl(
+                                                url.to_string(),
+                                            ),
                                         url: Some(url.to_string()),
                                     };
-                                    
+
                                     {
                                         let mut sessions = bot_state.auth_sessions.lock().await;
                                         sessions.insert(chat_id, session);
                                     }
-                                    
+
                                     bot.send_message(
                                         msg.chat.id,
                                         format!("{}\n\n💡 **After completing authentication, use `/authcode <code>` if prompted for a code.**", auth_info)
@@ -266,19 +288,24 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                                 // Store session waiting for code
                                 let session = AuthSession {
                                     container_name: container_name.clone(),
-                                    state: claude_code_client::InteractiveLoginState::WaitingForCode,
+                                    state:
+                                        claude_code_client::InteractiveLoginState::WaitingForCode,
                                     url: None,
                                 };
-                                
+
                                 {
                                     let mut sessions = bot_state.auth_sessions.lock().await;
                                     sessions.insert(chat_id, session);
                                 }
-                                
+
                                 bot.send_message(
                                     msg.chat.id,
-                                    format!("{}\n\nUse `/authcode <your_code>` to continue.", auth_info)
-                                ).await?;
+                                    format!(
+                                        "{}\n\nUse `/authcode <your_code>` to continue.",
+                                        auth_info
+                                    ),
+                                )
+                                .await?;
                             } else {
                                 // Authentication completed or other status
                                 bot.send_message(msg.chat.id, auth_info).await?;
@@ -286,7 +313,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                         }
                         Err(e) => {
                             bot.send_message(
-                                msg.chat.id, 
+                                msg.chat.id,
                                 format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
                             ).await?;
                         }
@@ -294,7 +321,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 }
                 Err(e) => {
                     bot.send_message(
-                        msg.chat.id, 
+                        msg.chat.id,
                         format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
                     ).await?;
                 }
@@ -314,41 +341,42 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                     return Ok(());
                 }
             };
-            
+
             match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
                 Ok(client) => {
-                        // Send progress message
-                        bot.send_message(
-                            msg.chat.id,
-                            "🔐 Processing authentication code...\n\n⏳ Continuing login flow..."
-                        ).await?;
-                        
-                        match client.continue_login_with_code(&code).await {
-                            Ok(result) => {
-                                // Clear the authentication session on completion
-                                {
-                                    let mut sessions = bot_state.auth_sessions.lock().await;
-                                    sessions.remove(&chat_id);
-                                }
-                                
-                                bot.send_message(msg.chat.id, result).await?;
+                    // Send progress message
+                    bot.send_message(
+                        msg.chat.id,
+                        "🔐 Processing authentication code...\n\n⏳ Continuing login flow...",
+                    )
+                    .await?;
+
+                    match client.continue_login_with_code(&code).await {
+                        Ok(result) => {
+                            // Clear the authentication session on completion
+                            {
+                                let mut sessions = bot_state.auth_sessions.lock().await;
+                                sessions.remove(&chat_id);
                             }
-                            Err(e) => {
-                                bot.send_message(
+
+                            bot.send_message(msg.chat.id, result).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
                                     msg.chat.id,
                                     format!("❌ Failed to process authentication code: {}\n\nPlease try the authentication process again with `/authenticateclaude`", e)
                                 ).await?;
-                                
-                                // Clear the failed session
-                                {
-                                    let mut sessions = bot_state.auth_sessions.lock().await;
-                                    sessions.remove(&chat_id);
-                                }
+
+                            // Clear the failed session
+                            {
+                                let mut sessions = bot_state.auth_sessions.lock().await;
+                                sessions.remove(&chat_id);
                             }
                         }
                     }
+                }
                 Err(e) => {
-                        bot.send_message(
+                    bot.send_message(
                             msg.chat.id,
                             format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
                         ).await?;

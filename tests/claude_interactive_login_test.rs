@@ -1,7 +1,7 @@
 use bollard::Docker;
 use rstest::*;
-use telegram_bot::{ClaudeCodeConfig, container_utils, InteractiveLoginState};
 use std::env;
+use telegram_bot::{container_utils, ClaudeCodeConfig, InteractiveLoginState};
 
 #[allow(unused_imports)]
 use telegram_bot::ClaudeCodeClient;
@@ -27,19 +27,24 @@ async fn test_interactive_login_flow_dark_mode(docker: Docker) {
         println!("🔄 Running in CI environment - skipping interactive test");
         return;
     }
-    
+
     let container_name = format!("test-interactive-{}", uuid::Uuid::new_v4());
-    
+
     let test_result = tokio::time::timeout(tokio::time::Duration::from_secs(30), async {
         // Start a coding session
-        let claude_client = container_utils::start_coding_session(&docker, &container_name, ClaudeCodeConfig::default()).await?;
-        
+        let claude_client = container_utils::start_coding_session(
+            &docker,
+            &container_name,
+            ClaudeCodeConfig::default(),
+        )
+        .await?;
+
         // Test that the interactive login can handle "Dark mode" output
         // This is a mock test since we can't easily simulate the exact Claude CLI output
         // but we can test the structure is in place
-        
+
         let auth_result = claude_client.authenticate_claude_account().await;
-        
+
         // The authentication should work (or fail gracefully)
         match auth_result {
             Ok(instructions) => {
@@ -51,13 +56,14 @@ async fn test_interactive_login_flow_dark_mode(docker: Docker) {
                 // In test environment, this is expected
             }
         }
-        
+
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-    }).await;
-    
+    })
+    .await;
+
     // Cleanup
     cleanup_container(&docker, &container_name).await;
-    
+
     match test_result {
         Ok(Ok(())) => println!("✅ Interactive login test completed"),
         Ok(Err(e)) => println!("⚠️  Test failed: {:?}", e),
@@ -71,24 +77,42 @@ async fn test_interactive_login_state_transitions() {
     // Test the state machine logic for different outputs
     let test_cases = vec![
         ("Dark mode enabled", InteractiveLoginState::DarkMode),
-        ("Select login method:", InteractiveLoginState::SelectLoginMethod),
-        ("Use the url below to sign in: https://example.com", InteractiveLoginState::ProvideUrl("https://example.com".to_string())),
-        ("Paste code here if prompted:", InteractiveLoginState::WaitingForCode),
+        (
+            "Select login method:",
+            InteractiveLoginState::SelectLoginMethod,
+        ),
+        (
+            "Use the url below to sign in: https://example.com",
+            InteractiveLoginState::ProvideUrl("https://example.com".to_string()),
+        ),
+        (
+            "Paste code here if prompted:",
+            InteractiveLoginState::WaitingForCode,
+        ),
         ("Login successful", InteractiveLoginState::LoginSuccessful),
         ("Security notes:", InteractiveLoginState::SecurityNotes),
-        ("Do you trust the files in this folder?", InteractiveLoginState::TrustFiles),
+        (
+            "Do you trust the files in this folder?",
+            InteractiveLoginState::TrustFiles,
+        ),
     ];
-    
+
     for (output, expected_state) in test_cases {
         let state = parse_cli_output_for_state(output);
         match (&state, &expected_state) {
             (InteractiveLoginState::DarkMode, InteractiveLoginState::DarkMode) => {
                 println!("✅ Dark mode state correctly detected");
             }
-            (InteractiveLoginState::SelectLoginMethod, InteractiveLoginState::SelectLoginMethod) => {
+            (
+                InteractiveLoginState::SelectLoginMethod,
+                InteractiveLoginState::SelectLoginMethod,
+            ) => {
                 println!("✅ Select login method state correctly detected");
             }
-            (InteractiveLoginState::ProvideUrl(url), InteractiveLoginState::ProvideUrl(_expected_url)) => {
+            (
+                InteractiveLoginState::ProvideUrl(url),
+                InteractiveLoginState::ProvideUrl(_expected_url),
+            ) => {
                 println!("✅ URL state correctly detected: {}", url);
             }
             (InteractiveLoginState::WaitingForCode, InteractiveLoginState::WaitingForCode) => {
@@ -104,7 +128,10 @@ async fn test_interactive_login_state_transitions() {
                 println!("✅ Trust files state correctly detected");
             }
             _ => {
-                panic!("State mismatch for output '{}': expected {:?}, got {:?}", output, expected_state, state);
+                panic!(
+                    "State mismatch for output '{}': expected {:?}, got {:?}",
+                    output, expected_state, state
+                );
             }
         }
     }
@@ -114,7 +141,7 @@ async fn test_interactive_login_state_transitions() {
 // This will be implemented in the main code later
 fn parse_cli_output_for_state(output: &str) -> InteractiveLoginState {
     let output_lower = output.to_lowercase();
-    
+
     if output_lower.contains("dark mode") {
         InteractiveLoginState::DarkMode
     } else if output_lower.contains("select login method") {
