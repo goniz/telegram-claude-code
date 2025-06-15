@@ -255,16 +255,10 @@ impl GithubClient {
         &self,
         command: Vec<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // For the interactive OAuth flow, we'll provide automated responses
-        // to select the device flow option when prompted
-        let wrapped_command = vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            format!("printf '\\n\\n' | {} 2>&1", command.join(" ")),
-        ];
+        // Just launch the gh command without any wrappers or input provision
 
         let exec_config = CreateExecOptions {
-            cmd: Some(wrapped_command),
+            cmd: Some(command),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),
