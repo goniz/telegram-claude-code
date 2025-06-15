@@ -130,7 +130,7 @@ pub async fn start_coding_session(
         attach_stdout: Some(true),
         attach_stderr: Some(true),
         env: Some(vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",=======
+            "CODEX_ENV_PYTHON_VERSION=3.12",
             "CODEX_ENV_NODE_VERSION=22", 
             "CODEX_ENV_RUST_VERSION=1.87.0",
             "CODEX_ENV_GO_VERSION=1.23.8"
@@ -223,10 +223,9 @@ pub async fn create_test_container(
         attach_stderr: Some(true),
         env: Some(vec![
             "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=20",
+            "CODEX_ENV_NODE_VERSION=22",
             "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-            "CODEX_ENV_SWIFT_VERSION=6.1",
+            "CODEX_ENV_GO_VERSION=1.23.8"
         ]),
         cmd: Some(vec!["/bin/bash"]),
         ..Default::default()
