@@ -52,21 +52,8 @@ struct BotState {
     auth_sessions: AuthSessions,
 }
 
-// Main bot logic
-#[tokio::main]
-async fn main() {
-    pretty_env_logger::init();
-    log::info!("Starting Telegram bot...");
-
-    let bot = Bot::from_env();
-
-    // Initialize Docker client
-    let docker =
-        Docker::connect_with_socket_defaults().expect("Failed to connect to Docker daemon");
-
-    log::info!("Connected to Docker daemon");
-
-    // Pull the latest runtime image on startup
+/// Pull the runtime image asynchronously in the background
+async fn pull_runtime_image_async(docker: Docker) {
     log::info!(
         "Pulling latest runtime image: {}",
         container_utils::MAIN_CONTAINER_IMAGE
@@ -91,6 +78,24 @@ async fn main() {
         }
     }
     log::info!("Runtime image pull completed");
+}
+
+// Main bot logic
+#[tokio::main]
+async fn main() {
+    pretty_env_logger::init();
+    log::info!("Starting Telegram bot...");
+
+    let bot = Bot::from_env();
+
+    // Initialize Docker client
+    let docker =
+        Docker::connect_with_socket_defaults().expect("Failed to connect to Docker daemon");
+
+    log::info!("Connected to Docker daemon");
+
+    // Start pulling the latest runtime image in the background
+    tokio::spawn(pull_runtime_image_async(docker.clone()));
 
     // Initialize bot state
     let auth_sessions: AuthSessions = Arc::new(Mutex::new(HashMap::new()));
