@@ -112,7 +112,14 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
 
     match cmd {
         Command::Help => {
-            bot.send_message(msg.chat.id, Command::descriptions().to_string())
+            let help_text = "help - Display this help message
+start - Start the bot and create a new coding session
+clearsession - Clear the current session (stops and removes container)
+claudestatus - Check Claude Code availability
+authenticateclaude - Authenticate Claude using your Claude account credentials (OAuth flow)
+githubauth - Authenticate with GitHub using OAuth flow
+githubstatus - Check GitHub authentication status";
+            bot.send_message(msg.chat.id, help_text)
                 .await?;
         }
         Command::ClearSession => {
@@ -397,4 +404,28 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod help_format_tests {
+    #[test]
+    fn test_help_format_matches_botfather_requirements() {
+        // Test that the help message follows the "command - description" format
+        let help_text = "help - Display this help message
+start - Start the bot and create a new coding session
+clearsession - Clear the current session (stops and removes container)
+claudestatus - Check Claude Code availability
+authenticateclaude - Authenticate Claude using your Claude account credentials (OAuth flow)
+githubauth - Authenticate with GitHub using OAuth flow
+githubstatus - Check GitHub authentication status";
+
+        // Verify each line follows the pattern "command - description"
+        for line in help_text.lines() {
+            assert!(line.contains(" - "), "Line should contain ' - ' separator: {}", line);
+            let parts: Vec<&str> = line.split(" - ").collect();
+            assert_eq!(parts.len(), 2, "Line should have exactly one ' - ' separator: {}", line);
+            assert!(!parts[0].is_empty(), "Command part should not be empty: {}", line);
+            assert!(!parts[1].is_empty(), "Description part should not be empty: {}", line);
+        }
+    }
 }
