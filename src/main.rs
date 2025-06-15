@@ -4,7 +4,7 @@ use bollard::image::CreateImageOptions;
 use futures_util::StreamExt;
 
 mod claude_code_client;
-use claude_code_client::{ClaudeCodeClient, ClaudeCodeConfig, container_utils};
+use claude_code_client::{ClaudeCodeClient, ClaudeCodeConfig, container_utils, GithubClient, GithubClientConfig};
 
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
@@ -22,6 +22,8 @@ enum Command {
     ClaudeStatus,
     #[command(description = "Authenticate Claude using your Claude account credentials (OAuth flow)")]
     AuthenticateClaude,
+    #[command(description = "Authenticate with GitHub using OAuth flow")]
+    GitHubAuth,
 }
 
 // Main bot logic
@@ -175,6 +177,57 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, docker: Docker) -> Respons
                             bot.send_message(
                                 msg.chat.id, 
                                 format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
+                            ).await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id, 
+                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
+                    ).await?;
+                }
+            }
+        }
+        Command::GitHubAuth => {
+            let chat_id = msg.chat.id.0;
+            let container_name = format!("coding-session-{}", chat_id);
+            
+            match ClaudeCodeClient::for_session(docker.clone(), &container_name).await {
+                Ok(client) => {
+                    // Send initial message
+                    bot.send_message(
+                        msg.chat.id,
+                        "🔐 Starting GitHub authentication process...\n\n⏳ Initiating OAuth flow..."
+                    ).await?;
+                    
+                    // Create GitHub client using same docker instance and container ID
+                    let github_client = GithubClient::new(
+                        docker.clone(), 
+                        client.container_id().to_string(), 
+                        GithubClientConfig::default()
+                    );
+                    
+                    match github_client.login().await {
+                        Ok(auth_result) => {
+                            let message = if auth_result.authenticated {
+                                if let Some(username) = &auth_result.username {
+                                    format!("✅ GitHub authentication successful!\n\n👤 Logged in as: {}\n\n🎯 You can now use GitHub features in your coding session.", username)
+                                } else {
+                                    "✅ GitHub authentication successful!\n\n🎯 You can now use GitHub features in your coding session.".to_string()
+                                }
+                            } else if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
+                                format!("🔗 **GitHub OAuth Authentication Required**\n\n**Please follow these steps:**\n\n1️⃣ **Visit this URL:** {}\n\n2️⃣ **Enter this device code:** `{}`\n\n3️⃣ **Sign in to your GitHub account** and authorize the application\n\n4️⃣ **Return here** - authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly.", oauth_url, device_code)
+                            } else {
+                                format!("ℹ️ GitHub authentication status: {}", auth_result.message)
+                            };
+                            
+                            bot.send_message(msg.chat.id, message).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                msg.chat.id, 
+                                format!("❌ Failed to initiate GitHub authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• GitHub CLI (gh) is properly installed\n• Network connectivity is available", e)
                             ).await?;
                         }
                     }
