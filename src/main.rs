@@ -30,8 +30,6 @@ enum Command {
         description = "Authenticate Claude using your Claude account credentials (OAuth flow)"
     )]
     AuthenticateClaude,
-    #[command(description = "Send authentication code during login process")]
-    AuthCode { code: String },
     #[command(description = "Authenticate with GitHub using OAuth flow")]
     GitHubAuth,
     #[command(description = "Check GitHub authentication status")]
@@ -288,30 +286,8 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                                 } else {
                                     bot.send_message(msg.chat.id, auth_info).await?;
                                 }
-                            } else if auth_info.contains("Code Required") {
-                                // Store session waiting for code
-                                let session = AuthSession {
-                                    container_name: container_name.clone(),
-                                    state:
-                                        claude_code_client::InteractiveLoginState::WaitingForCode,
-                                    url: None,
-                                };
-
-                                {
-                                    let mut sessions = bot_state.auth_sessions.lock().await;
-                                    sessions.insert(chat_id, session);
-                                }
-
-                                bot.send_message(
-                                    msg.chat.id,
-                                    format!(
-                                        "{}\n\nUse `/authcode <your_code>` to continue.",
-                                        auth_info
-                                    ),
-                                )
-                                .await?;
                             } else {
-                                // Authentication completed or other status
+                                // Authentication completed or other status - this includes URL provision
                                 bot.send_message(msg.chat.id, auth_info).await?;
                             }
                         }
@@ -331,62 +307,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 }
             }
         }
-        Command::AuthCode { code } => {
-            // Handle authentication code input
-            let container_name = {
-                let sessions = bot_state.auth_sessions.lock().await;
-                if let Some(session) = sessions.get(&chat_id) {
-                    session.container_name.clone()
-                } else {
-                    bot.send_message(
-                        msg.chat.id,
-                        "❌ No active authentication session found.\n\nPlease start authentication with `/authenticateclaude` first."
-                    ).await?;
-                    return Ok(());
-                }
-            };
 
-            match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
-                Ok(client) => {
-                    // Send progress message
-                    bot.send_message(
-                        msg.chat.id,
-                        "🔐 Processing authentication code...\n\n⏳ Continuing login flow...",
-                    )
-                    .await?;
-
-                    match client.continue_login_with_code(&code).await {
-                        Ok(result) => {
-                            // Clear the authentication session on completion
-                            {
-                                let mut sessions = bot_state.auth_sessions.lock().await;
-                                sessions.remove(&chat_id);
-                            }
-
-                            bot.send_message(msg.chat.id, result).await?;
-                        }
-                        Err(e) => {
-                            bot.send_message(
-                                    msg.chat.id,
-                                    format!("❌ Failed to process authentication code: {}\n\nPlease try the authentication process again with `/authenticateclaude`", e)
-                                ).await?;
-
-                            // Clear the failed session
-                            {
-                                let mut sessions = bot_state.auth_sessions.lock().await;
-                                sessions.remove(&chat_id);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    bot.send_message(
-                            msg.chat.id,
-                            format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /startsession", e)
-                        ).await?;
-                }
-            }
-        }
         Command::GitHubAuth => {
             let container_name = format!("coding-session-{}", chat_id);
             
