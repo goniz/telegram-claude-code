@@ -18,5 +18,10 @@ ENV PATH="/usr/local/bin:$PATH"
 RUN /opt/entrypoint.sh -c \
 		"nvm use default && npm install -g @anthropic-ai/claude-code"
 
+ENV DISABLE_AUTOUPDATER=1
+ENV DISABLE_ERROR_REPORTING=1
+ENV DISABLE_TELEMETRY=1
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
 # Set working directory
 WORKDIR /workspace
