@@ -74,12 +74,12 @@ impl GithubClient {
             }
         }
 
-        // Start the OAuth device flow using gh auth login --web
+        // Start the OAuth device flow using gh auth login --device
         let login_command = vec![
             "gh".to_string(),
             "auth".to_string(),
             "login".to_string(),
-            "--web".to_string(),
+            "--device".to_string(),
         ];
 
         match self.exec_command_interactive(login_command).await {
@@ -328,15 +328,19 @@ impl GithubClient {
                 }
             }
 
-            // Look for lines like "Open this URL to continue in your web browser: https://github.com/login/device"
-            if line.contains("Open this URL to continue")
-                || line.contains("https://github.com/login/device")
-            {
+            // Look for lines containing URLs - device flow typically shows the URL directly
+            if line.contains("https://github.com/login/device") {
+                // Extract URL directly from the line
+                if let Some(url_start) = line.find("https://github.com/login/device") {
+                    let url_part = &line[url_start..];
+                    // Extract just the URL part (until whitespace or end of line)
+                    let url = url_part.split_whitespace().next().unwrap_or(url_part);
+                    oauth_url = Some(url.to_string());
+                }
+            } else if line.contains("Open this URL to continue") {
+                // Fallback for other URL formats
                 if let Some(url_part) = line.split("browser:").nth(1) {
                     oauth_url = Some(url_part.trim().to_string());
-                } else if line.contains("https://github.com/login/device") {
-                    // Extract URL directly if it's just the URL
-                    oauth_url = Some("https://github.com/login/device".to_string());
                 }
             }
         }
