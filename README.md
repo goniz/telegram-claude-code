@@ -32,10 +32,39 @@ The bot currently supports these commands:
 - `/clearsession` - Ends the current active session (Removes dev container)
 - `/claudestatus` - Check Claude Code availability
 - `/authenticateclaude` - Authenticate Claude using your Claude account credentials (OAuth flow)
+- `/githubauth` - Authenticate with GitHub using OAuth flow
 
 ### GitHub Integration
 
 The project includes a comprehensive GitHub client that provides authentication and repository management capabilities through the GitHub CLI (`gh`):
+
+#### Bot Command: `/githubauth`
+
+The `/githubauth` command provides an easy way to authenticate with GitHub from within your coding session:
+
+1. **Start a coding session** using `/startsession`
+2. **Run the GitHub auth command** with `/githubauth`
+3. **Follow the OAuth flow**:
+   - The bot will provide you with a GitHub OAuth URL
+   - You'll receive a device code to enter on GitHub
+   - Visit the URL and enter the code to authorize the application
+   - Authentication will be completed automatically
+
+**Example workflow:**
+```
+User: /startsession
+Bot: ✅ Coding session started successfully!
+
+User: /githubauth
+Bot: 🔗 GitHub OAuth Authentication Required
+
+Please follow these steps:
+
+1️⃣ Visit this URL: https://github.com/login/device
+2️⃣ Enter this device code: ABCD-1234
+3️⃣ Sign in to your GitHub account and authorize the application
+4️⃣ Return here - authentication will be completed automatically
+```
 
 #### GithubClient Features
 - **Authentication**: Login to GitHub using the `gh auth login` command with web-based OAuth flow
