@@ -15,13 +15,13 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 
 #[rstest]
 #[tokio::test]
-async fn test_complete_startsession_claudestatus_workflow(docker: Docker) {
+async fn test_complete_start_claudestatus_workflow(docker: Docker) {
     let container_name = format!("test-workflow-{}", uuid::Uuid::new_v4());
 
     // Test the complete workflow as it would happen in the bot
 
-    // Step 1: Simulate /startsession command
-    println!("=== STEP 1: Starting coding session (simulating /startsession) ===");
+    // Step 1: Simulate /start command
+    println!("=== STEP 1: Starting coding session (simulating /start) ===");
     let claude_client_result = container_utils::start_coding_session(
         &docker,
         &container_name,
