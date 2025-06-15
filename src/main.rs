@@ -3,7 +3,7 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{prelude::*, utils::command::BotCommands};
+use teloxide::{prelude::*, utils::command::BotCommands, types::ParseMode};
 use tokio::sync::Mutex;
 
 mod claude_code_client;
@@ -331,12 +331,14 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                                     "✅ GitHub authentication successful!\n\n🎯 You can now use GitHub features in your coding session.".to_string()
                                 }
                             } else if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
-                                format!("🔗 **GitHub OAuth Authentication Required**\n\n**Please follow these steps:**\n\n1️⃣ **Visit this URL:** {}\n\n2️⃣ **Enter this device code:**\n```\n{}\n```\n\n3️⃣ **Sign in to your GitHub account** and authorize the application\n\n4️⃣ **Return here** - authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly.\n\n💡 **Tip:** Use `/githubstatus` to check if authentication completed successfully.", oauth_url, device_code)
+                                format!("🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Visit this URL:* {}\n\n2️⃣ *Enter this device code:*\n```\n{}\n```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly\\.\n\n💡 *Tip:* Use /githubstatus to check if authentication completed successfully\\.", oauth_url, device_code)
                             } else {
                                 format!("ℹ️ GitHub authentication status: {}", auth_result.message)
                             };
                             
-                            bot.send_message(msg.chat.id, message).await?;
+                            bot.send_message(msg.chat.id, message)
+                                .parse_mode(ParseMode::MarkdownV2)
+                                .await?;
                         }
                         Err(e) => {
                             let error_msg = e.to_string();
@@ -373,15 +375,17 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                         Ok(auth_result) => {
                             let message = if auth_result.authenticated {
                                 if let Some(username) = &auth_result.username {
-                                    format!("✅ **GitHub Authentication Status: Authenticated**\n\n👤 **Logged in as:** {}\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands", username)
+                                    format!("✅ *GitHub Authentication Status: Authenticated*\n\n👤 *Logged in as:* {}\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands", username)
                                 } else {
-                                    "✅ **GitHub Authentication Status: Authenticated**\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands".to_string()
+                                    "✅ *GitHub Authentication Status: Authenticated*\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands".to_string()
                                 }
                             } else {
-                                "❌ **GitHub Authentication Status: Not Authenticated**\n\n🔐 Use `/githubauth` to start the authentication process.\n\nYou'll receive an OAuth URL and device code to complete authentication in your browser.".to_string()
+                                "❌ *GitHub Authentication Status: Not Authenticated*\n\n🔐 Use `/githubauth` to start the authentication process\\.\n\nYou'll receive an OAuth URL and device code to complete authentication in your browser\\.".to_string()
                             };
                             
-                            bot.send_message(msg.chat.id, message).await?;
+                            bot.send_message(msg.chat.id, message)
+                                .parse_mode(ParseMode::MarkdownV2)
+                                .await?;
                         }
                         Err(e) => {
                             bot.send_message(
