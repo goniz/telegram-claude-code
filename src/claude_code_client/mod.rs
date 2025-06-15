@@ -2,6 +2,7 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 pub mod container_utils;
@@ -49,6 +50,45 @@ pub struct InteractiveLoginSession {
     pub state: InteractiveLoginState,
     pub url: Option<String>,
     pub awaiting_user_code: bool,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct ClaudeAuthProcess {
+    exec_id: String,
+    docker: std::sync::Arc<Docker>,
+}
+
+#[allow(dead_code)]
+impl ClaudeAuthProcess {
+    /// Wait for the authentication process to complete with a timeout
+    pub async fn wait_for_completion(&self, timeout_secs: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use std::time::Duration;
+        use tokio::time::timeout;
+        
+        let timeout_duration = Duration::from_secs(timeout_secs);
+        
+        timeout(timeout_duration, async {
+            // Wait for the exec process to complete
+            loop {
+                let inspect_result = self.docker.inspect_exec(&self.exec_id).await?;
+                if let Some(false) = inspect_result.running {
+                    // Process has completed
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        }).await.map_err(|_| -> Box<dyn std::error::Error + Send + Sync> { "Claude authentication process timed out".into() })?
+    }
+
+    /// Terminate the authentication process gracefully
+    #[allow(dead_code)]
+    pub async fn terminate(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Note: Docker exec doesn't have a direct kill method, but the process should
+        // terminate when the user completes authentication or when the container is stopped
+        Ok(())
+    }
 }
 
 impl Default for ClaudeCodeConfig {
@@ -330,6 +370,7 @@ impl ClaudeCodeClient {
     }
 
     /// Interactive Claude login using TTY with comprehensive state handling
+    /// Returns authentication URL/instructions promptly without waiting for process completion
     async fn interactive_claude_login(
         &self,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -369,6 +410,12 @@ impl ClaudeCodeClient {
             awaiting_user_code: false,
         };
 
+        // Create process handle for later waiting/cleanup
+        let _auth_process = ClaudeAuthProcess {
+            exec_id: exec.id.clone(),
+            docker: Arc::new(self.docker.clone()),
+        };
+
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
             bollard::exec::StartExecResults::Attached { mut output, input } => {
                 // Give some time for the interactive CLI to start
@@ -380,8 +427,8 @@ impl ClaudeCodeClient {
                 // Claude CLI automatically prompts for login method on first run
                 // No need to send /login command
 
-                // Process the interactive session
-                let timeout = tokio::time::timeout(Duration::from_secs(30), async {
+                // Process the interactive session with early return for URL detection
+                let timeout = tokio::time::timeout(Duration::from_secs(60), async {
                     while let Some(Ok(msg)) = output.next().await {
                         let text = match msg {
                             bollard::container::LogOutput::StdOut { message } => {
@@ -413,11 +460,11 @@ impl ClaudeCodeClient {
                                 session.state = new_state.clone();
                             }
                             InteractiveLoginState::ProvideUrl(url) => {
-                                log::debug!("URL detected: {}", url);
+                                log::info!("Authentication URL detected: {}", url);
                                 session.url = Some(url.clone());
                                 session.state = new_state.clone();
 
-                                // Return URL to user
+                                // Return URL to user immediately (early return)
                                 return Ok(format!(
                                     "🔐 **Claude Account Authentication**\n\n\
                                     To complete authentication with your Claude account:\n\n\
@@ -430,12 +477,11 @@ impl ClaudeCodeClient {
                                 ));
                             }
                             InteractiveLoginState::WaitingForCode => {
-                                log::debug!("Waiting for code from user");
+                                log::info!("Authentication code required");
                                 session.awaiting_user_code = true;
                                 session.state = new_state.clone();
 
-                                // This would need to be handled differently in a real bot scenario
-                                // For now, return an instruction to the user
+                                // Return code requirement to user immediately (early return)
                                 return Ok(format!(
                                     "🔐 **Claude Authentication - Code Required**\n\n\
                                     Please paste the authentication code you received and send it back.\n\n\
@@ -443,7 +489,7 @@ impl ClaudeCodeClient {
                                 ));
                             }
                             InteractiveLoginState::LoginSuccessful => {
-                                log::debug!("Login successful, pressing enter to continue");
+                                log::info!("Login successful, pressing enter to continue");
                                 stdin.write_all(b"\n").await?;
                                 stdin.flush().await?;
                                 session.state = new_state.clone();
@@ -455,7 +501,7 @@ impl ClaudeCodeClient {
                                 session.state = new_state.clone();
                             }
                             InteractiveLoginState::TrustFiles => {
-                                log::debug!("Trust files prompt detected, pressing enter and ending session");
+                                log::info!("Trust files prompt detected, completing authentication");
                                 stdin.write_all(b"\n").await?;
                                 stdin.flush().await?;
                                 session.state = InteractiveLoginState::Completed;
@@ -467,6 +513,7 @@ impl ClaudeCodeClient {
                                 ));
                             }
                             InteractiveLoginState::Completed => {
+                                log::info!("Authentication process completed");
                                 break;
                             }
                             InteractiveLoginState::Error(err) => {
@@ -486,17 +533,18 @@ impl ClaudeCodeClient {
                 match timeout {
                     Ok(Ok(result)) => {
                         if result.is_empty() {
+                            log::warn!("Interactive login completed without clear result");
                             return Ok(self.get_fallback_auth_instructions().await);
                         } else {
                             return Ok(result);
                         }
                     }
                     Ok(Err(e)) => {
-                        log::warn!("Error in interactive login: {}", e);
+                        log::error!("Error in interactive login: {}", e);
                         return Ok(self.get_fallback_auth_instructions().await);
                     }
                     Err(_) => {
-                        log::warn!("Timeout in interactive login");
+                        log::warn!("Timeout in interactive login after 60 seconds");
                         return Ok(self.get_fallback_auth_instructions().await);
                     }
                 }
@@ -559,7 +607,7 @@ impl ClaudeCodeClient {
         use std::time::Duration;
         use tokio::time::sleep;
 
-        log::info!("Continuing login with user code: {}", code);
+        log::info!("Continuing login with user code");
 
         // Create exec with TTY enabled for interactive mode to continue the session
         let exec_config = CreateExecOptions {
@@ -588,6 +636,12 @@ impl ClaudeCodeClient {
             ..Default::default()
         };
 
+        // Create process handle for monitoring
+        let _auth_process = ClaudeAuthProcess {
+            exec_id: exec.id.clone(),
+            docker: Arc::new(self.docker.clone()),
+        };
+
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
             bollard::exec::StartExecResults::Attached { mut output, input } => {
                 // Give some time for the interactive CLI to start
@@ -597,11 +651,12 @@ impl ClaudeCodeClient {
                 let mut output_buffer = String::new();
 
                 // Send the authentication code
+                log::debug!("Sending authentication code to Claude CLI");
                 stdin.write_all(format!("{}\n", code).as_bytes()).await?;
                 stdin.flush().await?;
 
-                // Process the response
-                let timeout = tokio::time::timeout(Duration::from_secs(20), async {
+                // Process the response with increased timeout for user authentication
+                let timeout = tokio::time::timeout(Duration::from_secs(60), async {
                     while let Some(Ok(msg)) = output.next().await {
                         let text = match msg {
                             bollard::container::LogOutput::StdOut { message } => {
@@ -621,7 +676,7 @@ impl ClaudeCodeClient {
 
                         match &new_state {
                             InteractiveLoginState::LoginSuccessful => {
-                                log::debug!("Login successful after code input, pressing enter to continue");
+                                log::info!("Login successful after code input");
                                 stdin.write_all(b"\n").await?;
                                 stdin.flush().await?;
 
@@ -637,7 +692,7 @@ impl ClaudeCodeClient {
                                 stdin.flush().await?;
                             }
                             InteractiveLoginState::TrustFiles => {
-                                log::debug!("Trust files prompt detected, pressing enter and ending session");
+                                log::info!("Trust files prompt detected, completing authentication");
                                 stdin.write_all(b"\n").await?;
                                 stdin.flush().await?;
 
@@ -657,7 +712,8 @@ impl ClaudeCodeClient {
                                 ));
                             }
                             _ => {
-                                // Continue processing
+                                // Continue processing other states
+                                log::debug!("Continuing to process state: {:?}", new_state);
                             }
                         }
 
@@ -685,7 +741,7 @@ impl ClaudeCodeClient {
                         }
                     }
                     Ok(Err(e)) => {
-                        log::warn!("Error processing code: {}", e);
+                        log::error!("Error processing authentication code: {}", e);
                         return Ok(format!(
                             "❌ **Error Processing Code**\n\n\
                             There was an error processing your authentication code: {}\n\n\
@@ -694,10 +750,10 @@ impl ClaudeCodeClient {
                         ));
                     }
                     Err(_) => {
-                        log::warn!("Timeout processing authentication code");
+                        log::warn!("Timeout processing authentication code after 60 seconds");
                         return Ok(format!(
                             "⏰ **Timeout Processing Code**\n\n\
-                            The authentication code processing timed out.\n\n\
+                            The authentication code processing timed out after 60 seconds.\n\n\
                             Please check if authentication was successful or try again."
                         ));
                     }
