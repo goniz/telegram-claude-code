@@ -375,10 +375,14 @@ impl ClaudeCodeClient {
                                             log::debug!("Received stderr from CLI");
                                             String::from_utf8_lossy(&message).to_string()
                                         }
-                                        _ => {
-                                            log::debug!("Received other log output type, continuing");
-                                            continue
-                                        },
+                                        bollard::container::LogOutput::Console { message } => {
+                                            log::debug!("Received console output from CLI");
+                                            String::from_utf8_lossy(&message).to_string()
+                                        }
+                                        bollard::container::LogOutput::StdIn { message: _ } => {
+                                            log::debug!("Received stdin from CLI (ignoring)");
+                                            continue; // Skip stdin as it's our own input
+                                        }
                                     };
 
                                     log::debug!("Claude CLI output: {}", text);
