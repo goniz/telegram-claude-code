@@ -63,12 +63,15 @@ pub struct ClaudeAuthProcess {
 #[allow(dead_code)]
 impl ClaudeAuthProcess {
     /// Wait for the authentication process to complete with a timeout
-    pub async fn wait_for_completion(&self, timeout_secs: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn wait_for_completion(
+        &self,
+        timeout_secs: u64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Duration;
         use tokio::time::timeout;
-        
+
         let timeout_duration = Duration::from_secs(timeout_secs);
-        
+
         timeout(timeout_duration, async {
             // Wait for the exec process to complete
             loop {
@@ -80,7 +83,11 @@ impl ClaudeAuthProcess {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await.map_err(|_| -> Box<dyn std::error::Error + Send + Sync> { "Claude authentication process timed out".into() })?
+        })
+        .await
+        .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
+            "Claude authentication process timed out".into()
+        })?
     }
 
     /// Terminate the authentication process gracefully
@@ -156,21 +163,6 @@ impl ClaudeCodeClient {
         }
     }
 
-    /// Show current session status
-    pub async fn get_session_status(
-        &self,
-    ) -> Result<ClaudeCodeResult, Box<dyn std::error::Error + Send + Sync>> {
-        let command = vec![
-            "claude".to_string(),
-            "status".to_string(),
-            "--output-format".to_string(),
-            "json".to_string(),
-        ];
-
-        let output = self.exec_command(command).await?;
-        self.parse_result(output)
-    }
-
     /// Authenticate Claude Code using Claude account (OAuth flow)
     /// This initiates the account-based authentication process through interactive CLI
     pub async fn authenticate_claude_account(
@@ -208,7 +200,10 @@ impl ClaudeCodeClient {
             tty: Some(true),
             working_dir: self.config.working_directory.clone(),
             env: Some(vec![
-                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:/root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:\
+                 /root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/\
+                 usr/bin:/sbin:/bin"
+                    .to_string(),
                 "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
                 "TERM=xterm".to_string(),
             ]),
@@ -288,19 +283,23 @@ impl ClaudeCodeClient {
 
                                 // Return URL to user immediately (early return)
                                 return Ok(format!(
-                                    "🔐 **Claude Account Authentication**\n\n\
-                                    To complete authentication with your Claude account:\n\n\
-                                    **1. Visit this authentication URL:**\n{}\n\n\
-                                    **2. Sign in with your Claude account**\n\n\
-                                    **3. Complete the OAuth flow in your browser**\n\n\
-                                    **4. Once complete, the authentication will be automatically detected**\n\n\
-                                    ✨ This will enable full access to your Claude subscription features!\n\n\
-                                    💡 The authentication process will continue running in the background.",
+                                    "🔐 **Claude Account Authentication**\n\nTo complete \
+                                     authentication with your Claude account:\n\n**1. Visit this \
+                                     authentication URL:**\n{}\n\n**2. Sign in with your Claude \
+                                     account**\n\n**3. Complete the OAuth flow in your \
+                                     browser**\n\n**4. Once complete, the authentication will be \
+                                     automatically detected**\n\n✨ This will enable full access \
+                                     to your Claude subscription features!\n\n💡 The \
+                                     authentication process will continue running in the \
+                                     background.",
                                     url
                                 ));
                             }
                             InteractiveLoginState::WaitingForCode => {
-                                log::info!("Authentication code may be required - process will continue automatically");
+                                log::info!(
+                                    "Authentication code may be required - process will continue \
+                                     automatically"
+                                );
                                 session.awaiting_user_code = true;
                                 session.state = new_state.clone();
                                 // Don't return early - let the process continue and complete the authentication
@@ -318,15 +317,17 @@ impl ClaudeCodeClient {
                                 session.state = new_state.clone();
                             }
                             InteractiveLoginState::TrustFiles => {
-                                log::info!("Trust files prompt detected, completing authentication");
+                                log::info!(
+                                    "Trust files prompt detected, completing authentication"
+                                );
                                 stdin.write_all(b"\n").await?;
                                 stdin.flush().await?;
                                 session.state = InteractiveLoginState::Completed;
 
                                 return Ok(format!(
-                                    "✅ **Claude Authentication Completed!**\n\n\
-                                    Your Claude account has been successfully authenticated.\n\n\
-                                    You can now use Claude Code with your account privileges."
+                                    "✅ **Claude Authentication Completed!**\n\nYour Claude \
+                                     account has been successfully authenticated.\n\nYou can now \
+                                     use Claude Code with your account privileges."
                                 ));
                             }
                             InteractiveLoginState::Completed => {
@@ -345,7 +346,8 @@ impl ClaudeCodeClient {
 
                     // If we get here without a clear result, return what we have
                     Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output_buffer)
-                }).await;
+                })
+                .await;
 
                 match timeout {
                     Ok(Ok(result)) => {
@@ -415,8 +417,6 @@ impl ClaudeCodeClient {
             InteractiveLoginState::DarkMode // Default state to continue processing
         }
     }
-
-
 
     /// Fallback authentication instructions if interactive mode fails
     async fn get_fallback_auth_instructions(&self) -> String {
@@ -517,7 +517,10 @@ To authenticate with your Claude account, please follow these steps:
             working_dir: self.config.working_directory.clone(),
             env: Some(vec![
                 // Set up PATH to include NVM Node.js installation and standard paths
-                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:/root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:\
+                 /root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/\
+                 usr/bin:/sbin:/bin"
+                    .to_string(),
                 // Ensure Node.js modules are available
                 "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
             ]),

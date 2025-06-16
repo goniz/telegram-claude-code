@@ -60,44 +60,6 @@ async fn test_claude_status_command_with_preinstalled_claude(
         "Should not contain Docker exec error"
     );
 
-    // Test the session status command specifically (this is what /claudestatus actually calls)
-    println!("Testing get_session_status...");
-    let status_result = client.get_session_status().await;
-
-    // Note: This might fail due to authentication requirements, but it should not fail due to PATH issues
-    match status_result {
-        Ok(status) => {
-            println!("Session status succeeded: {:?}", status);
-            // If it succeeds, great! The command executed properly
-            assert!(
-                !status.result.contains("not found"),
-                "Status should not contain 'not found' error"
-            );
-            assert!(
-                !status.result.contains("OCI runtime exec failed"),
-                "Status should not contain Docker exec error"
-            );
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-            println!(
-                "Session status failed (expected due to auth): {}",
-                error_msg
-            );
-            // Even if it fails, it should be due to authentication, not PATH issues
-            assert!(
-                !error_msg.contains("not found"),
-                "Error should not be about executable not found: {}",
-                error_msg
-            );
-            assert!(
-                !error_msg.contains("OCI runtime exec failed"),
-                "Error should not be about Docker exec failure: {}",
-                error_msg
-            );
-        }
-    }
-
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 }
