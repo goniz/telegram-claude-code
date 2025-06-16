@@ -26,7 +26,36 @@ jobs:
       run: cargo test --verbose -- --nocapture
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          # Main image builds
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            platform_tag: amd64
+            image_name: main
+            dockerfile: Dockerfile
+            suffix: ""
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            platform_tag: arm64
+            image_name: main
+            dockerfile: Dockerfile
+            suffix: ""
+          # Runtime image builds
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            platform_tag: amd64
+            image_name: runtime
+            dockerfile: Dockerfile.runtime
+            suffix: "-runtime"
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            platform_tag: arm64
+            image_name: runtime
+            dockerfile: Dockerfile.runtime
+            suffix: "-runtime"
     
     steps:
     - name: Checkout code
@@ -47,35 +76,40 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ghcr.io/${{ github.repository }}
+        images: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
         tags: |
-          type=ref,event=branch
-          type=sha
-          type=raw,value=latest,enable={{is_default_branch}}
+          type=ref,event=branch,suffix=-${{ matrix.platform_tag }}
+          type=sha,suffix=-${{ matrix.platform_tag }}
           
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
-        platforms: linux/amd64,linux/arm64
+        file: ${{ matrix.dockerfile }}
+        platforms: ${{ matrix.platform }}
         push: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=registry,ref=ghcr.io/${{ github.repository }}-cache:buildcache
-        cache-to: type=registry,ref=ghcr.io/${{ github.repository }}-cache:buildcache,mode=max
+        cache-from: type=registry,ref=ghcr.io/${{ github.repository }}${{ matrix.suffix }}-cache:${{ matrix.platform_tag }}
+        cache-to: type=registry,ref=ghcr.io/${{ github.repository }}${{ matrix.suffix }}-cache:${{ matrix.platform_tag }},mode=max
 
-  runtime-docker:
-    runs-on: ubuntu-latest
+  docker-manifest:
+    runs-on: ubuntu-24.04
+    needs: docker
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    strategy:
+      matrix:
+        image:
+          - name: main
+            suffix: ""
+          - name: runtime
+            suffix: "-runtime"
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       
     - name: Log in to GitHub Container Registry
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -86,23 +120,21 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ghcr.io/${{ github.repository }}-runtime
+        images: ghcr.io/${{ github.repository }}${{ matrix.image.suffix }}
         tags: |
           type=ref,event=branch
           type=sha
           type=raw,value=latest,enable={{is_default_branch}}
           
-    - name: Build and push runtime Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: Dockerfile.runtime
-        platforms: linux/amd64,linux/arm64
-        push: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=registry,ref=ghcr.io/${{ github.repository }}-runtime-cache:buildcache
-        cache-to: type=registry,ref=ghcr.io/${{ github.repository }}-runtime-cache:buildcache,mode=max
+    - name: Create and push manifest
+      run: |
+        # Create multi-platform manifest for each tag
+        for tag in $(echo '${{ steps.meta.outputs.tags }}' | tr '\n' ' '); do
+          docker buildx imagetools create \
+            --tag ${tag} \
+            ${tag}-amd64 \
+            ${tag}-arm64
+        done
 
   test-docker-compose:
     runs-on: ubuntu-latest
