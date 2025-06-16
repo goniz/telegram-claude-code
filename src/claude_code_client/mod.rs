@@ -25,6 +25,7 @@ pub struct ClaudeCodeResult {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ClaudeCodeConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
