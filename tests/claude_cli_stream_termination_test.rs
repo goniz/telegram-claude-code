@@ -2,6 +2,7 @@ use bollard::Docker;
 use rstest::*;
 use std::env;
 use telegram_bot::{container_utils, ClaudeCodeConfig, AuthState};
+use uuid;
 
 /// Test fixture that provides a Docker client
 #[fixture]
