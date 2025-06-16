@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       - TELOXIDE_TOKEN=${TELOXIDE_TOKEN:?TELOXIDE_TOKEN is required}
-      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_LOG=${RUST_LOG:-debug,bollard=info}
       - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}
     # Mount logs directory for persistent logging and Docker socket for container management
     volumes:

@@ -7,7 +7,8 @@ use teloxide::{prelude::*, utils::command::BotCommands, types::ParseMode};
 use tokio::sync::Mutex;
 
 mod claude_code_client;
-use claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig};
+use claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig, AuthenticationHandle, AuthState};
+use tokio::sync::mpsc;
 
 /// Escape reserved characters for Telegram MarkdownV2 formatting
 /// According to Telegram's MarkdownV2 spec, these characters must be escaped:
@@ -46,6 +47,8 @@ enum Command {
     GitHubAuth,
     #[command(description = "Check GitHub authentication status")]
     GitHubStatus,
+    #[command(description = "Provide authentication code for Claude login")]
+    AuthCode { code: String },
 }
 
 // Authentication session state
@@ -53,8 +56,7 @@ enum Command {
 #[allow(dead_code)]
 struct AuthSession {
     container_name: String,
-    state: claude_code_client::InteractiveLoginState,
-    url: Option<String>,
+    code_sender: mpsc::UnboundedSender<String>,
 }
 
 // Global state for tracking authentication sessions
@@ -144,6 +146,333 @@ fn generate_help_text() -> String {
         .join("\n")
 }
 
+// Authentication state monitoring task
+async fn handle_auth_state_updates(
+    mut state_receiver: mpsc::UnboundedReceiver<AuthState>,
+    bot: Bot,
+    chat_id: ChatId,
+    bot_state: BotState,
+) {
+    while let Some(state) = state_receiver.recv().await {
+        match state {
+            AuthState::Starting => {
+                let _ = bot.send_message(
+                    chat_id,
+                    "🔄 Starting Claude authentication..."
+                ).await;
+            }
+            AuthState::UrlReady(url) => {
+                let message = format!(
+                    "🔐 **Claude Account Authentication**\n\nTo complete authentication with your Claude account:\n\n**1. Visit this authentication URL:**\n{}\n\n**2. Sign in with your Claude account**\n\n**3. Complete the OAuth flow in your browser**\n\n**4. If prompted for a code, use `/authcode <code>`**\n\n✨ This will enable full access to your Claude subscription features!",
+                    url
+                );
+                let _ = bot.send_message(chat_id, message).await;
+            }
+            AuthState::WaitingForCode => {
+                let _ = bot.send_message(
+                    chat_id,
+                    "🔑 **Authentication code required**\n\nPlease check your browser for an authentication code and send it using:\n`/authcode <your_code>`"
+                ).await;
+            }
+            AuthState::Completed(message) => {
+                let _ = bot.send_message(chat_id, message).await;
+                // Clean up the session
+                {
+                    let mut sessions = bot_state.auth_sessions.lock().await;
+                    sessions.remove(&chat_id.0);
+                }
+                break;
+            }
+            AuthState::Failed(error) => {
+                let _ = bot.send_message(
+                    chat_id,
+                    format!("❌ Authentication failed: {}", error)
+                ).await;
+                // Clean up the session
+                {
+                    let mut sessions = bot_state.auth_sessions.lock().await;
+                    sessions.remove(&chat_id.0);
+                }
+                break;
+            }
+        }
+    }
+}
+
+// Check if authentication session is already in progress
+async fn check_existing_auth_session(
+    bot: &Bot,
+    chat_id: i64,
+    msg_chat_id: ChatId,
+    bot_state: &BotState,
+) -> ResponseResult<bool> {
+    let sessions = bot_state.auth_sessions.lock().await;
+    if sessions.contains_key(&chat_id) {
+        bot.send_message(
+            msg_chat_id,
+            "🔐 **Authentication Already in Progress**\n\n\
+             You have an ongoing authentication session.\n\n\
+             If you need to provide a code, use `/authcode <your_code>`\n\n\
+             To restart authentication, please wait for the current session to complete or fail."
+        ).await?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+// Handle GitHub authentication process
+async fn handle_github_authentication(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    chat_id: i64,
+) -> ResponseResult<()> {
+    let container_name = format!("coding-session-{}", chat_id);
+    
+    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+        Ok(client) => {
+            // Send initial message
+            bot.send_message(
+                msg.chat.id,
+                "🔐 Starting GitHub authentication process...\n\n⏳ Initiating OAuth flow..."
+            ).await?;
+            
+            // Create GitHub client using same docker instance and container ID
+            let github_client = GithubClient::new(
+                bot_state.docker.clone(), 
+                client.container_id().to_string(), 
+                GithubClientConfig::default()
+            );
+            
+            match github_client.login().await {
+                Ok(auth_result) => {
+                    let message = if auth_result.authenticated {
+                        if let Some(username) = &auth_result.username {
+                            format!("✅ GitHub authentication successful\\!\n\n👤 Logged in as: {}\n\n🎯 You can now use GitHub features in your coding session\\.", escape_markdown_v2(username))
+                        } else {
+                            "✅ GitHub authentication successful\\!\n\n🎯 You can now use GitHub features in your coding session\\.".to_string()
+                        }
+                    } else if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
+                        format!("🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Visit this URL:* {}\n\n2️⃣ *Enter this device code:*\n```{}```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly\\.\n\n💡 *Tip:* Use /githubstatus to check if authentication completed successfully\\.", escape_markdown_v2(oauth_url), escape_markdown_v2(device_code))
+                    } else {
+                        format!("ℹ️ GitHub authentication status: {}", escape_markdown_v2(&auth_result.message))
+                    };
+                    
+                    bot.send_message(msg.chat.id, message)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    let user_message = if error_msg.contains("timed out after") {
+                        format!("⏰ GitHub authentication timed out: {}\n\nThis usually means:\n• The authentication process is taking longer than expected\n• There may be network connectivity issues\n• The GitHub CLI might be unresponsive\n\nPlease try again in a few moments.", error_msg)
+                    } else {
+                        format!("❌ Failed to initiate GitHub authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• GitHub CLI (gh) is properly installed\n• Network connectivity is available", error_msg)
+                    };
+                    
+                    bot.send_message(msg.chat.id, user_message).await?;
+                }
+            }
+        }
+        Err(e) => {
+            bot.send_message(
+                msg.chat.id, 
+                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
+            ).await?;
+        }
+    }
+    
+    Ok(())
+}
+
+// Handle GitHub status check
+async fn handle_github_status(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    chat_id: i64,
+) -> ResponseResult<()> {
+    let container_name = format!("coding-session-{}", chat_id);
+    
+    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+        Ok(client) => {
+            let github_client = GithubClient::new(
+                bot_state.docker.clone(), 
+                client.container_id().to_string(), 
+                GithubClientConfig::default()
+            );
+            
+            match github_client.check_auth_status().await {
+                Ok(auth_result) => {
+                    let message = if auth_result.authenticated {
+                        if let Some(username) = &auth_result.username {
+                            format!("✅ *GitHub Authentication Status: Authenticated*\n\n👤 *Logged in as:* {}\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands", escape_markdown_v2(username))
+                        } else {
+                            "✅ *GitHub Authentication Status: Authenticated*\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands".to_string()
+                        }
+                    } else {
+                        "❌ *GitHub Authentication Status: Not Authenticated*\n\n🔐 Use `/githubauth` to start the authentication process\\.\n\nYou'll receive an OAuth URL and device code to complete authentication in your browser\\.".to_string()
+                    };
+                    
+                    bot.send_message(msg.chat.id, message)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id,
+                        format!("❌ Failed to check GitHub authentication status: {}\n\nThis could be due to:\n• GitHub CLI not being available\n• Network connectivity issues\n• Container problems", e)
+                    ).await?;
+                }
+            }
+        }
+        Err(e) => {
+            bot.send_message(
+                msg.chat.id, 
+                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
+            ).await?;
+        }
+    }
+    
+    Ok(())
+}
+
+// Handle authentication code input
+async fn handle_auth_code(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    chat_id: i64,
+    code: String,
+) -> ResponseResult<()> {
+    // Check if there's an active authentication session
+    let session = {
+        let sessions = bot_state.auth_sessions.lock().await;
+        sessions.get(&chat_id).cloned()
+    };
+
+    match session {
+        Some(auth_session) => {
+            // Send the code to the authentication process
+            if let Err(_) = auth_session.code_sender.send(code.clone()) {
+                bot.send_message(
+                    msg.chat.id,
+                    "❌ Failed to send authentication code. The authentication session may have expired.\n\nPlease restart authentication with `/authenticateclaude`"
+                ).await?;
+            } else {
+                bot.send_message(
+                    msg.chat.id,
+                    "✅ Authentication code sent! Please wait while we complete the authentication process..."
+                ).await?;
+            }
+        }
+        None => {
+            bot.send_message(
+                msg.chat.id,
+                "❌ No active authentication session found.\n\nPlease start authentication first with `/authenticateclaude`"
+            ).await?;
+        }
+    }
+    
+    Ok(())
+}
+
+// Handle clear session command
+async fn handle_clear_session(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    chat_id: i64,
+) -> ResponseResult<()> {
+    let container_name = format!("coding-session-{}", chat_id);
+
+    // Also clear any pending authentication session
+    {
+        let mut sessions = bot_state.auth_sessions.lock().await;
+        sessions.remove(&chat_id);
+    }
+
+    match container_utils::clear_coding_session(&bot_state.docker, &container_name).await {
+        Ok(()) => {
+            bot.send_message(
+                msg.chat.id,
+                "🧹 Coding session cleared successfully!\n\nThe container has been stopped and removed."
+            ).await?;
+        }
+        Err(e) => {
+            bot.send_message(msg.chat.id, format!("❌ Failed to clear session: {}", e))
+                .await?;
+        }
+    }
+    
+    Ok(())
+}
+
+// Handle Claude authentication process
+async fn handle_claude_authentication(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    chat_id: i64,
+) -> ResponseResult<()> {
+    let container_name = format!("coding-session-{}", chat_id);
+
+    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+        Ok(client) => {
+            // Check if there's already an authentication session in progress
+            if check_existing_auth_session(&bot, chat_id, msg.chat.id, &bot_state).await? {
+                return Ok(());
+            }
+
+            // Send initial message
+            bot.send_message(
+                msg.chat.id,
+                "🔐 Starting Claude account authentication process...\n\n⏳ Initiating OAuth flow..."
+            ).await?;
+
+            match client.authenticate_claude_account().await {
+                Ok(auth_handle) => {
+                    // Extract channels from the handle
+                    let AuthenticationHandle { state_receiver, code_sender, cancel_sender: _cancel_sender } = auth_handle;
+
+                    // Store authentication session
+                    let session = AuthSession {
+                        container_name: container_name.clone(),
+                        code_sender: code_sender.clone(),
+                    };
+
+                    {
+                        let mut sessions = bot_state.auth_sessions.lock().await;
+                        sessions.insert(chat_id, session);
+                    }
+
+                    // Spawn a task to handle authentication state updates
+                    tokio::spawn(handle_auth_state_updates(
+                        state_receiver,
+                        bot.clone(),
+                        msg.chat.id,
+                        bot_state.clone(),
+                    ));
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id,
+                        format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
+                    ).await?;
+                }
+            }
+        }
+        Err(e) => {
+            bot.send_message(
+                msg.chat.id,
+                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
+            ).await?;
+        }
+    }
+    
+    Ok(())
+}
+
 // Handler function for bot commands
 async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
@@ -155,26 +484,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 .await?;
         }
         Command::ClearSession => {
-            let container_name = format!("coding-session-{}", chat_id);
-
-            // Also clear any pending authentication session
-            {
-                let mut sessions = bot_state.auth_sessions.lock().await;
-                sessions.remove(&chat_id);
-            }
-
-            match container_utils::clear_coding_session(&bot_state.docker, &container_name).await {
-                Ok(()) => {
-                    bot.send_message(
-                        msg.chat.id,
-                        "🧹 Coding session cleared successfully!\n\nThe container has been stopped and removed."
-                    ).await?;
-                }
-                Err(e) => {
-                    bot.send_message(msg.chat.id, format!("❌ Failed to clear session: {}", e))
-                        .await?;
-                }
-            }
+            handle_clear_session(bot.clone(), msg, bot_state.clone(), chat_id).await?;
         }
         Command::Start => {
             let container_name = format!("coding-session-{}", chat_id);
@@ -237,205 +547,18 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
             }
         }
         Command::AuthenticateClaude => {
-            let container_name = format!("coding-session-{}", chat_id);
-
-            match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
-                Ok(client) => {
-                    // Check if there's already an authentication session in progress
-                    {
-                        let sessions = bot_state.auth_sessions.lock().await;
-                        if let Some(session) = sessions.get(&chat_id) {
-                            match &session.state {
-                                claude_code_client::InteractiveLoginState::ProvideUrl(url) => {
-                                    bot.send_message(
-                                        msg.chat.id,
-                                        format!("🔐 **Authentication Already in Progress**\n\n\
-                                               You have an ongoing authentication session.\n\n\
-                                               **Please visit this URL to continue:**\n{}\n\n\
-                                               After completing the OAuth flow, use `/authcode <your_code>` if a code is required.",
-                                               url)
-                                    ).await?;
-                                    return Ok(());
-                                }
-                                claude_code_client::InteractiveLoginState::WaitingForCode => {
-                                    bot.send_message(
-                                        msg.chat.id,
-                                        "🔐 **Authentication Code Required**\n\n\
-                                        Please send your authentication code using:\n\
-                                        `/authcode <your_code>`",
-                                    )
-                                    .await?;
-                                    return Ok(());
-                                }
-                                _ => {
-                                    // Clear the session and start fresh
-                                }
-                            }
-                        }
-                    }
-
-                    // Send initial message
-                    bot.send_message(
-                        msg.chat.id,
-                        "🔐 Starting Claude account authentication process...\n\n⏳ Initiating OAuth flow..."
-                    ).await?;
-
-                    match client.authenticate_claude_account().await {
-                        Ok(auth_info) => {
-                            // Check if the authentication returned a URL or requires code
-                            if auth_info.contains("Visit this authentication URL") {
-                                // Extract URL and create session
-                                if let Some(url_start) = auth_info.find("https://") {
-                                    let url_part = &auth_info[url_start..];
-                                    let url = if let Some(url_end) = url_part.find('\n') {
-                                        &url_part[..url_end]
-                                    } else {
-                                        url_part
-                                    }
-                                    .trim();
-
-                                    // Store authentication session
-                                    let session = AuthSession {
-                                        container_name: container_name.clone(),
-                                        state:
-                                            claude_code_client::InteractiveLoginState::ProvideUrl(
-                                                url.to_string(),
-                                            ),
-                                        url: Some(url.to_string()),
-                                    };
-
-                                    {
-                                        let mut sessions = bot_state.auth_sessions.lock().await;
-                                        sessions.insert(chat_id, session);
-                                    }
-
-                                    bot.send_message(
-                                        msg.chat.id,
-                                        format!("{}\n\n💡 **After completing authentication, use `/authcode <code>` if prompted for a code.**", auth_info)
-                                    ).await?;
-                                } else {
-                                    bot.send_message(msg.chat.id, auth_info).await?;
-                                }
-                            } else {
-                                // Authentication completed or other status - this includes URL provision
-                                bot.send_message(msg.chat.id, auth_info).await?;
-                            }
-                        }
-                        Err(e) => {
-                            bot.send_message(
-                                msg.chat.id,
-                                format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
-                            ).await?;
-                        }
-                    }
-                }
-                Err(e) => {
-                    bot.send_message(
-                        msg.chat.id,
-                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
-                    ).await?;
-                }
-            }
+            handle_claude_authentication(bot.clone(), msg, bot_state.clone(), chat_id).await?;
         }
 
         Command::GitHubAuth => {
-            let container_name = format!("coding-session-{}", chat_id);
-            
-            match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
-                Ok(client) => {
-                    // Send initial message
-                    bot.send_message(
-                        msg.chat.id,
-                        "🔐 Starting GitHub authentication process...\n\n⏳ Initiating OAuth flow..."
-                    ).await?;
-                    
-                    // Create GitHub client using same docker instance and container ID
-                    let github_client = GithubClient::new(
-                        bot_state.docker.clone(), 
-                        client.container_id().to_string(), 
-                        GithubClientConfig::default()
-                    );
-                    
-                    match github_client.login().await {
-                        Ok(auth_result) => {
-                            let message = if auth_result.authenticated {
-                                if let Some(username) = &auth_result.username {
-                                    format!("✅ GitHub authentication successful\\!\n\n👤 Logged in as: {}\n\n🎯 You can now use GitHub features in your coding session\\.", escape_markdown_v2(username))
-                                } else {
-                                    "✅ GitHub authentication successful\\!\n\n🎯 You can now use GitHub features in your coding session\\.".to_string()
-                                }
-                            } else if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
-                                format!("🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Visit this URL:* {}\n\n2️⃣ *Enter this device code:*\n```{}```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly\\.\n\n💡 *Tip:* Use /githubstatus to check if authentication completed successfully\\.", escape_markdown_v2(oauth_url), escape_markdown_v2(device_code))
-                            } else {
-                                format!("ℹ️ GitHub authentication status: {}", escape_markdown_v2(&auth_result.message))
-                            };
-                            
-                            bot.send_message(msg.chat.id, message)
-                                .parse_mode(ParseMode::MarkdownV2)
-                                .await?;
-                        }
-                        Err(e) => {
-                            let error_msg = e.to_string();
-                            let user_message = if error_msg.contains("timed out after") {
-                                format!("⏰ GitHub authentication timed out: {}\n\nThis usually means:\n• The authentication process is taking longer than expected\n• There may be network connectivity issues\n• The GitHub CLI might be unresponsive\n\nPlease try again in a few moments.", error_msg)
-                            } else {
-                                format!("❌ Failed to initiate GitHub authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• GitHub CLI (gh) is properly installed\n• Network connectivity is available", error_msg)
-                            };
-                            
-                            bot.send_message(msg.chat.id, user_message).await?;
-                        }
-                    }
-                }
-                Err(e) => {
-                    bot.send_message(
-                        msg.chat.id, 
-                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
-                    ).await?;
-                }
-            }
+            handle_github_authentication(bot.clone(), msg, bot_state.clone(), chat_id).await?;
         }
         Command::GitHubStatus => {
-            let container_name = format!("coding-session-{}", chat_id);
-            
-            match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
-                Ok(client) => {
-                    let github_client = GithubClient::new(
-                        bot_state.docker.clone(), 
-                        client.container_id().to_string(), 
-                        GithubClientConfig::default()
-                    );
-                    
-                    match github_client.check_auth_status().await {
-                        Ok(auth_result) => {
-                            let message = if auth_result.authenticated {
-                                if let Some(username) = &auth_result.username {
-                                    format!("✅ *GitHub Authentication Status: Authenticated*\n\n👤 *Logged in as:* {}\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands", escape_markdown_v2(username))
-                                } else {
-                                    "✅ *GitHub Authentication Status: Authenticated*\n\n🎯 You can now use GitHub features like:\n• Repository cloning\n• Git operations\n• GitHub CLI commands".to_string()
-                                }
-                            } else {
-                                "❌ *GitHub Authentication Status: Not Authenticated*\n\n🔐 Use `/githubauth` to start the authentication process\\.\n\nYou'll receive an OAuth URL and device code to complete authentication in your browser\\.".to_string()
-                            };
-                            
-                            bot.send_message(msg.chat.id, message)
-                                .parse_mode(ParseMode::MarkdownV2)
-                                .await?;
-                        }
-                        Err(e) => {
-                            bot.send_message(
-                                msg.chat.id,
-                                format!("❌ Failed to check GitHub authentication status: {}\n\nThis could be due to:\n• GitHub CLI not being available\n• Network connectivity issues\n• Container problems", e)
-                            ).await?;
-                        }
-                    }
-                }
-                Err(e) => {
-                    bot.send_message(
-                        msg.chat.id, 
-                        format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
-                    ).await?;
-                }
-            }
+            handle_github_status(bot.clone(), msg, bot_state.clone(), chat_id).await?;
+        }
+
+        Command::AuthCode { code } => {
+            handle_auth_code(bot.clone(), msg, bot_state.clone(), chat_id, code).await?;
         }
     }
 

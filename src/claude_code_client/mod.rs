@@ -2,8 +2,8 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::{mpsc, oneshot};
 
 pub mod container_utils;
 pub mod github_client;
@@ -44,6 +44,23 @@ pub enum InteractiveLoginState {
     TrustFiles,
     Completed,
     Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthState {
+    Starting,
+    UrlReady(String),
+    WaitingForCode,
+    Completed(String),
+    Failed(String),
+}
+
+
+#[derive(Debug)]
+pub struct AuthenticationHandle {
+    pub state_receiver: mpsc::UnboundedReceiver<AuthState>,
+    pub code_sender: mpsc::UnboundedSender<String>,
+    pub cancel_sender: oneshot::Sender<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,17 +182,31 @@ impl ClaudeCodeClient {
 
     /// Authenticate Claude Code using Claude account (OAuth flow)
     /// This initiates the account-based authentication process through interactive CLI
+    /// Returns an AuthenticationHandle for channel-based communication
     pub async fn authenticate_claude_account(
         &self,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<AuthenticationHandle, Box<dyn std::error::Error + Send + Sync>> {
         // Check if authentication is already set up
         match self.check_auth_status().await {
             Ok(true) => {
-                return Ok("✅ Claude Code is already authenticated and ready to use!".to_string());
+                let (state_sender, state_receiver) = mpsc::unbounded_channel();
+                let (code_sender, _code_receiver) = mpsc::unbounded_channel();
+                let (cancel_sender, _cancel_receiver) = oneshot::channel();
+
+                // Send immediate completion state
+                let _ = state_sender.send(AuthState::Completed(
+                    "✅ Claude Code is already authenticated and ready to use!".to_string(),
+                ));
+
+                return Ok(AuthenticationHandle {
+                    state_receiver,
+                    code_sender,
+                    cancel_sender,
+                });
             }
             Ok(false) => {
                 // Launch Claude CLI in interactive mode and perform account authentication
-                return self.interactive_claude_login().await;
+                return self.spawn_interactive_claude_login().await;
             }
             Err(e) => {
                 return Err(format!("Unable to check authentication status: {}", e).into());
@@ -183,13 +214,45 @@ impl ClaudeCodeClient {
         }
     }
 
-    /// Interactive Claude login using TTY with comprehensive state handling
-    /// Returns authentication URL/instructions promptly without waiting for process completion
-    async fn interactive_claude_login(
+    /// Spawn interactive Claude login as background task with channel communication
+    /// Returns an AuthenticationHandle for managing the authentication process
+    async fn spawn_interactive_claude_login(
         &self,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<AuthenticationHandle, Box<dyn std::error::Error + Send + Sync>> {
+        let (state_sender, state_receiver) = mpsc::unbounded_channel();
+        let (code_sender, code_receiver) = mpsc::unbounded_channel();
+        let (cancel_sender, cancel_receiver) = oneshot::channel();
+
+        // Clone necessary data for the background task
+        let docker = self.docker.clone();
+        let container_id = self.container_id.clone();
+        let config = self.config.clone();
+
+        // Spawn the background authentication task
+        tokio::spawn(async move {
+            let client = ClaudeCodeClient::new(docker, container_id, config);
+            let _ = client.background_interactive_login(state_sender, code_receiver, cancel_receiver).await;
+        });
+
+        Ok(AuthenticationHandle {
+            state_receiver,
+            code_sender,
+            cancel_sender,
+        })
+    }
+
+    /// Background task for interactive Claude login with channel communication
+    async fn background_interactive_login(
+        &self,
+        state_sender: mpsc::UnboundedSender<AuthState>,
+        mut code_receiver: mpsc::UnboundedReceiver<String>,
+        mut cancel_receiver: oneshot::Receiver<()>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Duration;
         use tokio::time::sleep;
+
+        // Send starting state
+        let _ = state_sender.send(AuthState::Starting);
 
         // Create exec with TTY enabled for interactive mode
         let exec_config = CreateExecOptions {
@@ -210,10 +273,13 @@ impl ClaudeCodeClient {
             ..Default::default()
         };
 
-        let exec = self
-            .docker
-            .create_exec(&self.container_id, exec_config)
-            .await?;
+        let exec = match self.docker.create_exec(&self.container_id, exec_config).await {
+            Ok(exec) => exec,
+            Err(e) => {
+                let _ = state_sender.send(AuthState::Failed(format!("Failed to create exec: {}", e)));
+                return Err(e.into());
+            }
+        };
 
         let start_config = StartExecOptions {
             detach: false,
@@ -227,151 +293,156 @@ impl ClaudeCodeClient {
             awaiting_user_code: false,
         };
 
-        // Create process handle for later waiting/cleanup
-        let _auth_process = ClaudeAuthProcess {
-            exec_id: exec.id.clone(),
-            docker: Arc::new(self.docker.clone()),
-        };
-
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
             bollard::exec::StartExecResults::Attached { mut output, input } => {
                 // Give some time for the interactive CLI to start
                 sleep(Duration::from_millis(500)).await;
 
                 let mut stdin = input;
-                let mut output_buffer = String::new();
 
-                // Claude CLI automatically prompts for login method on first run
-                // No need to send /login command
+                // Process the interactive session with channel communication
+                let timeout_result = tokio::time::timeout(Duration::from_secs(300), async {
+                    loop {
+                        tokio::select! {
+                            // Handle cancellation
+                            _ = &mut cancel_receiver => {
+                                log::info!("Authentication cancelled by user");
+                                let _ = state_sender.send(AuthState::Failed("Authentication cancelled".to_string()));
+                                return Ok(());
+                            }
+                            
+                            // Handle auth code input from user
+                            code = code_receiver.recv() => {
+                                if let Some(code) = code {
+                                    log::info!("Received auth code from user, sending to CLI");
+                                    if let Err(e) = stdin.write_all(format!("{}\n", code).as_bytes()).await {
+                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to send code: {}", e)));
+                                        return Err(e.into());
+                                    }
+                                    if let Err(e) = stdin.flush().await {
+                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to flush stdin: {}", e)));
+                                        return Err(e.into());
+                                    }
+                                }
+                            }
+                            
+                            // Handle CLI output
+                            msg = output.next() => {
+                                if let Some(Ok(msg)) = msg {
+                                    let text = match msg {
+                                        bollard::container::LogOutput::StdOut { message } => {
+                                            String::from_utf8_lossy(&message).to_string()
+                                        }
+                                        bollard::container::LogOutput::StdErr { message } => {
+                                            String::from_utf8_lossy(&message).to_string()
+                                        }
+                                        _ => continue,
+                                    };
 
-                // Process the interactive session with early return for URL detection
-                let timeout = tokio::time::timeout(Duration::from_secs(60), async {
-                    while let Some(Ok(msg)) = output.next().await {
-                        let text = match msg {
-                            bollard::container::LogOutput::StdOut { message } => {
-                                String::from_utf8_lossy(&message).to_string()
-                            }
-                            bollard::container::LogOutput::StdErr { message } => {
-                                String::from_utf8_lossy(&message).to_string()
-                            }
-                            _ => continue,
-                        };
+                                    log::debug!("Claude CLI output: {}", text);
 
-                        output_buffer.push_str(&text);
-                        log::debug!("Claude CLI output: {}", text);
+                                    // Update state based on output
+                                    let new_state = self.parse_cli_output_for_state(&text);
 
-                        // Update state based on output
-                        let new_state = self.parse_cli_output_for_state(&text);
+                                    match &new_state {
+                                        InteractiveLoginState::DarkMode => {
+                                            log::debug!("Dark mode detected, pressing enter");
+                                            stdin.write_all(b"\n").await?;
+                                            stdin.flush().await?;
+                                            session.state = new_state.clone();
+                                        }
+                                        InteractiveLoginState::SelectLoginMethod => {
+                                            log::debug!("Select login method detected, choosing option 1");
+                                            stdin.write_all(b"1\n").await?;
+                                            stdin.flush().await?;
+                                            session.state = new_state.clone();
+                                        }
+                                        InteractiveLoginState::ProvideUrl(url) => {
+                                            log::info!("Authentication URL detected: {}", url);
+                                            session.url = Some(url.clone());
+                                            session.state = new_state.clone();
 
-                        match &new_state {
-                            InteractiveLoginState::DarkMode => {
-                                log::debug!("Dark mode detected, pressing enter");
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-                                session.state = new_state.clone();
-                            }
-                            InteractiveLoginState::SelectLoginMethod => {
-                                log::debug!("Select login method detected, choosing option 1");
-                                stdin.write_all(b"1\n").await?;
-                                stdin.flush().await?;
-                                session.state = new_state.clone();
-                            }
-                            InteractiveLoginState::ProvideUrl(url) => {
-                                log::info!("Authentication URL detected: {}", url);
-                                session.url = Some(url.clone());
-                                session.state = new_state.clone();
+                                            // Send URL to user via channel
+                                            let _ = state_sender.send(AuthState::UrlReady(url.clone()));
+                                        }
+                                        InteractiveLoginState::WaitingForCode => {
+                                            log::info!("Authentication code required - waiting for user input");
+                                            session.awaiting_user_code = true;
+                                            session.state = new_state.clone();
+                                            
+                                            // Notify that we're waiting for a code
+                                            let _ = state_sender.send(AuthState::WaitingForCode);
+                                        }
+                                        InteractiveLoginState::LoginSuccessful => {
+                                            log::info!("Login successful, pressing enter to continue");
+                                            stdin.write_all(b"\n").await?;
+                                            stdin.flush().await?;
+                                            session.state = new_state.clone();
+                                        }
+                                        InteractiveLoginState::SecurityNotes => {
+                                            log::debug!("Security notes detected, pressing enter to continue");
+                                            stdin.write_all(b"\n").await?;
+                                            stdin.flush().await?;
+                                            session.state = new_state.clone();
+                                        }
+                                        InteractiveLoginState::TrustFiles => {
+                                            log::info!("Trust files prompt detected, completing authentication");
+                                            stdin.write_all(b"\n").await?;
+                                            stdin.flush().await?;
+                                            session.state = InteractiveLoginState::Completed;
 
-                                // Return URL to user immediately (early return)
-                                return Ok(format!(
-                                    "🔐 **Claude Account Authentication**\n\nTo complete \
-                                     authentication with your Claude account:\n\n**1. Visit this \
-                                     authentication URL:**\n{}\n\n**2. Sign in with your Claude \
-                                     account**\n\n**3. Complete the OAuth flow in your \
-                                     browser**\n\n**4. Once complete, the authentication will be \
-                                     automatically detected**\n\n✨ This will enable full access \
-                                     to your Claude subscription features!\n\n💡 The \
-                                     authentication process will continue running in the \
-                                     background.",
-                                    url
-                                ));
-                            }
-                            InteractiveLoginState::WaitingForCode => {
-                                log::info!(
-                                    "Authentication code may be required - process will continue \
-                                     automatically"
-                                );
-                                session.awaiting_user_code = true;
-                                session.state = new_state.clone();
-                                // Don't return early - let the process continue and complete the authentication
-                            }
-                            InteractiveLoginState::LoginSuccessful => {
-                                log::info!("Login successful, pressing enter to continue");
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-                                session.state = new_state.clone();
-                            }
-                            InteractiveLoginState::SecurityNotes => {
-                                log::debug!("Security notes detected, pressing enter to continue");
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-                                session.state = new_state.clone();
-                            }
-                            InteractiveLoginState::TrustFiles => {
-                                log::info!(
-                                    "Trust files prompt detected, completing authentication"
-                                );
-                                stdin.write_all(b"\n").await?;
-                                stdin.flush().await?;
-                                session.state = InteractiveLoginState::Completed;
+                                            let success_msg = "✅ **Claude Authentication Completed!**\n\nYour Claude account has been successfully authenticated.\n\nYou can now use Claude Code with your account privileges.".to_string();
+                                            let _ = state_sender.send(AuthState::Completed(success_msg));
+                                            return Ok(());
+                                        }
+                                        InteractiveLoginState::Completed => {
+                                            log::info!("Authentication process completed");
+                                            let success_msg = "✅ Claude Code authentication completed successfully!".to_string();
+                                            let _ = state_sender.send(AuthState::Completed(success_msg));
+                                            return Ok(());
+                                        }
+                                        InteractiveLoginState::Error(err) => {
+                                            log::warn!("Error in interactive login: {}", err);
+                                            let _ = state_sender.send(AuthState::Failed(err.clone()));
+                                            return Err(err.clone().into());
+                                        }
+                                    }
 
-                                return Ok(format!(
-                                    "✅ **Claude Authentication Completed!**\n\nYour Claude \
-                                     account has been successfully authenticated.\n\nYou can now \
-                                     use Claude Code with your account privileges."
-                                ));
-                            }
-                            InteractiveLoginState::Completed => {
-                                log::info!("Authentication process completed");
-                                break;
-                            }
-                            InteractiveLoginState::Error(err) => {
-                                log::warn!("Error in interactive login: {}", err);
-                                session.state = new_state.clone();
+                                    // Small delay between state transitions
+                                    sleep(Duration::from_millis(200)).await;
+                                } else {
+                                    // Stream ended
+                                    log::info!("CLI output stream ended");
+                                    break;
+                                }
                             }
                         }
-
-                        // Small delay between state transitions
-                        sleep(Duration::from_millis(200)).await;
                     }
 
-                    // If we get here without a clear result, return what we have
-                    Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output_buffer)
-                })
-                .await;
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                }).await;
 
-                match timeout {
-                    Ok(Ok(result)) => {
-                        if result.is_empty() {
-                            log::warn!("Interactive login completed without clear result");
-                            return Ok(self.get_fallback_auth_instructions().await);
-                        } else {
-                            return Ok(result);
-                        }
+                match timeout_result {
+                    Ok(Ok(())) => {
+                        log::info!("Authentication completed successfully");
                     }
                     Ok(Err(e)) => {
                         log::error!("Error in interactive login: {}", e);
-                        return Ok(self.get_fallback_auth_instructions().await);
+                        let _ = state_sender.send(AuthState::Failed(format!("Authentication error: {}", e)));
                     }
                     Err(_) => {
-                        log::warn!("Timeout in interactive login after 60 seconds");
-                        return Ok(self.get_fallback_auth_instructions().await);
+                        log::warn!("Timeout in interactive login after 5 minutes");
+                        let _ = state_sender.send(AuthState::Failed("Authentication timed out after 5 minutes".to_string()));
                     }
                 }
             }
             bollard::exec::StartExecResults::Detached => {
+                let _ = state_sender.send(AuthState::Failed("Unexpected detached execution in interactive mode".to_string()));
                 return Err("Unexpected detached execution in interactive mode".into());
             }
         }
+
+        Ok(())
     }
 
     /// Parse CLI output to determine the current state
