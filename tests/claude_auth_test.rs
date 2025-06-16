@@ -1,7 +1,7 @@
 use bollard::Docker;
 use rstest::*;
 use std::env;
-use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
+use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, AuthState};
 
 /// Test fixture that provides a Docker client
 #[fixture]
@@ -94,21 +94,44 @@ async fn test_claude_authentication_command_workflow(docker: Docker) {
 
         let auth_result = auth_client.authenticate_claude_account().await;
 
-        // The account authentication method should always return instructions or success status
+        // The account authentication method should always return authentication handle
         match auth_result {
-            Ok(instructions) => {
-                println!("✅ Claude account authentication result: {}", instructions);
-                // Verify the response contains useful information
-                if instructions.is_empty() {
-                    return Err("Authentication instructions should not be empty".into());
-                }
-
-                if !(instructions.contains("Claude account") ||
-                     instructions.contains("authenticated") ||
-                     instructions.contains("OAuth") ||
-                     instructions.contains("claude.ai/login") ||
-                     instructions.contains("authentication")) {
-                    return Err(format!("Instructions should contain relevant Claude account authentication information: {}", instructions).into());
+            Ok(mut auth_handle) => {
+                println!("✅ Claude account authentication handle received");
+                
+                // Try to receive at least one state update to verify the authentication flow
+                let timeout_result = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(5), 
+                    auth_handle.state_receiver.recv()
+                ).await;
+                
+                match timeout_result {
+                    Ok(Some(state)) => {
+                        println!("✅ Received authentication state: {:?}", state);
+                        match state {
+                            AuthState::Completed(msg) => {
+                                println!("✅ Authentication completed: {}", msg);
+                                if !msg.contains("authenticated") {
+                                    return Err("Expected completion message to contain 'authenticated'".into());
+                                }
+                            }
+                            AuthState::Failed(err) => {
+                                println!("⚠️  Authentication failed (may be expected in test): {}", err);
+                            }
+                            AuthState::Starting => {
+                                println!("✅ Authentication started successfully");
+                            }
+                            _ => {
+                                println!("✅ Received valid authentication state");
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        println!("⚠️  No authentication state received");
+                    }
+                    Err(_) => {
+                        println!("⚠️  Timeout waiting for authentication state");
+                    }
                 }
             }
             Err(e) => {

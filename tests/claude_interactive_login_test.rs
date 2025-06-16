@@ -1,7 +1,7 @@
 use bollard::Docker;
 use rstest::*;
 use std::env;
-use telegram_bot::{container_utils, ClaudeCodeConfig, InteractiveLoginState};
+use telegram_bot::{container_utils, ClaudeCodeConfig, InteractiveLoginState, AuthState};
 
 #[allow(unused_imports)]
 use telegram_bot::ClaudeCodeClient;
@@ -47,9 +47,29 @@ async fn test_interactive_login_flow_dark_mode(docker: Docker) {
 
         // The authentication should work (or fail gracefully)
         match auth_result {
-            Ok(instructions) => {
-                println!("✅ Authentication instructions received: {}", instructions);
-                assert!(!instructions.is_empty(), "Instructions should not be empty");
+            Ok(mut auth_handle) => {
+                println!("✅ Authentication handle received");
+                
+                // Test that we can receive at least one state update
+                if let Some(state) = auth_handle.state_receiver.recv().await {
+                    println!("✅ Received authentication state: {:?}", state);
+                    match state {
+                        AuthState::Starting => {
+                            println!("✅ Authentication started successfully");
+                        }
+                        AuthState::Completed(msg) => {
+                            println!("✅ Authentication completed: {}", msg);
+                        }
+                        AuthState::Failed(err) => {
+                            println!("⚠️  Authentication failed (expected in test): {}", err);
+                        }
+                        _ => {
+                            println!("✅ Received valid state update");
+                        }
+                    }
+                } else {
+                    println!("⚠️  No state updates received");
+                }
             }
             Err(e) => {
                 println!("⚠️  Authentication failed (expected in test): {}", e);

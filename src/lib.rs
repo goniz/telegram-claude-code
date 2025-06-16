@@ -4,5 +4,5 @@ pub mod claude_code_client;
 pub use claude_code_client::{
     container_utils, ClaudeCodeClient, ClaudeCodeConfig, ClaudeCodeResult, ClaudeAuthProcess,
     GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult, InteractiveLoginSession,
-    InteractiveLoginState,
+    InteractiveLoginState, AuthState, AuthenticationHandle,
 };
