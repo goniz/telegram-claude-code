@@ -135,6 +135,13 @@ pub async fn start_coding_session(
             "CODEX_ENV_RUST_VERSION=1.87.0",
             "CODEX_ENV_GO_VERSION=1.23.8"
         ]),
+        // Override the default command to prevent interactive shell hang
+        // Run setup script then keep container alive with sleep
+        cmd: Some(vec![
+            "/bin/bash", 
+            "-c", 
+            "/opt/codex/setup_universal.sh && sleep infinity"
+        ]),
         ..Default::default()
     };
 
