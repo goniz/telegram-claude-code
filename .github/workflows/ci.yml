@@ -126,10 +126,14 @@ jobs:
       run: |
         # Create multi-platform manifest for each tag
         for tag in $(echo '${{ steps.meta.outputs.tags }}' | tr '\n' ' '); do
+          # Extract base image and tag parts
+          base_tag=$(echo ${tag} | sed 's/:.*$//')
+          tag_part=$(echo ${tag} | sed 's/^.*://')
+          
           docker buildx imagetools create \
             --tag ${tag} \
-            ${tag}-amd64 \
-            ${tag}-arm64
+            ${base_tag}:${tag_part}-amd64 \
+            ${base_tag}:${tag_part}-arm64
         done
 
   test-docker-compose:
