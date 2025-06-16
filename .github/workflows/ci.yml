@@ -50,8 +50,8 @@ jobs:
         images: ghcr.io/${{ github.repository }}
         tags: |
           type=ref,event=branch
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest
+          type=sha
+          type=raw,value=latest,enable={{is_default_branch}}
           
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
@@ -89,8 +89,8 @@ jobs:
         images: ghcr.io/${{ github.repository }}-runtime
         tags: |
           type=ref,event=branch
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest
+          type=sha
+          type=raw,value=latest,enable={{is_default_branch}}
           
     - name: Build and push runtime Docker image
       uses: docker/build-push-action@v5
