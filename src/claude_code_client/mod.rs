@@ -246,7 +246,7 @@ impl ClaudeCodeClient {
         &self,
         state_sender: mpsc::UnboundedSender<AuthState>,
         mut code_receiver: mpsc::UnboundedReceiver<String>,
-        mut cancel_receiver: oneshot::Receiver<()>,
+        cancel_receiver: oneshot::Receiver<()>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Duration;
         use tokio::time::sleep;
@@ -300,12 +300,22 @@ impl ClaudeCodeClient {
 
                 let mut stdin = input;
 
+                // Wrap cancel_receiver in Option to handle one-time usage
+                let mut cancel_receiver = Some(cancel_receiver);
+
                 // Process the interactive session with channel communication
                 let timeout_result = tokio::time::timeout(Duration::from_secs(300), async {
                     loop {
                         tokio::select! {
                             // Handle cancellation - only if the sender explicitly sends cancellation
-                            result = &mut cancel_receiver => {
+                            result = async {
+                                if let Some(receiver) = cancel_receiver.take() {
+                                    receiver.await
+                                } else {
+                                    // If receiver was already consumed, return a pending future
+                                    std::future::pending::<Result<(), oneshot::error::RecvError>>().await
+                                }
+                            } => {
                                 if result.is_ok() {
                                     log::info!("Authentication cancelled by user");
                                     let _ = state_sender.send(AuthState::Failed("Authentication cancelled".to_string()));
