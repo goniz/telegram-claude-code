@@ -124,16 +124,22 @@ jobs:
           
     - name: Create and push manifest
       run: |
-        # Create multi-platform manifest for each tag
+        echo "Tags to create manifests for:"
+        echo '${{ steps.meta.outputs.tags }}'
+        
         for tag in $(echo '${{ steps.meta.outputs.tags }}' | tr '\n' ' '); do
-          # Extract base image and tag parts
-          base_tag=$(echo ${tag} | sed 's/:.*$//')
+          echo "Creating manifest for: ${tag}"
+          
+          # Extract tag part (everything after the colon)
           tag_part=$(echo ${tag} | sed 's/^.*://')
+          base_repo="ghcr.io/${{ github.repository }}${{ matrix.image.suffix }}"
+          
+          echo "Looking for platform images: ${base_repo}:${tag_part}-amd64 and ${base_repo}:${tag_part}-arm64"
           
           docker buildx imagetools create \
             --tag ${tag} \
-            ${base_tag}:${tag_part}-amd64 \
-            ${base_tag}:${tag_part}-arm64
+            ${base_repo}:${tag_part}-amd64 \
+            ${base_repo}:${tag_part}-arm64
         done
 
   test-docker-compose:
