@@ -1,6 +1,5 @@
 use bollard::Docker;
 use rstest::*;
-use std::env;
 use telegram_bot::{container_utils, ClaudeCodeConfig, AuthState};
 use uuid;
 
@@ -18,56 +17,28 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 #[rstest]
 #[tokio::test]
 async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
-    // Check if we're in a CI environment
-    let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
-    if is_ci {
-        println!("🔄 Running in CI environment - using shortened timeouts and more lenient assertions");
-    }
-
     let container_name = format!("test-auth-url-{}", uuid::Uuid::new_v4());
 
-    // Use CI-appropriate timeouts
-    let test_timeout = if is_ci {
-        tokio::time::Duration::from_secs(60) // 1 minute in CI
-    } else {
-        tokio::time::Duration::from_secs(180) // 3 minutes locally
-    };
+    // Use a reasonable timeout
+    let test_timeout = tokio::time::Duration::from_secs(180); // 3 minutes
 
     let test_result = tokio::time::timeout(test_timeout, async {
         println!("=== STEP 1: Starting coding session ===");
         
-        // Set a shorter timeout for container creation in CI environments
-        let container_timeout = if is_ci {
-            tokio::time::Duration::from_secs(30)
-        } else {
-            tokio::time::Duration::from_secs(90)
-        };
-        
         // Step 1: Start a coding session (same as bot does)
-        let claude_client_result = tokio::time::timeout(
-            container_timeout,
-            container_utils::start_coding_session(
-                &docker,
-                &container_name,
-                ClaudeCodeConfig::default(),
-            ),
+        let claude_client = match container_utils::start_coding_session(
+            &docker,
+            &container_name,
+            ClaudeCodeConfig::default(),
         )
-        .await;
-
-        let claude_client = match claude_client_result {
-            Ok(Ok(client)) => {
+        .await {
+            Ok(client) => {
                 println!("✅ Coding session started with container: {}", client.container_id());
                 client
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 println!("❌ Failed to start coding session: {}", e);
                 return Err(e);
-            }
-            Err(_) => {
-                let msg = format!("Container creation timed out after {} seconds", 
-                    container_timeout.as_secs());
-                println!("❌ {}", msg);
-                return Err(msg.into());
             }
         };
 
