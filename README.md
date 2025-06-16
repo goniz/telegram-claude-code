@@ -32,6 +32,8 @@ The bot currently supports these commands:
 - `/claudestatus` - Check Claude Code availability
 - `/authenticateclaude` - Authenticate Claude using your Claude account credentials (OAuth flow)
 - `/githubauth` - Authenticate with GitHub using OAuth flow
+- `/githubstatus` - Check GitHub authentication status
+- `/githubrepolist` - List GitHub repositories for the authenticated user
 
 ### GitHub Integration
 
@@ -74,6 +76,7 @@ Please follow these steps:
 #### GithubClient Features
 - **Authentication**: Login to GitHub using the `gh auth login` command with web-based OAuth flow
 - **Repository Cloning**: Clone repositories using the `gh repo clone` command
+- **Repository Listing**: List repositories for the authenticated user using the `gh repo list` command
 - **Authentication Status**: Check current GitHub authentication status
 - **Error Handling**: Graceful handling of missing `gh` CLI or authentication failures
 - **Container Support**: Designed to work within development containers
@@ -100,6 +103,10 @@ let clone_result = github_client.repo_clone("owner/repo", Some("target-dir")).aw
 if clone_result.success {
     println!("Repository cloned to: {}", clone_result.target_directory);
 }
+
+// List repositories for the authenticated user
+let repo_list = github_client.repo_list().await?;
+println!("User repositories: {}", repo_list);
 ```
 
 #### Configuration
