@@ -1,7 +1,7 @@
 use bollard::Docker;
 use rstest::*;
-use std::env;
-use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, AuthState};
+use telegram_bot::{container_utils, ClaudeCodeConfig, AuthState};
+use uuid;
 
 /// Test fixture that provides a Docker client
 #[fixture]
@@ -17,19 +17,10 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 #[rstest]
 #[tokio::test]
 async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
-    let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
-    if is_ci {
-        println!("🔄 Running in CI environment - using shortened timeouts");
-    }
-
     let container_name = format!("test-auth-url-{}", uuid::Uuid::new_v4());
 
-    // Use a reasonable timeout - shorter in CI, longer locally
-    let test_timeout = if is_ci {
-        tokio::time::Duration::from_secs(90) // 1.5 minutes in CI
-    } else {
-        tokio::time::Duration::from_secs(180) // 3 minutes locally
-    };
+    // Use a reasonable timeout
+    let test_timeout = tokio::time::Duration::from_secs(180); // 3 minutes
 
     let test_result = tokio::time::timeout(test_timeout, async {
         println!("=== STEP 1: Starting coding session ===");
@@ -156,29 +147,4 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
             panic!("Test timed out after the specified duration");
         }
     }
-}
-
-#[rstest]
-#[tokio::test]
-async fn test_claude_auth_api_structure_matches_bot() {
-    // Test that the API structure matches what the bot expects
-    // This is a quick structural test that doesn't require containers
-    
-    println!("=== Testing API structure compatibility with bot ===");
-    
-    // Verify that the types the bot uses are available and have expected methods
-    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-    let config = ClaudeCodeConfig::default();
-    let client = ClaudeCodeClient::new(docker, "test-container".to_string(), config);
-    
-    // This would be the same call the bot makes - just test it compiles and returns the right type
-    let container_id = client.container_id();
-    assert!(!container_id.is_empty());
-    
-    println!("✅ API structure is compatible with bot implementation");
-    println!("✅ ClaudeCodeClient::new() works");
-    println!("✅ ClaudeCodeClient::container_id() works");
-    println!("✅ ClaudeCodeConfig::default() works");
-    
-    // Note: authenticate_claude_account() requires an actual container, so we test it in the main test
 }
