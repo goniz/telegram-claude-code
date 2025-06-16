@@ -311,3 +311,40 @@ async fn test_github_client_working_directory_config(
         pwd_output
     );
 }
+
+#[rstest]
+#[tokio::test]
+async fn test_github_repo_list(#[future] test_container: (Docker, String, String)) {
+    let (docker, container_id, container_name) = test_container.await;
+
+    let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
+
+    // Test GitHub repository list command
+    let repo_list_result = client.repo_list().await;
+
+    // Cleanup
+    cleanup_container(&docker, &container_name).await;
+
+    // The command should either succeed (if authenticated) or fail with auth error
+    match repo_list_result {
+        Ok(output) => {
+            // Success case - user is authenticated and may have repos
+            println!("Repo list output: {:?}", output);
+        }
+        Err(e) => {
+            // Expected failure case - user is not authenticated
+            let error_msg = e.to_string();
+            assert!(
+                error_msg.contains("gh auth login") || 
+                error_msg.contains("authentication") ||
+                error_msg.contains("GH_TOKEN"),
+                "Error should be related to authentication, got: {}",
+                error_msg
+            );
+            println!("Expected authentication error: {}", error_msg);
+        }
+    }
+    
+    // Note: The actual content depends on authentication status and available repositories
+    // The important thing is that the command structure is correct and doesn't crash
+}

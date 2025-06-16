@@ -390,6 +390,26 @@ impl GithubClient {
         self.exec_command(version_command).await
     }
 
+    /// List GitHub repositories for the authenticated user
+    pub async fn repo_list(
+        &self,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        log::info!("Listing GitHub repositories for authenticated user...");
+
+        let list_command = vec!["gh".to_string(), "repo".to_string(), "list".to_string()];
+
+        match self.exec_command(list_command).await {
+            Ok(output) => {
+                log::debug!("Repo list command output: {}", output);
+                Ok(output)
+            }
+            Err(e) => {
+                log::error!("Failed to list repositories: {}", e);
+                Err(e)
+            }
+        }
+    }
+
     /// Helper method for basic command execution (used in tests)
     #[allow(dead_code)]
     pub async fn exec_basic_command(
