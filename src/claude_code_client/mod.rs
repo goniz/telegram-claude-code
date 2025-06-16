@@ -251,10 +251,14 @@ impl ClaudeCodeClient {
         use std::time::Duration;
         use tokio::time::sleep;
 
+        // Entry point debug log
+        log::debug!("Starting background_interactive_login function for container: {}", self.container_id);
+
         // Send starting state
         let _ = state_sender.send(AuthState::Starting);
 
         // Create exec with TTY enabled for interactive mode
+        log::debug!("Creating exec configuration for Claude CLI interactive mode");
         let exec_config = CreateExecOptions {
             cmd: Some(vec!["claude".to_string()]),
             attach_stdin: Some(true),
@@ -273,9 +277,14 @@ impl ClaudeCodeClient {
             ..Default::default()
         };
 
+        log::debug!("Attempting to create exec for container: {}", self.container_id);
         let exec = match self.docker.create_exec(&self.container_id, exec_config).await {
-            Ok(exec) => exec,
+            Ok(exec) => {
+                log::debug!("Successfully created exec with ID: {}", exec.id);
+                exec
+            },
             Err(e) => {
+                log::error!("Failed to create exec for container {}: {}", self.container_id, e);
                 let _ = state_sender.send(AuthState::Failed(format!("Failed to create exec: {}", e)));
                 return Err(e.into());
             }
@@ -293,8 +302,10 @@ impl ClaudeCodeClient {
             awaiting_user_code: false,
         };
 
+        log::debug!("Starting exec {} with interactive TTY", exec.id);
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
             bollard::exec::StartExecResults::Attached { mut output, input } => {
+                log::debug!("Successfully attached to exec {}, waiting for CLI to initialize", exec.id);
                 // Give some time for the interactive CLI to start
                 sleep(Duration::from_millis(500)).await;
 
@@ -304,8 +315,10 @@ impl ClaudeCodeClient {
                 let mut cancel_receiver = Some(cancel_receiver);
 
                 // Process the interactive session with channel communication
+                log::debug!("Starting interactive authentication loop with 5-minute timeout");
                 let timeout_result = tokio::time::timeout(Duration::from_secs(300), async {
                     loop {
+                        log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
                             // Handle cancellation - only if the sender explicitly sends cancellation
                             result = async {
@@ -316,146 +329,217 @@ impl ClaudeCodeClient {
                                     std::future::pending::<Result<(), oneshot::error::RecvError>>().await
                                 }
                             } => {
+                                log::debug!("Received cancellation signal, result: {:?}", result);
                                 if result.is_ok() {
                                     log::info!("Authentication cancelled by user");
                                     let _ = state_sender.send(AuthState::Failed("Authentication cancelled".to_string()));
                                     return Ok(());
                                 }
+                                log::debug!("Cancel receiver error (sender likely dropped), continuing authentication");
                                 // If cancel_receiver errors (sender dropped), continue normally
                                 // This prevents immediate cancellation when sender is dropped
                             }
                             
                             // Handle auth code input from user
                             code = code_receiver.recv() => {
+                                log::debug!("Code receiver branch triggered");
                                 if let Some(code) = code {
                                     log::info!("Received auth code from user, sending to CLI");
+                                    log::debug!("Auth code length: {} characters", code.len());
                                     if let Err(e) = stdin.write_all(format!("{}\n", code).as_bytes()).await {
+                                        log::error!("Failed to write auth code to stdin: {}", e);
                                         let _ = state_sender.send(AuthState::Failed(format!("Failed to send code: {}", e)));
                                         return Err(e.into());
                                     }
                                     if let Err(e) = stdin.flush().await {
+                                        log::error!("Failed to flush stdin after auth code: {}", e);
                                         let _ = state_sender.send(AuthState::Failed(format!("Failed to flush stdin: {}", e)));
                                         return Err(e.into());
                                     }
+                                    log::debug!("Successfully sent auth code to CLI");
+                                } else {
+                                    log::debug!("Code receiver returned None (channel closed)");
                                 }
                             }
                             
                             // Handle CLI output
                             msg = output.next() => {
+                                log::debug!("CLI output branch triggered");
                                 if let Some(Ok(msg)) = msg {
                                     let text = match msg {
                                         bollard::container::LogOutput::StdOut { message } => {
+                                            log::debug!("Received stdout from CLI");
                                             String::from_utf8_lossy(&message).to_string()
                                         }
                                         bollard::container::LogOutput::StdErr { message } => {
+                                            log::debug!("Received stderr from CLI");
                                             String::from_utf8_lossy(&message).to_string()
                                         }
-                                        _ => continue,
+                                        _ => {
+                                            log::debug!("Received other log output type, continuing");
+                                            continue
+                                        },
                                     };
 
                                     log::debug!("Claude CLI output: {}", text);
 
                                     // Update state based on output
+                                    log::debug!("Parsing CLI output to determine new state");
                                     let new_state = self.parse_cli_output_for_state(&text);
+                                    log::debug!("State transition: {:?} -> {:?}", session.state, new_state);
 
                                     match &new_state {
                                         InteractiveLoginState::DarkMode => {
-                                            log::debug!("Dark mode detected, pressing enter");
-                                            stdin.write_all(b"\n").await?;
-                                            stdin.flush().await?;
+                                            log::debug!("State: DarkMode detected, pressing enter to continue");
+                                            if let Err(e) = stdin.write_all(b"\n").await {
+                                                log::error!("Failed to send enter for dark mode: {}", e);
+                                                return Err(e.into());
+                                            }
+                                            if let Err(e) = stdin.flush().await {
+                                                log::error!("Failed to flush stdin for dark mode: {}", e);
+                                                return Err(e.into());
+                                            }
                                             session.state = new_state.clone();
+                                            log::debug!("Successfully handled DarkMode state");
                                         }
                                         InteractiveLoginState::SelectLoginMethod => {
-                                            log::debug!("Select login method detected, choosing option 1");
-                                            stdin.write_all(b"1\n").await?;
-                                            stdin.flush().await?;
+                                            log::debug!("State: SelectLoginMethod detected, choosing option 1 (account authentication)");
+                                            if let Err(e) = stdin.write_all(b"1\n").await {
+                                                log::error!("Failed to send login method selection: {}", e);
+                                                return Err(e.into());
+                                            }
+                                            if let Err(e) = stdin.flush().await {
+                                                log::error!("Failed to flush stdin for login method: {}", e);
+                                                return Err(e.into());
+                                            }
                                             session.state = new_state.clone();
+                                            log::debug!("Successfully selected login method");
                                         }
                                         InteractiveLoginState::ProvideUrl(url) => {
-                                            log::info!("Authentication URL detected: {}", url);
+                                            log::info!("State: ProvideUrl - Authentication URL detected: {}", url);
                                             session.url = Some(url.clone());
                                             session.state = new_state.clone();
 
                                             // Send URL to user via channel
+                                            log::debug!("Sending UrlReady state to user");
                                             let _ = state_sender.send(AuthState::UrlReady(url.clone()));
+                                            log::debug!("Successfully handled ProvideUrl state");
                                         }
                                         InteractiveLoginState::WaitingForCode => {
-                                            log::info!("Authentication code required - waiting for user input");
+                                            log::info!("State: WaitingForCode - Authentication code required - waiting for user input");
                                             session.awaiting_user_code = true;
                                             session.state = new_state.clone();
                                             
                                             // Notify that we're waiting for a code
+                                            log::debug!("Sending WaitingForCode state to user");
                                             let _ = state_sender.send(AuthState::WaitingForCode);
+                                            log::debug!("Successfully handled WaitingForCode state");
                                         }
                                         InteractiveLoginState::LoginSuccessful => {
-                                            log::info!("Login successful, pressing enter to continue");
-                                            stdin.write_all(b"\n").await?;
-                                            stdin.flush().await?;
+                                            log::info!("State: LoginSuccessful - pressing enter to continue");
+                                            if let Err(e) = stdin.write_all(b"\n").await {
+                                                log::error!("Failed to send enter for login successful: {}", e);
+                                                return Err(e.into());
+                                            }
+                                            if let Err(e) = stdin.flush().await {
+                                                log::error!("Failed to flush stdin for login successful: {}", e);
+                                                return Err(e.into());
+                                            }
                                             session.state = new_state.clone();
+                                            log::debug!("Successfully handled LoginSuccessful state");
                                         }
                                         InteractiveLoginState::SecurityNotes => {
-                                            log::debug!("Security notes detected, pressing enter to continue");
-                                            stdin.write_all(b"\n").await?;
-                                            stdin.flush().await?;
+                                            log::debug!("State: SecurityNotes detected, pressing enter to continue");
+                                            if let Err(e) = stdin.write_all(b"\n").await {
+                                                log::error!("Failed to send enter for security notes: {}", e);
+                                                return Err(e.into());
+                                            }
+                                            if let Err(e) = stdin.flush().await {
+                                                log::error!("Failed to flush stdin for security notes: {}", e);
+                                                return Err(e.into());
+                                            }
                                             session.state = new_state.clone();
+                                            log::debug!("Successfully handled SecurityNotes state");
                                         }
                                         InteractiveLoginState::TrustFiles => {
-                                            log::info!("Trust files prompt detected, completing authentication");
-                                            stdin.write_all(b"\n").await?;
-                                            stdin.flush().await?;
+                                            log::info!("State: TrustFiles prompt detected, completing authentication");
+                                            if let Err(e) = stdin.write_all(b"\n").await {
+                                                log::error!("Failed to send enter for trust files: {}", e);
+                                                return Err(e.into());
+                                            }
+                                            if let Err(e) = stdin.flush().await {
+                                                log::error!("Failed to flush stdin for trust files: {}", e);
+                                                return Err(e.into());
+                                            }
                                             session.state = InteractiveLoginState::Completed;
 
                                             let success_msg = "✅ **Claude Authentication Completed!**\n\nYour Claude account has been successfully authenticated.\n\nYou can now use Claude Code with your account privileges.".to_string();
+                                            log::debug!("Sending authentication completion state to user");
                                             let _ = state_sender.send(AuthState::Completed(success_msg));
+                                            log::info!("Authentication completed successfully via TrustFiles state");
                                             return Ok(());
                                         }
                                         InteractiveLoginState::Completed => {
-                                            log::info!("Authentication process completed");
+                                            log::info!("State: Completed - Authentication process completed");
                                             let success_msg = "✅ Claude Code authentication completed successfully!".to_string();
+                                            log::debug!("Sending final completion state to user");
                                             let _ = state_sender.send(AuthState::Completed(success_msg));
+                                            log::info!("Authentication completed successfully via Completed state");
                                             return Ok(());
                                         }
                                         InteractiveLoginState::Error(err) => {
-                                            log::warn!("Error in interactive login: {}", err);
+                                            log::warn!("State: Error encountered in interactive login: {}", err);
+                                            log::debug!("Sending error state to user");
                                             let _ = state_sender.send(AuthState::Failed(err.clone()));
+                                            log::error!("Authentication failed due to error state: {}", err);
                                             return Err(err.clone().into());
                                         }
                                     }
 
                                     // Small delay between state transitions
+                                    log::debug!("Pausing 200ms between state transitions");
                                     sleep(Duration::from_millis(200)).await;
                                 } else {
                                     // Stream ended
-                                    log::info!("CLI output stream ended");
+                                    log::warn!("CLI output stream ended unexpectedly (received None)");
                                     break;
                                 }
                             }
                         }
                     }
 
+                    log::debug!("Exiting authentication loop");
                     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
                 }).await;
 
+                log::debug!("Authentication timeout result: {:?}", timeout_result.is_ok());
                 match timeout_result {
                     Ok(Ok(())) => {
-                        log::info!("Authentication completed successfully");
+                        log::info!("Authentication completed successfully within timeout");
                     }
                     Ok(Err(e)) => {
-                        log::error!("Error in interactive login: {}", e);
+                        log::error!("Error occurred during interactive login: {}", e);
+                        log::debug!("Sending authentication error state to user");
                         let _ = state_sender.send(AuthState::Failed(format!("Authentication error: {}", e)));
                     }
                     Err(_) => {
-                        log::warn!("Timeout in interactive login after 5 minutes");
+                        log::warn!("Authentication process timed out after 5 minutes (300 seconds)");
+                        log::debug!("Timeout context - CLI may be unresponsive or waiting for input");
+                        log::debug!("Current session state: {:?}", session.state);
+                        log::debug!("Awaiting user code: {}", session.awaiting_user_code);
+                        log::debug!("Session URL: {:?}", session.url);
                         let _ = state_sender.send(AuthState::Failed("Authentication timed out after 5 minutes".to_string()));
                     }
                 }
             }
             bollard::exec::StartExecResults::Detached => {
+                log::error!("Unexpected detached execution in interactive mode - this should not happen");
                 let _ = state_sender.send(AuthState::Failed("Unexpected detached execution in interactive mode".to_string()));
                 return Err("Unexpected detached execution in interactive mode".into());
             }
         }
 
+        log::debug!("background_interactive_login function completed successfully");
         Ok(())
     }
 
