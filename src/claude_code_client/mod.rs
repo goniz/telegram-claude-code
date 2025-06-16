@@ -504,9 +504,28 @@ impl ClaudeCodeClient {
                                     log::debug!("Pausing 200ms between state transitions");
                                     sleep(Duration::from_millis(200)).await;
                                 } else {
-                                    // Stream ended
+                                    // Stream ended - check if we're actually completed
                                     log::warn!("CLI output stream ended unexpectedly (received None)");
-                                    break;
+                                    
+                                    // Only treat as success if we're actually in a completed state
+                                    match session.state {
+                                        InteractiveLoginState::Completed => {
+                                            log::info!("CLI stream ended but authentication was already completed - success");
+                                            break;
+                                        }
+                                        InteractiveLoginState::TrustFiles => {
+                                            log::info!("CLI stream ended during TrustFiles state - considering as completed");
+                                            session.state = InteractiveLoginState::Completed;
+                                            let success_msg = "✅ **Claude Authentication Completed!**\n\nYour Claude account has been successfully authenticated.\n\nYou can now use Claude Code with your account privileges.".to_string();
+                                            let _ = state_sender.send(AuthState::Completed(success_msg));
+                                            break;
+                                        }
+                                        _ => {
+                                            log::error!("CLI stream ended prematurely in state: {:?}", session.state);
+                                            let _ = state_sender.send(AuthState::Failed("Authentication failed: CLI process terminated unexpectedly".to_string()));
+                                            return Err("CLI process terminated unexpectedly".into());
+                                        }
+                                    }
                                 }
                             }
                         }
