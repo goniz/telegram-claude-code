@@ -304,11 +304,15 @@ impl ClaudeCodeClient {
                 let timeout_result = tokio::time::timeout(Duration::from_secs(300), async {
                     loop {
                         tokio::select! {
-                            // Handle cancellation
-                            _ = &mut cancel_receiver => {
-                                log::info!("Authentication cancelled by user");
-                                let _ = state_sender.send(AuthState::Failed("Authentication cancelled".to_string()));
-                                return Ok(());
+                            // Handle cancellation - only if the sender explicitly sends cancellation
+                            result = &mut cancel_receiver => {
+                                if result.is_ok() {
+                                    log::info!("Authentication cancelled by user");
+                                    let _ = state_sender.send(AuthState::Failed("Authentication cancelled".to_string()));
+                                    return Ok(());
+                                }
+                                // If cancel_receiver errors (sender dropped), continue normally
+                                // This prevents immediate cancellation when sender is dropped
                             }
                             
                             // Handle auth code input from user
