@@ -216,24 +216,32 @@ async fn handle_auth_state_updates(
             AuthState::Starting => {
                 let _ = bot.send_message(
                     chat_id,
-                    "🔄 Starting Claude authentication..."
-                ).await;
+                    "🔄 Starting Claude authentication\\.\\.\\."
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await;
             }
             AuthState::UrlReady(url) => {
                 let message = format!(
-                    "🔐 **Claude Account Authentication**\n\nTo complete authentication with your Claude account:\n\n**1. Visit this authentication URL:**\n{}\n\n**2. Sign in with your Claude account**\n\n**3. Complete the OAuth flow in your browser**\n\n**4. If prompted for a code, use `/authcode <code>`**\n\n✨ This will enable full access to your Claude subscription features!",
-                    url
+                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your Claude account:\n\n*1\\. Visit this authentication URL:*\n[{}]({})\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth flow in your browser*\n\n*4\\. If prompted for a code, use* `/authcode <code>`\n\n✨ This will enable full access to your Claude subscription features\\!",
+                    escape_markdown_v2(&url), url
                 );
-                let _ = bot.send_message(chat_id, message).await;
+                let _ = bot.send_message(chat_id, message)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await;
             }
             AuthState::WaitingForCode => {
                 let _ = bot.send_message(
                     chat_id,
-                    "🔑 **Authentication code required**\n\nPlease check your browser for an authentication code and send it using:\n`/authcode <your_code>`"
-                ).await;
+                    "🔑 *Authentication code required*\n\nPlease check your browser for an authentication code and send it using:\n`/authcode <your_code>`"
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await;
             }
             AuthState::Completed(message) => {
-                let _ = bot.send_message(chat_id, message).await;
+                let _ = bot.send_message(chat_id, message)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await;
                 // Clean up the session
                 {
                     let mut sessions = bot_state.auth_sessions.lock().await;
@@ -244,8 +252,10 @@ async fn handle_auth_state_updates(
             AuthState::Failed(error) => {
                 let _ = bot.send_message(
                     chat_id,
-                    format!("❌ Authentication failed: {}", error)
-                ).await;
+                    format!("❌ Authentication failed: {}", escape_markdown_v2(&error))
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await;
                 // Clean up the session
                 {
                     let mut sessions = bot_state.auth_sessions.lock().await;
@@ -268,11 +278,13 @@ async fn check_existing_auth_session(
     if sessions.contains_key(&chat_id) {
         bot.send_message(
             msg_chat_id,
-            "🔐 **Authentication Already in Progress**\n\n\
-             You have an ongoing authentication session.\n\n\
+            "🔐 *Authentication Already in Progress*\n\n\
+             You have an ongoing authentication session\\.\n\n\
              If you need to provide a code, use `/authcode <your_code>`\n\n\
-             To restart authentication, please wait for the current session to complete or fail."
-        ).await?;
+             To restart authentication, please wait for the current session to complete or fail\\."
+        )
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
         return Ok(true);
     }
     Ok(false)
@@ -292,8 +304,10 @@ async fn handle_github_authentication(
             // Send initial message
             bot.send_message(
                 msg.chat.id,
-                "🔐 Starting GitHub authentication process...\n\n⏳ Initiating OAuth flow..."
-            ).await?;
+                "🔐 Starting GitHub authentication process\\.\\.\\.\n\n⏳ Initiating OAuth flow\\.\\.\\."
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
             
             // Create GitHub client using same docker instance and container ID
             let github_client = GithubClient::new(
@@ -323,20 +337,24 @@ async fn handle_github_authentication(
                 Err(e) => {
                     let error_msg = e.to_string();
                     let user_message = if error_msg.contains("timed out after") {
-                        format!("⏰ GitHub authentication timed out: {}\n\nThis usually means:\n• The authentication process is taking longer than expected\n• There may be network connectivity issues\n• The GitHub CLI might be unresponsive\n\nPlease try again in a few moments.", error_msg)
+                        format!("⏰ GitHub authentication timed out: {}\n\nThis usually means:\n• The authentication process is taking longer than expected\n• There may be network connectivity issues\n• The GitHub CLI might be unresponsive\n\nPlease try again in a few moments\\.", escape_markdown_v2(&error_msg))
                     } else {
-                        format!("❌ Failed to initiate GitHub authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• GitHub CLI (gh) is properly installed\n• Network connectivity is available", error_msg)
+                        format!("❌ Failed to initiate GitHub authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• GitHub CLI \\(gh\\) is properly installed\n• Network connectivity is available", escape_markdown_v2(&error_msg))
                     };
                     
-                    bot.send_message(msg.chat.id, user_message).await?;
+                    bot.send_message(msg.chat.id, user_message)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
                 }
             }
         }
         Err(e) => {
             bot.send_message(
                 msg.chat.id, 
-                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
-            ).await?;
+                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", escape_markdown_v2(&e.to_string()))
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         }
     }
     
@@ -379,16 +397,20 @@ async fn handle_github_status(
                 Err(e) => {
                     bot.send_message(
                         msg.chat.id,
-                        format!("❌ Failed to check GitHub authentication status: {}\n\nThis could be due to:\n• GitHub CLI not being available\n• Network connectivity issues\n• Container problems", e)
-                    ).await?;
+                        format!("❌ Failed to check GitHub authentication status: {}\n\nThis could be due to:\n• GitHub CLI not being available\n• Network connectivity issues\n• Container problems", escape_markdown_v2(&e.to_string()))
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
                 }
             }
         }
         Err(e) => {
             bot.send_message(
                 msg.chat.id, 
-                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
-            ).await?;
+                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", escape_markdown_v2(&e.to_string()))
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         }
     }
     
@@ -480,20 +502,26 @@ async fn handle_auth_code(
             if let Err(_) = auth_session.code_sender.send(code.clone()) {
                 bot.send_message(
                     msg.chat.id,
-                    "❌ Failed to send authentication code. The authentication session may have expired.\n\nPlease restart authentication with `/authenticateclaude`"
-                ).await?;
+                    "❌ Failed to send authentication code\\. The authentication session may have expired\\.\n\nPlease restart authentication with `/authenticateclaude`"
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
             } else {
                 bot.send_message(
                     msg.chat.id,
-                    "✅ Authentication code sent! Please wait while we complete the authentication process..."
-                ).await?;
+                    "✅ Authentication code sent\\! Please wait while we complete the authentication process\\.\\.\\."
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
             }
         }
         None => {
             bot.send_message(
                 msg.chat.id,
-                "❌ No active authentication session found.\n\nPlease start authentication first with `/authenticateclaude`"
-            ).await?;
+                "❌ No active authentication session found\\.\n\nPlease start authentication first with `/authenticateclaude`"
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         }
     }
     
@@ -519,11 +547,14 @@ async fn handle_clear_session(
         Ok(()) => {
             bot.send_message(
                 msg.chat.id,
-                "🧹 Coding session cleared successfully!\n\nThe container has been stopped and removed."
-            ).await?;
+                "🧹 Coding session cleared successfully\\!\n\nThe container has been stopped and removed\\."
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         }
         Err(e) => {
-            bot.send_message(msg.chat.id, format!("❌ Failed to clear session: {}", e))
+            bot.send_message(msg.chat.id, format!("❌ Failed to clear session: {}", escape_markdown_v2(&e.to_string())))
+                .parse_mode(ParseMode::MarkdownV2)
                 .await?;
         }
     }
@@ -550,8 +581,10 @@ async fn handle_claude_authentication(
             // Send initial message
             bot.send_message(
                 msg.chat.id,
-                "🔐 Starting Claude account authentication process...\n\n⏳ Initiating OAuth flow..."
-            ).await?;
+                "🔐 Starting Claude account authentication process\\.\\.\\.\n\n⏳ Initiating OAuth flow\\.\\.\\."
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
 
             match client.authenticate_claude_account().await {
                 Ok(auth_handle) => {
@@ -580,16 +613,20 @@ async fn handle_claude_authentication(
                 Err(e) => {
                     bot.send_message(
                         msg.chat.id,
-                        format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", e)
-                    ).await?;
+                        format!("❌ Failed to initiate Claude account authentication: {}\n\nPlease ensure:\n• Your coding session is active\n• Claude Code is properly installed\n• Network connectivity is available", escape_markdown_v2(&e.to_string()))
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
                 }
             }
         }
         Err(e) => {
             bot.send_message(
                 msg.chat.id,
-                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", e)
-            ).await?;
+                format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", escape_markdown_v2(&e.to_string()))
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         }
     }
     
@@ -604,6 +641,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         Command::Help => {
             let help_text = generate_help_text();
             bot.send_message(msg.chat.id, help_text)
+                .parse_mode(ParseMode::MarkdownV2)
                 .await?;
         }
         Command::ClearSession => {
@@ -615,8 +653,10 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
             // Send initial welcome message
             bot.send_message(
                 msg.chat.id,
-                "Hello! I'm your Claude Code Chat Bot 🤖🐳\n\n🚀 Starting new coding session...\n\n⏳ Creating container with Claude Code..."
-            ).await?;
+                "Hello\\! I'm your Claude Code Chat Bot 🤖🐳\n\n🚀 Starting new coding session\\.\\.\\.\n\n⏳ Creating container with Claude Code\\.\\.\\."
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
 
             match container_utils::start_coding_session(
                 &bot_state.docker,
@@ -626,17 +666,22 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
             .await
             {
                 Ok(claude_client) => {
+                    let container_id_short = claude_client.container_id().chars().take(12).collect::<String>();
                     bot.send_message(
                         msg.chat.id,
-                        format!("✅ Coding session started successfully!\n\nContainer ID: {}\nContainer Name: {}\n\n🎯 Claude Code is pre-installed and ready to use!\n\nYou can now run code and manage your development environment.",
-                                claude_client.container_id().chars().take(12).collect::<String>(), container_name)
-                    ).await?;
+                        format!("✅ Coding session started successfully\\!\n\n*Container ID:* `{}`\n*Container Name:* `{}`\n\n🎯 Claude Code is pre\\-installed and ready to use\\!\n\nYou can now run code and manage your development environment\\.",
+                                escape_markdown_v2(&container_id_short), escape_markdown_v2(&container_name))
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
                 }
                 Err(e) => {
                     bot.send_message(
                         msg.chat.id,
-                        format!("❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container creation failure\n• Runtime image pull failure\n• Network connectivity issues", e)
-                    ).await?;
+                        format!("❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container creation failure\n• Runtime image pull failure\n• Network connectivity issues", escape_markdown_v2(&e.to_string()))
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
                 }
             }
         }
@@ -648,23 +693,26 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                     Ok(version) => {
                         bot.send_message(
                             msg.chat.id,
-                            format!("✅ Claude Code is available!\n\nVersion: {}", version),
+                            format!("✅ Claude Code is available\\!\n\n*Version:* `{}`", escape_markdown_v2(&version)),
                         )
+                        .parse_mode(ParseMode::MarkdownV2)
                         .await?;
                     }
                     Err(e) => {
                         bot.send_message(
                             msg.chat.id,
-                            format!("❌ Claude Code check failed: {}", e),
+                            format!("❌ Claude Code check failed: {}", escape_markdown_v2(&e.to_string())),
                         )
+                        .parse_mode(ParseMode::MarkdownV2)
                         .await?;
                     }
                 },
                 Err(e) => {
                     bot.send_message(
                         msg.chat.id,
-                        format!("❌ No active coding session found: {}", e),
+                        format!("❌ No active coding session found: {}", escape_markdown_v2(&e.to_string())),
                     )
+                    .parse_mode(ParseMode::MarkdownV2)
                     .await?;
                 }
             }
