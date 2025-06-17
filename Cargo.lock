@@ -1659,6 +1659,7 @@ dependencies = [
  "teloxide",
  "tokio",
  "tokio-test",
+ "url",
  "uuid",
 ]
 

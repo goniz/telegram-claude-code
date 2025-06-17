@@ -3,8 +3,9 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{prelude::*, utils::command::BotCommands, types::ParseMode};
+use teloxide::{prelude::*, utils::command::BotCommands, types::{ParseMode, InlineKeyboardMarkup, InlineKeyboardButton}};
 use tokio::sync::Mutex;
+use url::Url;
 
 mod claude_code_client;
 use claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig, AuthenticationHandle, AuthState};
@@ -223,11 +224,16 @@ async fn handle_auth_state_updates(
             }
             AuthState::UrlReady(url) => {
                 let message = format!(
-                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your Claude account:\n\n*1\\. Visit this authentication URL:*\n[{}]({})\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth flow in your browser*\n\n*4\\. If prompted for a code, use* `/authcode <code>`\n\n✨ This will enable full access to your Claude subscription features\\!",
-                    escape_markdown_v2(&url), url
+                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your Claude account:\n\n*1\\. Click the button below to visit the authentication URL*\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth flow in your browser*\n\n*4\\. If prompted for a code, use* `/authcode <code>`\n\n✨ This will enable full access to your Claude subscription features\\!"
                 );
+                
+                let keyboard = InlineKeyboardMarkup::new(vec![
+                    vec![InlineKeyboardButton::url("🔗 Open Claude OAuth", Url::parse(&url).unwrap_or_else(|_| Url::parse("https://claude.ai").unwrap()))],
+                ]);
+                
                 let _ = bot.send_message(chat_id, message)
                     .parse_mode(ParseMode::MarkdownV2)
+                    .reply_markup(keyboard)
                     .await;
             }
             AuthState::WaitingForCode => {
@@ -325,7 +331,18 @@ async fn handle_github_authentication(
                             "✅ GitHub authentication successful\\!\n\n🎯 You can now use GitHub features in your coding session\\.".to_string()
                         }
                     } else if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
-                        format!("🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Visit this URL:* {}\n\n2️⃣ *Enter this device code:*\n```{}```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly\\.\n\n💡 *Tip:* Use /githubstatus to check if authentication completed successfully\\.", escape_markdown_v2(oauth_url), escape_markdown_v2(device_code))
+                        let message = format!("🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Click the button below to visit the authentication URL*\n\n2️⃣ *Enter this device code:*\n```{}```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes, so please complete the process promptly\\.\n\n💡 *Tip:* Use /githubstatus to check if authentication completed successfully\\.", escape_markdown_v2(device_code));
+                        
+                        let keyboard = InlineKeyboardMarkup::new(vec![
+                            vec![InlineKeyboardButton::url("🔗 Open GitHub OAuth", Url::parse(oauth_url).unwrap_or_else(|_| Url::parse("https://github.com").unwrap()))],
+                            vec![InlineKeyboardButton::switch_inline_query_current_chat("📋 Copy Device Code", device_code)],
+                        ]);
+                        
+                        bot.send_message(msg.chat.id, message)
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .reply_markup(keyboard)
+                            .await?;
+                        return Ok(());
                     } else {
                         format!("ℹ️ GitHub authentication status: {}", escape_markdown_v2(&auth_result.message))
                     };
@@ -390,8 +407,19 @@ async fn handle_github_status(
                         "❌ *GitHub Authentication Status: Not Authenticated*\n\n🔐 Use `/githubauth` to start the authentication process\\.\n\nYou'll receive an OAuth URL and device code to complete authentication in your browser\\.".to_string()
                     };
                     
+                    let keyboard = if auth_result.authenticated {
+                        InlineKeyboardMarkup::new(vec![
+                            vec![InlineKeyboardButton::switch_inline_query_current_chat("📂 List Repositories", "/githubrepolist")],
+                        ])
+                    } else {
+                        InlineKeyboardMarkup::new(vec![
+                            vec![InlineKeyboardButton::switch_inline_query_current_chat("🔐 Start Authentication", "/githubauth")],
+                        ])
+                    };
+                    
                     bot.send_message(msg.chat.id, message)
                         .parse_mode(ParseMode::MarkdownV2)
+                        .reply_markup(keyboard)
                         .await?;
                 }
                 Err(e) => {
@@ -667,13 +695,24 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
             {
                 Ok(claude_client) => {
                     let container_id_short = claude_client.container_id().chars().take(12).collect::<String>();
-                    bot.send_message(
-                        msg.chat.id,
-                        format!("✅ Coding session started successfully\\!\n\n*Container ID:* `{}`\n*Container Name:* `{}`\n\n🎯 Claude Code is pre\\-installed and ready to use\\!\n\nYou can now run code and manage your development environment\\.",
-                                escape_markdown_v2(&container_id_short), escape_markdown_v2(&container_name))
-                    )
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await?;
+                    let message = format!("✅ Coding session started successfully\\!\n\n*Container ID:* `{}`\n*Container Name:* `{}`\n\n🎯 Claude Code is pre\\-installed and ready to use\\!\n\nYou can now run code and manage your development environment\\.",
+                                escape_markdown_v2(&container_id_short), escape_markdown_v2(&container_name));
+                    
+                    let keyboard = InlineKeyboardMarkup::new(vec![
+                        vec![
+                            InlineKeyboardButton::switch_inline_query_current_chat("🔐 Auth Claude", "/authenticateclaude"),
+                            InlineKeyboardButton::switch_inline_query_current_chat("🐙 Auth GitHub", "/githubauth"),
+                        ],
+                        vec![
+                            InlineKeyboardButton::switch_inline_query_current_chat("📊 Claude Status", "/claudestatus"),
+                            InlineKeyboardButton::switch_inline_query_current_chat("📋 GitHub Status", "/githubstatus"),
+                        ],
+                    ]);
+                    
+                    bot.send_message(msg.chat.id, message)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .reply_markup(keyboard)
+                        .await?;
                 }
                 Err(e) => {
                     bot.send_message(
@@ -836,6 +875,21 @@ mod markdown_v2_tests {
     #[test]
     fn test_escape_markdown_v2_empty_string() {
         assert_eq!(escape_markdown_v2(""), "");
+    }
+
+    #[test]
+    fn test_markdownv2_url_format() {
+        let url = "https://github.com/device";
+        let display_text = "Click here";
+        let formatted = format!("[{}]({})", escape_markdown_v2(display_text), url);
+        assert_eq!(formatted, "[Click here](https://github.com/device)");
+    }
+
+    #[test] 
+    fn test_markdownv2_code_block_format() {
+        let code = "ABC-123";
+        let formatted = format!("```{}```", escape_markdown_v2(code));
+        assert_eq!(formatted, "```ABC\\-123```");
     }
 }
 
