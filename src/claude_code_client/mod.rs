@@ -2,7 +2,8 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot};
 
 pub mod container_utils;
@@ -35,6 +36,7 @@ pub struct ClaudeCodeConfig {
 
 #[derive(Debug, Clone)]
 pub enum InteractiveLoginState {
+    PressEnterToRetry,
     DarkMode,
     SelectLoginMethod,
     ProvideUrl(String),
@@ -68,6 +70,7 @@ pub struct InteractiveLoginSession {
     pub state: InteractiveLoginState,
     pub url: Option<String>,
     pub awaiting_user_code: bool,
+    pub last_output: Option<String>,
 }
 
 #[derive(Debug)]
@@ -137,6 +140,36 @@ pub struct ClaudeCodeClient {
 
 #[allow(dead_code)]
 impl ClaudeCodeClient {
+    /// Strip ANSI escape sequences from text to clean CLI output
+    fn strip_ansi_codes(text: &str) -> String {
+        // Regular expression to match ANSI escape sequences
+        // This matches: ESC[ followed by any number of digits, semicolons, and ends with a letter
+        let mut result = String::new();
+        let mut chars = text.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' {
+                // Found escape character, check if it's followed by '['
+                if chars.peek() == Some(&'[') {
+                    chars.next(); // consume '['
+                    // Skip until we find a letter (the command character)
+                    while let Some(next_ch) = chars.next() {
+                        if next_ch.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                } else {
+                    // Not an ANSI sequence, keep the character
+                    result.push(ch);
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        
+        result
+    }
+
     /// Create a new Claude Code client for the specified container
     pub fn new(docker: Docker, container_id: String, config: ClaudeCodeConfig) -> Self {
         Self {
@@ -254,6 +287,25 @@ impl ClaudeCodeClient {
         // Entry point debug log
         log::debug!("Starting background_interactive_login function for container: {}", self.container_id);
 
+        // Create log file for Claude CLI output
+        let log_file_path = format!("/tmp/claude_auth_output_{}.log", self.container_id);
+        let log_file = match OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_file_path)
+            .await
+        {
+            Ok(file) => {
+                log::info!("Created Claude CLI output log file: {}", log_file_path);
+                Some(BufWriter::new(file))
+            }
+            Err(e) => {
+                log::warn!("Failed to create Claude CLI output log file: {}", e);
+                None
+            }
+        };
+
         // Send starting state
         let _ = state_sender.send(AuthState::Starting);
 
@@ -300,6 +352,7 @@ impl ClaudeCodeClient {
             state: InteractiveLoginState::DarkMode,
             url: None,
             awaiting_user_code: false,
+            last_output: None,
         };
 
         log::debug!("Starting exec {} with interactive TTY", exec.id);
@@ -310,6 +363,7 @@ impl ClaudeCodeClient {
                 sleep(Duration::from_millis(500)).await;
 
                 let mut stdin = input;
+                let mut log_writer = log_file;
 
                 // Wrap cancel_receiver in Option to handle one-time usage
                 let mut cancel_receiver = Some(cancel_receiver);
@@ -345,8 +399,16 @@ impl ClaudeCodeClient {
                                 log::debug!("Code receiver branch triggered");
                                 if let Some(code) = code {
                                     log::info!("Received auth code from user, sending to CLI");
-                                    log::debug!("Auth code length: {} characters", code.len());
-                                    if let Err(e) = stdin.write_all(format!("{}\n", code).as_bytes()).await {
+                                    log::debug!("Auth code: '{}'", &code);
+
+                                    if let Some(last_output) = session.last_output.as_ref() {
+                                        if last_output.contains("Press Enter to retry") {
+                                            stdin.write_all(b"\r").await?;
+                                            stdin.flush().await?;
+                                        }
+                                    }
+
+                                    if let Err(e) = stdin.write_all(format!("{}\r", code).as_bytes()).await {
                                         log::error!("Failed to write auth code to stdin: {}", e);
                                         let _ = state_sender.send(AuthState::Failed(format!("Failed to send code: {}", e)));
                                         return Err(e.into());
@@ -356,6 +418,7 @@ impl ClaudeCodeClient {
                                         let _ = state_sender.send(AuthState::Failed(format!("Failed to flush stdin: {}", e)));
                                         return Err(e.into());
                                     }
+                                    
                                     log::debug!("Successfully sent auth code to CLI");
                                 } else {
                                     break;
@@ -366,7 +429,7 @@ impl ClaudeCodeClient {
                             msg = output.next() => {
                                 log::debug!("CLI output branch triggered");
                                 if let Some(Ok(msg)) = msg {
-                                    let text = match msg {
+                                    let raw_text = match msg {
                                         bollard::container::LogOutput::StdOut { message } => {
                                             log::debug!("Received stdout from CLI");
                                             String::from_utf8_lossy(&message).to_string()
@@ -385,7 +448,26 @@ impl ClaudeCodeClient {
                                         }
                                     };
 
+                                    // Strip ANSI escape sequences for clean processing
+                                    let text = Self::strip_ansi_codes(&raw_text);
+                                    session.last_output = Some(text.clone());
+
                                     log::debug!("Claude CLI output: {}", text);
+
+                                    // Write all CLI output to log file (both raw and cleaned)
+                                    if let Some(ref mut writer) = log_writer {
+                                        use std::time::SystemTime;
+                                        let timestamp = SystemTime::now()
+                                            .duration_since(SystemTime::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0);
+                                        let log_entry = format!("[{}] TEXT: {}", timestamp, text);
+                                        if let Err(e) = writer.write_all(log_entry.as_bytes()).await {
+                                            log::warn!("Failed to write to Claude CLI log file: {}", e);
+                                        } else if let Err(e) = writer.flush().await {
+                                            log::warn!("Failed to flush Claude CLI log file: {}", e);
+                                        }
+                                    }
 
                                     // Update state based on output
                                     log::debug!("Parsing CLI output to determine new state");
@@ -393,6 +475,19 @@ impl ClaudeCodeClient {
                                     log::debug!("State transition: {:?} -> {:?}", session.state, new_state);
 
                                     match &new_state {
+                                        InteractiveLoginState::PressEnterToRetry => {
+                                            log::debug!("State: PressEnterToRetry detected, pressing enter to continue");
+                                            if let Err(e) = stdin.write_all(b"\r").await {
+                                                log::error!("Failed to send enter: {}", e);
+                                                return Err(e.into());
+                                            }
+                                            if let Err(e) = stdin.flush().await {
+                                                log::error!("Failed to flush stdin: {}", e);
+                                                return Err(e.into());
+                                            }
+                                            session.state = new_state.clone();
+                                            log::debug!("Successfully handled PressEnterToRetry state");
+                                        }
                                         InteractiveLoginState::DarkMode => {
                                             log::debug!("State: DarkMode detected, pressing enter to continue");
                                             if let Err(e) = stdin.write_all(b"\r").await {
@@ -422,11 +517,13 @@ impl ClaudeCodeClient {
                                         InteractiveLoginState::ProvideUrl(url) => {
                                             log::info!("State: ProvideUrl - Authentication URL detected: {}", url);
                                             session.url = Some(url.clone());
-                                            session.state = new_state.clone();
 
                                             // Send URL to user via channel
                                             log::debug!("Sending UrlReady state to user");
                                             let _ = state_sender.send(AuthState::UrlReady(url.clone()));
+                                            let _ = state_sender.send(AuthState::WaitingForCode);
+                                            session.state = InteractiveLoginState::WaitingForCode;
+                                            log::info!("Authentication URL sent to user, waiting for code input");
                                             log::debug!("Successfully handled ProvideUrl state");
                                         }
                                         InteractiveLoginState::WaitingForCode => {
@@ -441,7 +538,8 @@ impl ClaudeCodeClient {
                                         }
                                         InteractiveLoginState::LoginSuccessful => {
                                             log::info!("State: LoginSuccessful - pressing enter to continue");
-                                            if let Err(e) = stdin.write_all(b"\r").await {
+                                          
+                                            if let Err(e) = stdin.write_all(b"/exit\r").await {
                                                 log::error!("Failed to send enter for login successful: {}", e);
                                                 return Err(e.into());
                                             }
@@ -516,6 +614,14 @@ impl ClaudeCodeClient {
                     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
                 }).await;
 
+                // Flush and close log file
+                if let Some(mut writer) = log_writer {
+                    if let Err(e) = writer.flush().await {
+                        log::warn!("Failed to flush Claude CLI log file before closing: {}", e);
+                    }
+                    log::info!("Claude CLI output logged to: {}", log_file_path);
+                }
+
                 log::debug!("Authentication timeout result: {:?}", timeout_result.is_ok());
                 match timeout_result {
                     Ok(Ok(())) => {
@@ -585,6 +691,8 @@ impl ClaudeCodeClient {
             InteractiveLoginState::SecurityNotes
         } else if output_lower.contains("do you trust the files in this folder") {
             InteractiveLoginState::TrustFiles
+        } else if output_lower.contains("press enter to retry") {
+            InteractiveLoginState::PressEnterToRetry
         } else {
             // Don't treat everything as an error, just continue with current state
             log::debug!("Unrecognized CLI output state, continuing with DarkMode");
