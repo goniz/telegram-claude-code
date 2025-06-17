@@ -25,3 +25,7 @@ ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # Set working directory
 WORKDIR /workspace
+
+RUN echo '{ "hasCompletedOnboarding": true }' > $HOME/.claude.json
+RUN /opt/entrypoint.sh -c \
+		"nvm use default && claude config set hasTrustDialogAccepted true"
