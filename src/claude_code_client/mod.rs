@@ -537,7 +537,7 @@ impl ClaudeCodeClient {
                                             log::debug!("Successfully handled WaitingForCode state");
                                         }
                                         InteractiveLoginState::LoginSuccessful => {
-                                            log::info!("State: LoginSuccessful - pressing enter to continue")
+                                            log::info!("State: LoginSuccessful - pressing enter to continue");
                                           
                                             if let Err(e) = stdin.write_all(b"/exit\r").await {
                                                 log::error!("Failed to send enter for login successful: {}", e);
