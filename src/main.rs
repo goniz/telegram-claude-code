@@ -668,7 +668,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
     match cmd {
         Command::Help => {
             let help_text = generate_help_text();
-            bot.send_message(msg.chat.id, help_text)
+            bot.send_message(msg.chat.id, escape_markdown_v2(&help_text))
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
         }
@@ -809,6 +809,38 @@ mod help_format_tests {
         
         // Verify we have a non-empty help text
         assert!(!help_text.is_empty(), "Help text should not be empty");
+    }
+
+    #[test]
+    fn test_help_text_escaping_for_markdownv2() {
+        // Get the raw help text
+        let help_text = generate_help_text();
+        
+        // Apply escaping
+        let escaped_help_text = escape_markdown_v2(&help_text);
+        
+        // Verify that special characters are properly escaped
+        // The help text should not contain unescaped MarkdownV2 special characters
+        // after escaping, except for intentional formatting
+        
+        // Check that if the original contains special chars, they are escaped
+        if help_text.contains('-') {
+            assert!(escaped_help_text.contains("\\-"), 
+                "Hyphen should be escaped in MarkdownV2 format");
+        }
+        
+        // Verify the escaped text is different from original if special chars exist
+        let has_special_chars = help_text.chars().any(|c| 
+            "_*[]()~`>#+-=|{}.!".contains(c)
+        );
+        
+        if has_special_chars {
+            assert_ne!(help_text, escaped_help_text, 
+                "Escaped text should differ from original when special characters exist");
+        }
+        
+        // Verify that the escaping function produces a valid result
+        assert!(!escaped_help_text.is_empty(), "Escaped help text should not be empty");
     }
 }
 
