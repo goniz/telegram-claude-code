@@ -260,7 +260,7 @@ impl ClaudeCodeClient {
         // Create exec with TTY enabled for interactive mode
         log::debug!("Creating exec configuration for Claude CLI interactive mode");
         let exec_config = CreateExecOptions {
-            cmd: Some(vec!["claude".to_string()]),
+            cmd: Some(vec!["claude".to_string(), "/login".to_string()]),
             attach_stdin: Some(true),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
@@ -315,8 +315,8 @@ impl ClaudeCodeClient {
                 let mut cancel_receiver = Some(cancel_receiver);
 
                 // Process the interactive session with channel communication
-                log::debug!("Starting interactive authentication loop with 5-minute timeout");
-                let timeout_result = tokio::time::timeout(Duration::from_secs(300), async {
+                log::debug!("Starting interactive authentication loop with 2-minute timeout");
+                let timeout_result = tokio::time::timeout(Duration::from_secs(120), async {
                     loop {
                         log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
@@ -358,7 +358,7 @@ impl ClaudeCodeClient {
                                     }
                                     log::debug!("Successfully sent auth code to CLI");
                                 } else {
-                                    log::debug!("Code receiver returned None (channel closed)");
+                                    break;
                                 }
                             }
                             
@@ -395,7 +395,7 @@ impl ClaudeCodeClient {
                                     match &new_state {
                                         InteractiveLoginState::DarkMode => {
                                             log::debug!("State: DarkMode detected, pressing enter to continue");
-                                            if let Err(e) = stdin.write_all(b"\n").await {
+                                            if let Err(e) = stdin.write_all(b"\r").await {
                                                 log::error!("Failed to send enter for dark mode: {}", e);
                                                 return Err(e.into());
                                             }
@@ -408,7 +408,7 @@ impl ClaudeCodeClient {
                                         }
                                         InteractiveLoginState::SelectLoginMethod => {
                                             log::debug!("State: SelectLoginMethod detected, choosing option 1 (account authentication)");
-                                            if let Err(e) = stdin.write_all(b"1\n").await {
+                                            if let Err(e) = stdin.write_all(b"\r").await {
                                                 log::error!("Failed to send login method selection: {}", e);
                                                 return Err(e.into());
                                             }
@@ -441,7 +441,7 @@ impl ClaudeCodeClient {
                                         }
                                         InteractiveLoginState::LoginSuccessful => {
                                             log::info!("State: LoginSuccessful - pressing enter to continue");
-                                            if let Err(e) = stdin.write_all(b"\n").await {
+                                            if let Err(e) = stdin.write_all(b"\r").await {
                                                 log::error!("Failed to send enter for login successful: {}", e);
                                                 return Err(e.into());
                                             }
@@ -454,7 +454,7 @@ impl ClaudeCodeClient {
                                         }
                                         InteractiveLoginState::SecurityNotes => {
                                             log::debug!("State: SecurityNotes detected, pressing enter to continue");
-                                            if let Err(e) = stdin.write_all(b"\n").await {
+                                            if let Err(e) = stdin.write_all(b"\r").await {
                                                 log::error!("Failed to send enter for security notes: {}", e);
                                                 return Err(e.into());
                                             }
@@ -467,7 +467,7 @@ impl ClaudeCodeClient {
                                         }
                                         InteractiveLoginState::TrustFiles => {
                                             log::info!("State: TrustFiles prompt detected, completing authentication");
-                                            if let Err(e) = stdin.write_all(b"\n").await {
+                                            if let Err(e) = stdin.write_all(b"\r").await {
                                                 log::error!("Failed to send enter for trust files: {}", e);
                                                 return Err(e.into());
                                             }
@@ -587,6 +587,8 @@ impl ClaudeCodeClient {
             InteractiveLoginState::TrustFiles
         } else {
             // Don't treat everything as an error, just continue with current state
+            log::debug!("Unrecognized CLI output state, continuing with DarkMode");
+            log::warn!("Unrecognized CLI output state: {}", output);
             InteractiveLoginState::DarkMode // Default state to continue processing
         }
     }
