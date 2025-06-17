@@ -1,6 +1,6 @@
 use bollard::Docker;
 use rstest::*;
-use telegram_bot::{container_utils, ClaudeCodeConfig, AuthState};
+use telegram_bot::{container_utils, AuthState, ClaudeCodeConfig};
 use uuid;
 
 /// Test fixture that provides a Docker client
@@ -17,6 +17,7 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 #[rstest]
 #[tokio::test]
 async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
+    pretty_env_logger::init();
     let container_name = format!("test-auth-url-{}", uuid::Uuid::new_v4());
 
     // Use a reasonable timeout
@@ -24,16 +25,20 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
 
     let test_result = tokio::time::timeout(test_timeout, async {
         println!("=== STEP 1: Starting coding session ===");
-        
+
         // Step 1: Start a coding session (same as bot does)
         let claude_client = match container_utils::start_coding_session(
             &docker,
             &container_name,
             ClaudeCodeConfig::default(),
         )
-        .await {
+        .await
+        {
             Ok(client) => {
-                println!("✅ Coding session started with container: {}", client.container_id());
+                println!(
+                    "✅ Coding session started with container: {}",
+                    client.container_id()
+                );
                 client
             }
             Err(e) => {
@@ -43,7 +48,7 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
         };
 
         println!("=== STEP 2: Initiating Claude authentication (same API as bot) ===");
-        
+
         // Step 2: Authenticate using the same API the bot uses
         let auth_handle = match claude_client.authenticate_claude_account().await {
             Ok(handle) => {
@@ -57,16 +62,16 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
         };
 
         println!("=== STEP 3: Monitoring authentication states ===");
-        
+
         // Step 3: Monitor authentication states (same as the bot does)
         let mut state_receiver = auth_handle.state_receiver;
         let mut url_received = false;
         let mut auth_started = false;
-        
+
         // Track states we've seen
         while let Some(state) = state_receiver.recv().await {
             println!("📡 Received auth state: {:?}", state);
-            
+
             match state {
                 AuthState::Starting => {
                     println!("✅ Authentication process started");
@@ -74,14 +79,16 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
                 }
                 AuthState::UrlReady(url) => {
                     println!("🔗 URL received: {}", url);
-                    
+
                     // Verify the URL looks valid
                     if url.starts_with("https://") {
                         println!("✅ URL appears to be valid HTTPS URL");
                         url_received = true;
-                        
+
                         // Test passes once we receive a valid URL - this is the main goal
-                        println!("🎯 SUCCESS: Authentication process yielded URL to user as expected");
+                        println!(
+                            "🎯 SUCCESS: Authentication process yielded URL to user as expected"
+                        );
                         break;
                     } else {
                         println!("❌ URL does not start with https://: {}", url);
@@ -113,16 +120,20 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
             }
         }
 
+        let _ = auth_handle.cancel_sender.send(());
+        drop(auth_handle.code_sender);
+
         // Verify test objectives
         if !auth_started {
             return Err("Authentication never started".into());
         }
 
         if !url_received {
-            println!("⚠️  URL was not received, but authentication process started - this may be expected in test environment");
-            println!("✅ Test verified that authentication API works and process can be initiated");
+            return Err("No URL received during authentication".into());
         } else {
-            println!("🎯 FULL SUCCESS: Authentication process worked up to URL generation as required");
+            println!(
+                "🎯 FULL SUCCESS: Authentication process worked up to URL generation as required"
+            );
         }
 
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
