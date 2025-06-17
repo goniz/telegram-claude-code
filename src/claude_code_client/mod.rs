@@ -2,7 +2,8 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot};
 
 pub mod container_utils;
@@ -69,6 +70,7 @@ pub struct InteractiveLoginSession {
     pub state: InteractiveLoginState,
     pub url: Option<String>,
     pub awaiting_user_code: bool,
+    pub last_output: Option<String>,
 }
 
 #[derive(Debug)]
@@ -285,6 +287,25 @@ impl ClaudeCodeClient {
         // Entry point debug log
         log::debug!("Starting background_interactive_login function for container: {}", self.container_id);
 
+        // Create log file for Claude CLI output
+        let log_file_path = format!("/tmp/claude_auth_output_{}.log", self.container_id);
+        let log_file = match OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_file_path)
+            .await
+        {
+            Ok(file) => {
+                log::info!("Created Claude CLI output log file: {}", log_file_path);
+                Some(BufWriter::new(file))
+            }
+            Err(e) => {
+                log::warn!("Failed to create Claude CLI output log file: {}", e);
+                None
+            }
+        };
+
         // Send starting state
         let _ = state_sender.send(AuthState::Starting);
 
@@ -331,6 +352,7 @@ impl ClaudeCodeClient {
             state: InteractiveLoginState::DarkMode,
             url: None,
             awaiting_user_code: false,
+            last_output: None,
         };
 
         log::debug!("Starting exec {} with interactive TTY", exec.id);
@@ -341,6 +363,7 @@ impl ClaudeCodeClient {
                 sleep(Duration::from_millis(500)).await;
 
                 let mut stdin = input;
+                let mut log_writer = log_file;
 
                 // Wrap cancel_receiver in Option to handle one-time usage
                 let mut cancel_receiver = Some(cancel_receiver);
@@ -377,7 +400,15 @@ impl ClaudeCodeClient {
                                 if let Some(code) = code {
                                     log::info!("Received auth code from user, sending to CLI");
                                     log::debug!("Auth code: '{}'", &code);
-                                    if let Err(e) = stdin.write_all(format!("{}\n", code).as_bytes()).await {
+
+                                    if let Some(last_output) = session.last_output.as_ref() {
+                                        if last_output.contains("Press Enter to retry") {
+                                            stdin.write_all(b"\r").await?;
+                                            stdin.flush().await?;
+                                        }
+                                    }
+
+                                    if let Err(e) = stdin.write_all(format!("{}\r", code).as_bytes()).await {
                                         log::error!("Failed to write auth code to stdin: {}", e);
                                         let _ = state_sender.send(AuthState::Failed(format!("Failed to send code: {}", e)));
                                         return Err(e.into());
@@ -419,8 +450,24 @@ impl ClaudeCodeClient {
 
                                     // Strip ANSI escape sequences for clean processing
                                     let text = Self::strip_ansi_codes(&raw_text);
+                                    session.last_output = Some(text.clone());
 
                                     log::debug!("Claude CLI output: {}", text);
+
+                                    // Write all CLI output to log file (both raw and cleaned)
+                                    if let Some(ref mut writer) = log_writer {
+                                        use std::time::SystemTime;
+                                        let timestamp = SystemTime::now()
+                                            .duration_since(SystemTime::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0);
+                                        let log_entry = format!("[{}] TEXT: {}", timestamp, text);
+                                        if let Err(e) = writer.write_all(log_entry.as_bytes()).await {
+                                            log::warn!("Failed to write to Claude CLI log file: {}", e);
+                                        } else if let Err(e) = writer.flush().await {
+                                            log::warn!("Failed to flush Claude CLI log file: {}", e);
+                                        }
+                                    }
 
                                     // Update state based on output
                                     log::debug!("Parsing CLI output to determine new state");
@@ -470,11 +517,13 @@ impl ClaudeCodeClient {
                                         InteractiveLoginState::ProvideUrl(url) => {
                                             log::info!("State: ProvideUrl - Authentication URL detected: {}", url);
                                             session.url = Some(url.clone());
-                                            session.state = new_state.clone();
 
                                             // Send URL to user via channel
                                             log::debug!("Sending UrlReady state to user");
                                             let _ = state_sender.send(AuthState::UrlReady(url.clone()));
+                                            let _ = state_sender.send(AuthState::WaitingForCode);
+                                            session.state = InteractiveLoginState::WaitingForCode;
+                                            log::info!("Authentication URL sent to user, waiting for code input");
                                             log::debug!("Successfully handled ProvideUrl state");
                                         }
                                         InteractiveLoginState::WaitingForCode => {
@@ -563,6 +612,14 @@ impl ClaudeCodeClient {
                     log::debug!("Exiting authentication loop");
                     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
                 }).await;
+
+                // Flush and close log file
+                if let Some(mut writer) = log_writer {
+                    if let Err(e) = writer.flush().await {
+                        log::warn!("Failed to flush Claude CLI log file before closing: {}", e);
+                    }
+                    log::info!("Claude CLI output logged to: {}", log_file_path);
+                }
 
                 log::debug!("Authentication timeout result: {:?}", timeout_result.is_ok());
                 match timeout_result {
