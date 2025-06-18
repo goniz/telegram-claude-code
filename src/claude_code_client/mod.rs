@@ -633,12 +633,12 @@ impl ClaudeCodeClient {
                         let _ = state_sender.send(AuthState::Failed(format!("Authentication error: {}", e)));
                     }
                     Err(_) => {
-                        log::warn!("Authentication process timed out after 5 minutes (300 seconds)");
+                        log::warn!("Authentication process timed out after 2 minutes (120 seconds)");
                         log::debug!("Timeout context - CLI may be unresponsive or waiting for input");
                         log::debug!("Current session state: {:?}", session.state);
                         log::debug!("Awaiting user code: {}", session.awaiting_user_code);
                         log::debug!("Session URL: {:?}", session.url);
-                        let _ = state_sender.send(AuthState::Failed("Authentication timed out after 5 minutes".to_string()));
+                        let _ = state_sender.send(AuthState::Failed("Authentication timed out after 2 minutes".to_string()));
                     }
                 }
             }
