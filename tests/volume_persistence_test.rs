@@ -41,11 +41,17 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
     // Step 2: Create some test authentication data
     println!("=== STEP 2: Creating test authentication data ===");
     let test_commands = vec![
-        // Create test Claude authentication file
+        // Create test Claude authentication file in directory
         vec![
             "sh".to_string(),
             "-c".to_string(),
             "echo '{\"test\": \"claude_auth_data\"}' > /root/.claude/test_auth.json".to_string(),
+        ],
+        // Create test Claude configuration file
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo '{\"api_key\": \"test_claude_config\"}' > /root/.claude.json".to_string(),
         ],
         // Create test GitHub authentication data
         vec![
@@ -97,6 +103,17 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
     assert!(claude_data_result.is_ok(), "Should be able to read Claude auth data");
     let claude_data = claude_data_result.unwrap();
     assert!(claude_data.contains("claude_auth_data"), "Claude auth data should persist");
+    
+    // Check Claude configuration file (.claude.json)
+    let claude_config_result = container_utils::exec_command_in_container(
+        &docker,
+        second_client.container_id(),
+        vec!["cat".to_string(), "/root/.claude.json".to_string()],
+    ).await;
+    
+    assert!(claude_config_result.is_ok(), "Should be able to read Claude config file");
+    let claude_config = claude_config_result.unwrap();
+    assert!(claude_config.contains("test_claude_config"), "Claude config file should persist");
     
     // Check GitHub authentication data
     let github_data_result = container_utils::exec_command_in_container(

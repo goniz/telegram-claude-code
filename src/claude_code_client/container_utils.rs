@@ -1,7 +1,7 @@
 use bollard::container::{Config, CreateContainerOptions, RemoveContainerOptions};
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::image::CreateImageOptions;
-use bollard::volume::{CreateVolumeOptions, ListVolumesOptions};
+use bollard::volume::CreateVolumeOptions;
 use bollard::models::{Mount, MountTypeEnum, HostConfig};
 use bollard::Docker;
 use futures_util::StreamExt;
@@ -24,38 +24,7 @@ pub async fn ensure_user_volume(
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let volume_name = generate_volume_name(telegram_user_id);
     
-    // Check if volume already exists
-    let list_options = ListVolumesOptions {
-        filters: {
-            let mut filters = HashMap::new();
-            filters.insert("name".to_string(), vec![volume_name.clone()]);
-            filters
-        },
-    };
-    
-    match docker.list_volumes(Some(list_options)).await {
-        Ok(volumes) => {
-            // Check if our volume exists in the list
-            let volume_exists = volumes.volumes
-                .as_ref()
-                .map(|vol_list| {
-                    vol_list.iter().any(|vol| {
-                        Some(volume_name.clone()) == Some(vol.name.clone())
-                    })
-                })
-                .unwrap_or(false);
-                
-            if volume_exists {
-                log::info!("Volume '{}' already exists, reusing", volume_name);
-                return Ok(volume_name);
-            }
-        }
-        Err(e) => {
-            log::warn!("Failed to list volumes (will attempt creation anyway): {}", e);
-        }
-    }
-    
-    // Create the volume if it doesn't exist
+    // Create the volume - Docker will return an error if it already exists
     let create_options = CreateVolumeOptions {
         name: volume_name.clone(),
         driver: "local".to_string(),
@@ -77,7 +46,7 @@ pub async fn ensure_user_volume(
         Err(e) => {
             // Check if the error is because the volume already exists
             if e.to_string().contains("already exists") || e.to_string().contains("Conflict") {
-                log::info!("Volume '{}' already exists (race condition), continuing", volume_name);
+                log::info!("Volume '{}' already exists, reusing", volume_name);
                 Ok(volume_name)
             } else {
                 Err(format!("Failed to create volume '{}': {}", volume_name, e).into())
@@ -121,10 +90,12 @@ async fn init_volume_structure(
         // Remove existing directories/files if they exist (they might be empty from container creation)
         vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()],
         vec!["rm".to_string(), "-rf".to_string(), "/root/.config/gh".to_string()],
+        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()],
         
         // Create symbolic links to volume storage
         vec!["ln".to_string(), "-sf".to_string(), "/volume_data/claude".to_string(), "/root/.claude".to_string()],
         vec!["ln".to_string(), "-sf".to_string(), "/volume_data/gh".to_string(), "/root/.config/gh".to_string()],
+        vec!["ln".to_string(), "-sf".to_string(), "/volume_data/claude.json".to_string(), "/root/.claude.json".to_string()],
     ];
     
     for command in init_commands {
