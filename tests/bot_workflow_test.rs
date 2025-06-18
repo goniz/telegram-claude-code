@@ -26,6 +26,7 @@ async fn test_complete_start_claudestatus_workflow(docker: Docker) {
         &docker,
         &container_name,
         ClaudeCodeConfig::default(),
+        12345, // Test user ID
     )
     .await;
 

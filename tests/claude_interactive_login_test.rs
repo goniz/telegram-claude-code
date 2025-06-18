@@ -36,6 +36,7 @@ async fn test_interactive_login_flow_dark_mode(docker: Docker) {
             &docker,
             &container_name,
             ClaudeCodeConfig::default(),
+            12345, // Test user ID
         )
         .await?;
 

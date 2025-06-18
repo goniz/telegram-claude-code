@@ -31,6 +31,7 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
             &docker,
             &container_name,
             ClaudeCodeConfig::default(),
+            12345, // Test user ID
         )
         .await
         {

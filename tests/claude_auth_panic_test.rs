@@ -37,6 +37,7 @@ async fn test_claude_auth_no_panic_on_cancel(docker: Docker) {
             &docker,
             &container_name,
             ClaudeCodeConfig::default(),
+            12345, // Test user ID
         )
         .await?;
 
@@ -106,6 +107,7 @@ async fn test_claude_auth_no_panic_with_multiple_polls(docker: Docker) {
             &docker,
             &container_name,
             ClaudeCodeConfig::default(),
+            12346, // Test user ID
         )
         .await?;
 
