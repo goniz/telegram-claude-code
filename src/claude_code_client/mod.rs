@@ -475,7 +475,7 @@ impl ClaudeCodeClient {
                                         }
                                         InteractiveLoginState::SelectLoginMethod => {
                                             log::debug!("State: SelectLoginMethod detected, choosing option 1 (account authentication)");
-                                            if let Err(e) = stdin.write_all(b"\r").await {
+                                            if let Err(e) = stdin.write_all(b"1\r").await {
                                                 log::error!("Failed to send login method selection: {}", e);
                                                 return Err(e.into());
                                             }
