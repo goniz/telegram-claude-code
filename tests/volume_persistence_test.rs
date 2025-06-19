@@ -25,6 +25,10 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
     let test_user_id = 999999; // Test user ID
     let container_name = format!("test-volume-{}", Uuid::new_v4());
     
+    // Clean up any existing volume before starting test
+    let volume_name = container_utils::generate_volume_name(&test_user_id.to_string());
+    let _ = docker.remove_volume(&volume_name, None).await;
+    
     // Step 1: Start first coding session
     println!("=== STEP 1: Starting first coding session ===");
     let first_session = container_utils::start_coding_session(
@@ -91,7 +95,7 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
     )
     .await;
     
-    assert!(second_session.is_ok(), "Second session should start successfully");
+    assert!(second_session.is_ok(), "Second session should start successfully: {:?}", second_session.as_ref().err());
     let second_client = second_session.unwrap();
     
     // Step 5: Verify that authentication data persisted
@@ -143,6 +147,12 @@ async fn test_volume_isolation_between_users(docker: Docker) {
     let user_id_2 = 222222;
     let container_name_1 = format!("test-isolation-1-{}", Uuid::new_v4());
     let container_name_2 = format!("test-isolation-2-{}", Uuid::new_v4());
+    
+    // Clean up any existing volumes before starting test
+    let volume_name_1 = container_utils::generate_volume_name(&user_id_1.to_string());
+    let volume_name_2 = container_utils::generate_volume_name(&user_id_2.to_string());
+    let _ = docker.remove_volume(&volume_name_1, None).await;
+    let _ = docker.remove_volume(&volume_name_2, None).await;
     
     // Step 1: Start sessions for both users
     println!("=== STEP 1: Starting sessions for two different users ===");
@@ -253,6 +263,10 @@ async fn test_use_persistant_volume_setting(docker: Docker) {
     let test_user_id = 555555; // Test user ID
     let container_name_with_volume = format!("test-with-volume-{}", Uuid::new_v4());
     let container_name_without_volume = format!("test-without-volume-{}", Uuid::new_v4());
+    
+    // Clean up any existing volume before starting test
+    let volume_name = container_utils::generate_volume_name(&test_user_id.to_string());
+    let _ = docker.remove_volume(&volume_name, None).await;
     
     // Test 1: Start session WITH persistent volume
     println!("=== Testing with persistent_volume_key = Some(...) ===");
