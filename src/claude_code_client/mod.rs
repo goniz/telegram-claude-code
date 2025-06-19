@@ -325,7 +325,6 @@ impl ClaudeCodeClient {
                     .to_string(),
                 "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
                 "TERM=xterm".to_string(),
-                "BROWSER=none".to_string(),
             ]),
             ..Default::default()
         };
