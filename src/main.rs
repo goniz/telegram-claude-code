@@ -771,8 +771,9 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 &bot_state.docker,
                 &container_name,
                 ClaudeCodeConfig::default(),
-                user_id,
-                container_utils::CodingContainerConfig { use_persistant_volume: true },
+                container_utils::CodingContainerConfig { 
+                    persistent_volume_key: Some(user_id.to_string()) 
+                },
             )
             .await
             {

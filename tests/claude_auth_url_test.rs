@@ -21,7 +21,6 @@ pub async fn claude_url_session() -> (Docker, ClaudeCodeClient, String) {
         &docker,
         &container_name,
         ClaudeCodeConfig::default(),
-        12345, // Test user ID
         container_utils::CodingContainerConfig::default(),
     )
     .await

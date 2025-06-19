@@ -24,7 +24,6 @@ pub async fn claude_session_for_cancel() -> (Docker, ClaudeCodeClient, String) {
         &docker,
         &container_name,
         ClaudeCodeConfig::default(),
-        12345, // Test user ID
         container_utils::CodingContainerConfig::default(),
     )
     .await
@@ -45,7 +44,6 @@ pub async fn claude_session_for_polls() -> (Docker, ClaudeCodeClient, String) {
         &docker,
         &container_name,
         ClaudeCodeConfig::default(),
-        12346, // Test user ID
         container_utils::CodingContainerConfig::default(),
     )
     .await

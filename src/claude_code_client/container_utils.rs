@@ -10,13 +10,13 @@ use std::collections::HashMap;
 /// Configuration for coding container behavior
 #[derive(Debug, Clone)]
 pub struct CodingContainerConfig {
-    pub use_persistant_volume: bool,
+    pub persistent_volume_key: Option<String>,
 }
 
 impl Default for CodingContainerConfig {
     fn default() -> Self {
         Self {
-            use_persistant_volume: false,
+            persistent_volume_key: None,
         }
     }
 }
@@ -26,17 +26,17 @@ impl Default for CodingContainerConfig {
 pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/goniz/telegram-claude-code-runtime:main";
 
 /// Generate a volume name for a user's persistent authentication data
-pub fn generate_volume_name(telegram_user_id: i64) -> String {
-    format!("dev-session-claude-{}", telegram_user_id)
+pub fn generate_volume_name(volume_key: &str) -> String {
+    format!("dev-session-claude-{}", volume_key)
 }
 
 /// Create or get existing volume for user authentication persistence
 /// This function is idempotent - it will not fail if the volume already exists
 pub async fn ensure_user_volume(
     docker: &Docker,
-    telegram_user_id: i64,
+    volume_key: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let volume_name = generate_volume_name(telegram_user_id);
+    let volume_name = generate_volume_name(volume_key);
     
     // Create the volume - Docker will return an error if it already exists
     let create_options = CreateVolumeOptions {
@@ -46,7 +46,7 @@ pub async fn ensure_user_volume(
         labels: {
             let mut labels = HashMap::new();
             labels.insert("created_by".to_string(), "telegram-claude-code".to_string());
-            labels.insert("telegram_user_id".to_string(), telegram_user_id.to_string());
+            labels.insert("volume_key".to_string(), volume_key.to_string());
             labels.insert("purpose".to_string(), "authentication_persistence".to_string());
             labels
         },
@@ -54,7 +54,7 @@ pub async fn ensure_user_volume(
     
     match docker.create_volume(create_options).await {
         Ok(_) => {
-            log::info!("Created new volume '{}' for user {}", volume_name, telegram_user_id);
+            log::info!("Created new volume '{}' for key {}", volume_name, volume_key);
             Ok(volume_name)
         }
         Err(e) => {
@@ -256,7 +256,6 @@ pub async fn start_coding_session(
     docker: &Docker,
     container_name: &str,
     claude_config: crate::ClaudeCodeConfig,
-    telegram_user_id: i64,
     container_config: CodingContainerConfig,
 ) -> Result<crate::ClaudeCodeClient, Box<dyn std::error::Error + Send + Sync>> {
     use crate::ClaudeCodeClient;
@@ -282,9 +281,9 @@ pub async fn start_coding_session(
     }
 
     // Conditionally handle persistent volumes based on configuration
-    let auth_mounts = if container_config.use_persistant_volume {
+    let auth_mounts = if let Some(volume_key) = &container_config.persistent_volume_key {
         // Ensure user volume exists for authentication persistence
-        let volume_name = ensure_user_volume(docker, telegram_user_id).await?;
+        let volume_name = ensure_user_volume(docker, volume_key).await?;
         
         // Create volume mounts for authentication persistence
         create_auth_mounts(&volume_name)
@@ -331,7 +330,7 @@ pub async fn start_coding_session(
     wait_for_container_ready(docker, &container.id).await?;
     
     // Initialize volume structure for authentication persistence only if using persistent volumes
-    if container_config.use_persistant_volume {
+    if container_config.persistent_volume_key.is_some() {
         init_volume_structure(docker, &container.id).await?;
     }
 

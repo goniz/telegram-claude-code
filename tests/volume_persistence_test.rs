@@ -15,7 +15,7 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
     let _ = container_utils::clear_coding_session(docker, container_name).await;
     
     // Clean up volume
-    let volume_name = container_utils::generate_volume_name(user_id);
+    let volume_name = container_utils::generate_volume_name(&user_id.to_string());
     let _ = docker.remove_volume(&volume_name, None).await;
 }
 
@@ -31,8 +31,9 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
         &docker,
         &container_name,
         ClaudeCodeConfig::default(),
-        test_user_id,
-        container_utils::CodingContainerConfig { use_persistant_volume: true },
+        container_utils::CodingContainerConfig { 
+            persistent_volume_key: Some(test_user_id.to_string()) 
+        },
     )
     .await;
     
@@ -84,8 +85,9 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
         &docker,
         &second_container_name,
         ClaudeCodeConfig::default(),
-        test_user_id, // Same user ID
-        container_utils::CodingContainerConfig { use_persistant_volume: true },
+        container_utils::CodingContainerConfig { 
+            persistent_volume_key: Some(test_user_id.to_string()) 
+        },
     )
     .await;
     
@@ -149,8 +151,9 @@ async fn test_volume_isolation_between_users(docker: Docker) {
         &docker,
         &container_name_1,
         ClaudeCodeConfig::default(),
-        user_id_1,
-        container_utils::CodingContainerConfig { use_persistant_volume: true },
+        container_utils::CodingContainerConfig { 
+            persistent_volume_key: Some(user_id_1.to_string()) 
+        },
     )
     .await;
     
@@ -158,8 +161,9 @@ async fn test_volume_isolation_between_users(docker: Docker) {
         &docker,
         &container_name_2,
         ClaudeCodeConfig::default(),
-        user_id_2,
-        container_utils::CodingContainerConfig { use_persistant_volume: true },
+        container_utils::CodingContainerConfig { 
+            persistent_volume_key: Some(user_id_2.to_string()) 
+        },
     )
     .await;
     
@@ -230,17 +234,17 @@ async fn test_volume_isolation_between_users(docker: Docker) {
 #[tokio::test]
 async fn test_volume_name_generation() {
     // Test volume name generation function
-    let user_id = 12345;
-    let volume_name = container_utils::generate_volume_name(user_id);
+    let volume_key = "12345";
+    let volume_name = container_utils::generate_volume_name(volume_key);
     
     assert_eq!(volume_name, "dev-session-claude-12345");
     
-    // Test with different user ID
-    let user_id_2 = 67890;
-    let volume_name_2 = container_utils::generate_volume_name(user_id_2);
+    // Test with different volume key
+    let volume_key_2 = "67890";
+    let volume_name_2 = container_utils::generate_volume_name(volume_key_2);
     
     assert_eq!(volume_name_2, "dev-session-claude-67890");
-    assert_ne!(volume_name, volume_name_2, "Different users should have different volume names");
+    assert_ne!(volume_name, volume_name_2, "Different keys should have different volume names");
 }
 
 #[rstest]
@@ -251,52 +255,58 @@ async fn test_use_persistant_volume_setting(docker: Docker) {
     let container_name_without_volume = format!("test-without-volume-{}", Uuid::new_v4());
     
     // Test 1: Start session WITH persistent volume
-    println!("=== Testing with use_persistant_volume = true ===");
+    println!("=== Testing with persistent_volume_key = Some(...) ===");
     let session_with_volume = container_utils::start_coding_session(
         &docker,
         &container_name_with_volume,
         ClaudeCodeConfig::default(),
-        test_user_id,
-        container_utils::CodingContainerConfig { use_persistant_volume: true },
+        container_utils::CodingContainerConfig { 
+            persistent_volume_key: Some(test_user_id.to_string()) 
+        },
     )
     .await;
     
-    assert!(session_with_volume.is_ok(), "Session with persistent volume should start successfully");
+    assert!(session_with_volume.is_ok(), "Session with persistent volume should start successfully: {:?}", session_with_volume.as_ref().err());
     let client_with_volume = session_with_volume.unwrap();
     
-    // Verify volume mounts exist in container (volumes should be mounted at /volume_data)
-    let volume_check_result = container_utils::exec_command_in_container(
+    // Verify volume initialization occurred (symlinks should point to volume_data when persistent volume is enabled)
+    let symlink_target_result = container_utils::exec_command_in_container(
         &docker,
         client_with_volume.container_id(),
-        vec!["test".to_string(), "-d".to_string(), "/volume_data".to_string()],
+        vec!["readlink".to_string(), "/root/.claude".to_string()],
     ).await;
     
-    assert!(volume_check_result.is_ok(), "Volume directory should exist when persistent volume is enabled");
+    assert!(symlink_target_result.is_ok(), "Should be able to read symlink when persistent volume is enabled");
+    let symlink_target = symlink_target_result.unwrap();
+    assert!(symlink_target.contains("/volume_data/claude"), "Symlink should point to volume_data when persistent volume is enabled, but points to: {}", symlink_target);
     
     // Test 2: Start session WITHOUT persistent volume
-    println!("=== Testing with use_persistant_volume = false ===");
+    println!("=== Testing with persistent_volume_key = None ===");
     let session_without_volume = container_utils::start_coding_session(
         &docker,
         &container_name_without_volume,
         ClaudeCodeConfig::default(),
-        test_user_id,
-        container_utils::CodingContainerConfig { use_persistant_volume: false },
+        container_utils::CodingContainerConfig { persistent_volume_key: None },
     )
     .await;
     
     assert!(session_without_volume.is_ok(), "Session without persistent volume should start successfully");
     let client_without_volume = session_without_volume.unwrap();
     
-    // Verify volume directory does NOT exist in container
-    let no_volume_check_result = container_utils::exec_command_in_container(
+    // Verify volume initialization did NOT occur (symlinks should not point to volume_data)
+    let no_symlink_target_result = container_utils::exec_command_in_container(
         &docker,
         client_without_volume.container_id(),
-        vec!["test".to_string(), "-d".to_string(), "/volume_data".to_string()],
+        vec!["readlink".to_string(), "/root/.claude".to_string()],
     ).await;
     
-    assert!(no_volume_check_result.is_err(), "Volume directory should NOT exist when persistent volume is disabled");
+    // Either readlink should fail (not a symlink) OR it should not point to /volume_data
+    if let Ok(symlink_target) = no_symlink_target_result {
+        assert!(!symlink_target.contains("/volume_data"), "Symlink should NOT point to volume_data when persistent volume is disabled, but points to: {}", symlink_target);
+    }
+    // If readlink fails, that's also acceptable (means it's not a symlink)
     
-    println!("✅ use_persistant_volume setting works correctly!");
+    println!("✅ persistent_volume_key setting works correctly!");
     
     // Cleanup
     cleanup_test_resources(&docker, &container_name_with_volume, test_user_id).await;
