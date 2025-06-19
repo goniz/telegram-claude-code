@@ -287,7 +287,7 @@ impl ClaudeCodeClient {
         log::debug!("Starting background_interactive_login function for container: {}", self.container_id);
 
         // Create log file for Claude CLI output
-        let log_file_path = format!("/tmp/claude_auth_output_{}.log", self.container_id);
+        let log_file_path = "/tmp/claude_auth_output.log";
         let log_file = match OpenOptions::new()
             .create(true)
             .write(true)
@@ -368,8 +368,8 @@ impl ClaudeCodeClient {
                 let mut cancel_receiver = Some(cancel_receiver);
 
                 // Process the interactive session with channel communication
-                log::debug!("Starting interactive authentication loop with 2-minute timeout");
-                let timeout_result = tokio::time::timeout(Duration::from_secs(120), async {
+                log::debug!("Starting interactive authentication loop with 30s timeout");
+                let timeout_result = tokio::time::timeout(Duration::from_secs(30), async {
                     loop {
                         log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
@@ -629,6 +629,7 @@ impl ClaudeCodeClient {
         let output_lower = output.to_lowercase();
 
         if output_lower.contains("select login method") {
+            log::debug!("Detected 'select login method' pattern");
             InteractiveLoginState::SelectLoginMethod
         } else if output_lower.contains("use the url below to sign in") || output_lower.contains("visit:") || output_lower.contains("https://") {
             // Extract URL from output - look for any https:// URL
@@ -673,7 +674,7 @@ impl ClaudeCodeClient {
             // Don't treat everything as an error, just continue with current state
             log::debug!("Unrecognized CLI output state, continuing with current state: {}", output);
             log::warn!("Unrecognized CLI output state: {}", output);
-            return current_state; // Default state to continue processing
+            current_state // Default state to continue processing
         }
     }
 
