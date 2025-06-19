@@ -169,6 +169,18 @@ async fn main() {
 
     log::info!("Connected to Docker daemon");
 
+    // Clear any existing session containers from previous runs
+    match container_utils::clear_all_session_containers(&docker).await {
+        Ok(count) => {
+            if count > 0 {
+                log::info!("Cleared {} existing session containers on startup", count);
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to clear existing session containers: {}", e);
+        }
+    }
+
     // Start pulling the latest runtime image in the background
     tokio::spawn(pull_runtime_image_async(docker.clone()));
 
