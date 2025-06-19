@@ -79,7 +79,7 @@ async fn init_volume_structure(
     container_id: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create the persistent directories in the volume if they don't exist
-    let init_commands = vec![
+    let basic_commands = vec![
         // Create volume directories
         vec!["mkdir".to_string(), "-p".to_string(), "/volume_data/claude".to_string()],
         vec!["mkdir".to_string(), "-p".to_string(), "/volume_data/gh".to_string()],
@@ -90,23 +90,65 @@ async fn init_volume_structure(
         // Remove existing directories/files if they exist (they might be empty from container creation)
         vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()],
         vec!["rm".to_string(), "-rf".to_string(), "/root/.config/gh".to_string()],
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()],
+    ];
+    
+    for command in basic_commands {
+        exec_command_in_container(docker, container_id, command.clone()).await
+            .map_err(|e| format!("Failed to initialize volume directory structure: {}", e))?;
+    }
+    
+    // Handle .claude.json file initialization specially
+    // First check if it already exists in the volume (from previous sessions)
+    let volume_claude_json_check = exec_command_in_container(
+        docker, 
+        container_id, 
+        vec!["test".to_string(), "-f".to_string(), "/volume_data/claude.json".to_string()]
+    ).await;
+    
+    if volume_claude_json_check.is_err() {
+        // File doesn't exist in volume yet, check if it exists in container (from Dockerfile)
+        let container_claude_json_check = exec_command_in_container(
+            docker, 
+            container_id, 
+            vec!["test".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
+        ).await;
         
-        // Create symbolic links to volume storage
+        if container_claude_json_check.is_ok() {
+            // File exists in container, copy its contents to volume
+            exec_command_in_container(
+                docker,
+                container_id,
+                vec!["cp".to_string(), "/root/.claude.json".to_string(), "/volume_data/claude.json".to_string()]
+            ).await
+            .map_err(|e| format!("Failed to copy existing .claude.json to volume: {}", e))?;
+        } else {
+            // File doesn't exist anywhere, initialize with empty JSON
+            exec_command_in_container(
+                docker,
+                container_id,
+                vec!["sh".to_string(), "-c".to_string(), "echo '{}' > /volume_data/claude.json".to_string()]
+            ).await
+            .map_err(|e| format!("Failed to initialize .claude.json in volume: {}", e))?;
+        }
+    }
+    
+    // Remove existing .claude.json if it exists
+    let _ = exec_command_in_container(
+        docker,
+        container_id,
+        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
+    ).await;
+    
+    // Create symbolic links to volume storage
+    let symlink_commands = vec![
         vec!["ln".to_string(), "-sf".to_string(), "/volume_data/claude".to_string(), "/root/.claude".to_string()],
         vec!["ln".to_string(), "-sf".to_string(), "/volume_data/gh".to_string(), "/root/.config/gh".to_string()],
         vec!["ln".to_string(), "-sf".to_string(), "/volume_data/claude.json".to_string(), "/root/.claude.json".to_string()],
     ];
     
-    for command in init_commands {
-        match exec_command_in_container(docker, container_id, command.clone()).await {
-            Ok(_) => {
-                log::debug!("Successfully executed volume init command: {:?}", command);
-            }
-            Err(e) => {
-                log::warn!("Volume init command failed (continuing anyway): {:?} - {}", command, e);
-            }
-        }
+    for command in symlink_commands {
+        exec_command_in_container(docker, container_id, command.clone()).await
+            .map_err(|e| format!("Failed to create authentication symlink: {}", e))?;
     }
     
     log::info!("Volume structure initialization completed");
