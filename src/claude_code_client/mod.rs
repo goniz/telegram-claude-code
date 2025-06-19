@@ -44,6 +44,7 @@ pub enum InteractiveLoginState {
     SecurityNotes,
     TrustFiles,
     Completed,
+    OAuthPortError,
     Error(String),
 }
 
@@ -402,7 +403,7 @@ impl ClaudeCodeClient {
                                     let _ = stdin.write_all(code.as_bytes()).await;
                                     let _ = stdin.flush().await;
 
-                                    let _ = stdin.write_all("\r".as_bytes()).await;
+                                    let _ = stdin.write_all(b"\r").await;
                                     let _ = stdin.flush().await;
                                     
                                     log::debug!("Successfully sent auth code to CLI");
@@ -486,6 +487,11 @@ impl ClaudeCodeClient {
                                             log::debug!("Successfully selected login method");
                                         }
                                         InteractiveLoginState::ProvideUrl(url) => {
+                                            if new_state == session.state {
+                                                log::debug!("State is still ProvideUrl, no action needed");
+                                                continue; // No change, continue waiting
+                                            }
+
                                             log::info!("State: ProvideUrl - Authentication URL detected: {}", url);
                                             session.url = Some(url.clone());
                                             session.state = new_state.clone();
@@ -559,6 +565,14 @@ impl ClaudeCodeClient {
                                             log::info!("Authentication completed successfully via Completed state");
                                             return Ok(());
                                         }
+                                        InteractiveLoginState::OAuthPortError => {
+                                            log::warn!("State: OAuthPortError - Port 54545 is already in use");
+                                            let error_msg = "OAuth error: Port 54545 is already in use. Please ensure no other applications are using this port.\n\nPress Enter to retry.";
+                                            log::debug!("Sending OAuth port error state to user");
+                                            let _ = state_sender.send(AuthState::Failed(error_msg.to_string()));
+                                            log::error!("Authentication failed due to OAuth port conflict");
+                                            return Err(error_msg.into());
+                                        }
                                         InteractiveLoginState::Error(err) => {
                                             log::warn!("State: Error encountered in interactive login: {}", err);
                                             log::debug!("Sending error state to user");
@@ -630,6 +644,13 @@ impl ClaudeCodeClient {
         log::debug!("Current state: {:?}", current_state);
         log::debug!("Output buffer length: {}, contains 'select login method': {}", output.len(), output_lower.contains("select login method"));
 
+        // Check for OAuth port error first
+        if output_lower.contains("oauth error: port 54545 is already in use") || 
+           (output_lower.contains("port 54545") && output_lower.contains("already in use")) {
+            log::debug!("Detected OAuth port 54545 conflict error");
+            return InteractiveLoginState::OAuthPortError;
+        }
+        
         if output_lower.contains("select login method") || output_lower.contains("claude account with subscription") {
             log::debug!("Detected login method selection screen");
             InteractiveLoginState::SelectLoginMethod
