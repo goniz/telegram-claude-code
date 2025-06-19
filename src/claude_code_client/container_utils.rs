@@ -86,6 +86,34 @@ pub fn create_auth_mounts(volume_name: &str) -> Vec<Mount> {
     ]
 }
 
+/// Initialize Claude configuration in the container
+/// This sets up the Claude configuration files regardless of volume usage
+async fn init_claude_configuration(
+    docker: &Docker,
+    container_id: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Initializing Claude configuration...");
+    
+    // Initialize .claude.json with required configuration
+    exec_command_in_container(
+        docker,
+        container_id,
+        vec!["sh".to_string(), "-c".to_string(), "echo '{ \"hasCompletedOnboarding\": true }' > /root/.claude.json".to_string()]
+    ).await
+    .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
+    
+    // Set Claude configuration for trust dialog
+    exec_command_in_container(
+        docker,
+        container_id,
+        vec!["sh".to_string(), "-c".to_string(), "/opt/entrypoint.sh -c \"nvm use default && claude config set hasTrustDialogAccepted true\"".to_string()]
+    ).await
+    .map_err(|e| format!("Failed to set Claude trust dialog configuration: {}", e))?;
+    
+    log::info!("Claude configuration initialization completed");
+    Ok(())
+}
+
 /// Initialize volume structure by creating symbolic links to persistent storage
 /// This sets up the authentication directories to point to volume storage
 async fn init_volume_structure(
@@ -111,7 +139,7 @@ async fn init_volume_structure(
             .map_err(|e| format!("Failed to initialize volume directory structure: {}", e))?;
     }
     
-    // Handle .claude.json file initialization specially
+    // Handle .claude.json file for volume persistence
     // First check if it already exists in the volume (from previous sessions)
     let volume_claude_json_check = exec_command_in_container(
         docker, 
@@ -120,30 +148,13 @@ async fn init_volume_structure(
     ).await;
     
     if volume_claude_json_check.is_err() {
-        // File doesn't exist in volume yet, check if it exists in container (from Dockerfile)
-        let container_claude_json_check = exec_command_in_container(
-            docker, 
-            container_id, 
-            vec!["test".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
-        ).await;
-        
-        if container_claude_json_check.is_ok() {
-            // File exists in container, copy its contents to volume
-            exec_command_in_container(
-                docker,
-                container_id,
-                vec!["cp".to_string(), "/root/.claude.json".to_string(), "/volume_data/claude.json".to_string()]
-            ).await
-            .map_err(|e| format!("Failed to copy existing .claude.json to volume: {}", e))?;
-        } else {
-            // File doesn't exist anywhere, initialize with empty JSON
-            exec_command_in_container(
-                docker,
-                container_id,
-                vec!["sh".to_string(), "-c".to_string(), "echo '{}' > /volume_data/claude.json".to_string()]
-            ).await
-            .map_err(|e| format!("Failed to initialize .claude.json in volume: {}", e))?;
-        }
+        // File doesn't exist in volume, copy the one we just created to volume
+        exec_command_in_container(
+            docker,
+            container_id,
+            vec!["cp".to_string(), "/root/.claude.json".to_string(), "/volume_data/claude.json".to_string()]
+        ).await
+        .map_err(|e| format!("Failed to copy .claude.json to volume: {}", e))?;
     }
     
     // Remove existing .claude.json if it exists
@@ -211,6 +222,19 @@ pub async fn exec_command_in_container(
         }
         bollard::exec::StartExecResults::Detached => {
             return Err("Unexpected detached execution".into());
+        }
+    }
+
+    // Check the exit code of the command
+    let inspect_exec = docker.inspect_exec(&exec.id).await?;
+    if let Some(exit_code) = inspect_exec.exit_code {
+        if exit_code != 0 {
+            return Err(format!(
+                "Command failed with exit code {}: {}",
+                exit_code,
+                output.trim()
+            )
+            .into());
         }
     }
 
@@ -328,6 +352,9 @@ pub async fn start_coding_session(
 
     // Wait for container to be ready
     wait_for_container_ready(docker, &container.id).await?;
+    
+    // Initialize Claude configuration (always needed regardless of volume usage)
+    init_claude_configuration(docker, &container.id).await?;
     
     // Initialize volume structure for authentication persistence only if using persistent volumes
     if container_config.persistent_volume_key.is_some() {
