@@ -1,12 +1,32 @@
 use bollard::Docker;
 use rstest::*;
-use telegram_bot::{container_utils, AuthState, ClaudeCodeConfig};
+use telegram_bot::{container_utils, AuthState, ClaudeCodeClient, ClaudeCodeConfig};
 use uuid;
 
 /// Test fixture that provides a Docker client
 #[fixture]
 pub fn docker() -> Docker {
     Docker::connect_with_local_defaults().expect("Failed to connect to Docker")
+}
+
+/// Test fixture that creates a coding session container outside timeout blocks
+/// This ensures Docker image pulling doesn't interfere with timing accuracy
+#[fixture]
+pub async fn claude_url_session() -> (Docker, ClaudeCodeClient, String) {
+    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
+    let container_name = format!("test-auth-url-{}", uuid::Uuid::new_v4());
+    
+    // Start coding session outside of timeout - this may pull Docker images
+    let claude_client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        12345, // Test user ID
+    )
+    .await
+    .expect("Failed to start coding session for URL test");
+    
+    (docker, claude_client, container_name)
 }
 
 /// Cleanup fixture that ensures test containers are removed
@@ -16,37 +36,22 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 
 #[rstest]
 #[tokio::test]
-async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
+async fn test_claude_auth_url_generation_like_bot(
+    #[future] claude_url_session: (Docker, ClaudeCodeClient, String)
+) {
     pretty_env_logger::init();
-    let container_name = format!("test-auth-url-{}", uuid::Uuid::new_v4());
+    let (docker, claude_client, container_name) = claude_url_session.await;
 
-    // Use a reasonable timeout
+    // Use a reasonable timeout for the time-sensitive test logic
+    // Note: Container creation now happens outside this timeout block for timing accuracy
     let test_timeout = tokio::time::Duration::from_secs(300); // 5 minutes
 
     let test_result = tokio::time::timeout(test_timeout, async {
-        println!("=== STEP 1: Starting coding session ===");
-
-        // Step 1: Start a coding session (same as bot does)
-        let claude_client = match container_utils::start_coding_session(
-            &docker,
-            &container_name,
-            ClaudeCodeConfig::default(),
-            12345, // Test user ID
-        )
-        .await
-        {
-            Ok(client) => {
-                println!(
-                    "✅ Coding session started with container: {}",
-                    client.container_id()
-                );
-                client
-            }
-            Err(e) => {
-                println!("❌ Failed to start coding session: {}", e);
-                return Err(e);
-            }
-        };
+        println!("=== STEP 1: Coding session already started ===");
+        println!(
+            "✅ Coding session started with container: {}",
+            claude_client.container_id()
+        );
 
         println!("=== STEP 2: Initiating Claude authentication (same API as bot) ===");
 
