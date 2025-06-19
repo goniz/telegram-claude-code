@@ -401,9 +401,10 @@ impl ClaudeCodeClient {
                                     log::debug!("Auth code: '{}'", &code);
 
                                     let _ = stdin.write_all(code.as_bytes()).await;
+                                    let _ = stdin.write_all(b"\r").await;
                                     let _ = stdin.flush().await;
 
-                                    let _ = stdin.write_all(b"\r").await;
+                                    let _ = stdin.write_all(b"\n").await;
                                     let _ = stdin.flush().await;
                                     
                                     log::debug!("Successfully sent auth code to CLI");
@@ -460,14 +461,14 @@ impl ClaudeCodeClient {
                                     let new_state = self.parse_cli_output_for_state(session.state.clone(), &text);
                                     log::debug!("State transition: {:?} -> {:?}", session.state, new_state);
 
+                                    if new_state == session.state {
+                                        log::debug!("No state change detected, continuing to wait for next output");
+                                        continue; // No change, continue waiting
+                                    }
+
                                     match &new_state {
                                         InteractiveLoginState::Starting => {
                                             log::info!("State: Starting - waiting output from CLI");
-
-                                            if new_state == session.state {
-                                                log::debug!("State is still Starting, no action needed");
-                                                continue; // No change, continue waiting
-                                            }
 
                                             session.state = new_state.clone();
                                             let _ = state_sender.send(AuthState::Starting);
@@ -487,11 +488,6 @@ impl ClaudeCodeClient {
                                             log::debug!("Successfully selected login method");
                                         }
                                         InteractiveLoginState::ProvideUrl(url) => {
-                                            if new_state == session.state {
-                                                log::debug!("State is still ProvideUrl, no action needed");
-                                                continue; // No change, continue waiting
-                                            }
-
                                             log::info!("State: ProvideUrl - Authentication URL detected: {}", url);
                                             session.url = Some(url.clone());
                                             session.state = new_state.clone();
@@ -499,7 +495,13 @@ impl ClaudeCodeClient {
                                             // Send URL to user via channel
                                             log::debug!("Sending UrlReady state to user");
                                             let _ = state_sender.send(AuthState::UrlReady(url.clone()));
+
                                             log::info!("Authentication URL sent to user, waiting for code input");
+                                            log::debug!("Sending WaitingForCode state to user");
+                                            let _ = state_sender.send(AuthState::WaitingForCode);
+                                            session.awaiting_user_code = true;
+                                            session.state = InteractiveLoginState::WaitingForCode;
+
                                             log::debug!("Successfully handled ProvideUrl state");
                                         }
                                         InteractiveLoginState::WaitingForCode => {
