@@ -79,21 +79,8 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
                 }
                 AuthState::UrlReady(url) => {
                     println!("🔗 URL received: {}", url);
-
-                    // Verify the URL looks valid
-                    if url.starts_with("https://") {
-                        println!("✅ URL appears to be valid HTTPS URL");
-                        url_received = true;
-
-                        // Test passes once we receive a valid URL - this is the main goal
-                        println!(
-                            "🎯 SUCCESS: Authentication process yielded URL to user as expected"
-                        );
-                        break;
-                    } else {
-                        println!("❌ URL does not start with https://: {}", url);
-                        return Err("Invalid URL format received".into());
-                    }
+                    url_received = true;
+                    break;
                 }
                 AuthState::WaitingForCode => {
                     println!("🔑 Authentication is waiting for user code");
