@@ -20,7 +20,49 @@ jobs:
         toolchain: stable
       
     - name: Test
-      run: cargo test --verbose -- --nocapture
+      run: cargo test --lib --bins --verbose -- --nocapture
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - bot_workflow_test
+          - check_auth_status_test
+          - claude_auth_panic_test
+          - claude_auth_test
+          - claude_auth_url_test
+          - claude_integration_tests
+          - claude_status_test
+          - claude_timeout_test
+          - github_auth_test
+          - github_client_tests
+          - github_oauth_early_return_test
+          - github_status_integration_test
+          - github_timeout_test
+          - timeout_integration_test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+      
+    - name: Run integration test - ${{ matrix.test }}
+      run: cargo test --test ${{ matrix.test }} --verbose -- --nocapture
+      
+    - name: Upload claude output file on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: claude-output-${{ matrix.test }}
+        path: /tmp/claude_auth_output.log
+        retention-days: 7
+        if-no-files-found: ignore
 
   docker:
     runs-on: ${{ matrix.runner }}

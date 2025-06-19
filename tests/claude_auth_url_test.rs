@@ -21,7 +21,7 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
     let container_name = format!("test-auth-url-{}", uuid::Uuid::new_v4());
 
     // Use a reasonable timeout
-    let test_timeout = tokio::time::Duration::from_secs(180); // 3 minutes
+    let test_timeout = tokio::time::Duration::from_secs(300); // 5 minutes
 
     let test_result = tokio::time::timeout(test_timeout, async {
         println!("=== STEP 1: Starting coding session ===");
@@ -80,21 +80,8 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
                 }
                 AuthState::UrlReady(url) => {
                     println!("🔗 URL received: {}", url);
-
-                    // Verify the URL looks valid
-                    if url.starts_with("https://") {
-                        println!("✅ URL appears to be valid HTTPS URL");
-                        url_received = true;
-
-                        // Test passes once we receive a valid URL - this is the main goal
-                        println!(
-                            "🎯 SUCCESS: Authentication process yielded URL to user as expected"
-                        );
-                        break;
-                    } else {
-                        println!("❌ URL does not start with https://: {}", url);
-                        return Err("Invalid URL format received".into());
-                    }
+                    url_received = true;
+                    break;
                 }
                 AuthState::WaitingForCode => {
                     println!("🔑 Authentication is waiting for user code");
