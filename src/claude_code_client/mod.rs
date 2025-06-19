@@ -367,8 +367,8 @@ impl ClaudeCodeClient {
                 let mut cancel_receiver = Some(cancel_receiver);
 
                 // Process the interactive session with channel communication
-                log::debug!("Starting interactive authentication loop with 2-minute timeout");
-                let timeout_result = tokio::time::timeout(Duration::from_secs(120), async {
+                log::debug!("Starting interactive authentication loop with 5-minute timeout");
+                let timeout_result = tokio::time::timeout(Duration::from_secs(300), async {
                     loop {
                         log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
