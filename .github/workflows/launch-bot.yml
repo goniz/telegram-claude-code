@@ -1,0 +1,45 @@
+name: Launch Bot
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  launch-bot:
+    # Only run on pull requests when comment starts with "/launch-bot"
+    if: >
+      github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      (startsWith(github.event.comment.body, '/launch-bot') ||
+       startsWith(github.event.comment.body, '/launch-bot '))
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Get PR details
+      id: pr
+      run: |
+        pr_number=${{ github.event.issue.number }}
+        pr_info=$(curl -s \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/pulls/${pr_number}")
+        echo "head_sha=$(echo "$pr_info" | jq -r '.head.sha')" >> $GITHUB_OUTPUT
+
+    - name: Checkout PR code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ steps.pr.outputs.head_sha }}
+
+    - name: Setup Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+
+    - name: Launch bot with timeout
+      timeout-minutes: 15
+      env:
+        RUST_LOG: info
+        TELOXIDE_TOKEN: ${{ secrets.STAGING_TOKEN }}
+      run: |
+        echo "Starting Telegram bot with 15-minute timeout..."
+        cargo run
+        echo "Bot execution completed successfully!"
