@@ -3,7 +3,7 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{prelude::*, utils::command::BotCommands, types::{ParseMode, InlineKeyboardMarkup, InlineKeyboardButton}};
+use teloxide::{prelude::*, utils::command::BotCommands, types::{ParseMode, InlineKeyboardMarkup, InlineKeyboardButton}, dispatching::UpdateFilterExt, dptree};
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -106,8 +106,6 @@ enum Command {
     GitHubStatus,
     #[command(description = "List GitHub repositories for the authenticated user")]
     GitHubRepoList,
-    #[command(description = "Provide authentication code for Claude login")]
-    AuthCode { code: String },
 }
 
 // Authentication session state
@@ -169,6 +167,18 @@ async fn main() {
 
     log::info!("Connected to Docker daemon");
 
+    // Clear any existing session containers from previous runs
+    match container_utils::clear_all_session_containers(&docker).await {
+        Ok(count) => {
+            if count > 0 {
+                log::info!("Cleared {} existing session containers on startup", count);
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to clear existing session containers: {}", e);
+        }
+    }
+
     // Start pulling the latest runtime image in the background
     tokio::spawn(pull_runtime_image_async(docker.clone()));
 
@@ -179,11 +189,32 @@ async fn main() {
         auth_sessions: auth_sessions.clone(),
     };
 
-    Command::repl(bot, move |bot, msg, cmd| {
-        let bot_state = bot_state.clone();
-        answer(bot, msg, cmd, bot_state)
-    })
-    .await;
+    // Set up message handler that handles both commands and regular text
+    let bot_state_clone1 = bot_state.clone();
+    let bot_state_clone2 = bot_state.clone();
+    
+    let handler = Update::filter_message()
+        .branch(
+            dptree::entry()
+                .filter_command::<Command>()
+                .endpoint(move |bot, msg, cmd| {
+                    let bot_state = bot_state_clone1.clone();
+                    answer(bot, msg, cmd, bot_state)
+                })
+        )
+        .branch(
+            dptree::filter(|msg: Message| msg.text().is_some())
+                .endpoint(move |bot, msg| {
+                    let bot_state = bot_state_clone2.clone();
+                    handle_text_message(bot, msg, bot_state)
+                })
+        );
+
+    Dispatcher::builder(bot, handler)
+        .enable_ctrlc_handler()
+        .build()
+        .dispatch()
+        .await;
 }
 
 // Generate help text in BotFather format from command descriptions
@@ -224,7 +255,7 @@ async fn handle_auth_state_updates(
             }
             AuthState::UrlReady(url) => {
                 let message = format!(
-                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your Claude account:\n\n*1\\. Click the button below to visit the authentication URL*\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth flow in your browser*\n\n*4\\. If prompted for a code, use* `/authcode <code>`\n\n✨ This will enable full access to your Claude subscription features\\!"
+                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your Claude account:\n\n*1\\. Click the button below to visit the authentication URL*\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth flow in your browser*\n\n*4\\. If prompted for a code, simply paste it here* \\(no command needed\\)\n\n✨ This will enable full access to your Claude subscription features\\!"
                 );
                 
                 let keyboard = InlineKeyboardMarkup::new(vec![
@@ -239,7 +270,7 @@ async fn handle_auth_state_updates(
             AuthState::WaitingForCode => {
                 let _ = bot.send_message(
                     chat_id,
-                    "🔑 *Authentication code required*\n\nPlease check your browser for an authentication code and send it using:\n`/authcode <your_code>`"
+                    "🔑 *Authentication code required*\n\nPlease check your browser for an authentication code and paste it directly into this chat\\. No command needed\\!"
                 )
                 .parse_mode(ParseMode::MarkdownV2)
                 .await;
@@ -510,52 +541,6 @@ async fn handle_github_repo_list(
     Ok(())
 }
 
-// Handle authentication code input
-async fn handle_auth_code(
-    bot: Bot,
-    msg: Message,
-    bot_state: BotState,
-    chat_id: i64,
-    code: String,
-) -> ResponseResult<()> {
-    // Check if there's an active authentication session
-    let session = {
-        let sessions = bot_state.auth_sessions.lock().await;
-        sessions.get(&chat_id).cloned()
-    };
-
-    match session {
-        Some(auth_session) => {
-            // Send the code to the authentication process
-            if let Err(_) = auth_session.code_sender.send(code.clone()) {
-                bot.send_message(
-                    msg.chat.id,
-                    "❌ Failed to send authentication code\\. The authentication session may have expired\\.\n\nPlease restart authentication with `/authenticateclaude`"
-                )
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
-            } else {
-                bot.send_message(
-                    msg.chat.id,
-                    "✅ Authentication code sent\\! Please wait while we complete the authentication process\\.\\.\\."
-                )
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
-            }
-        }
-        None => {
-            bot.send_message(
-                msg.chat.id,
-                "❌ No active authentication session found\\.\n\nPlease start authentication first with `/authenticateclaude`"
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
-        }
-    }
-    
-    Ok(())
-}
-
 // Handle clear session command
 async fn handle_clear_session(
     bot: Bot,
@@ -659,6 +644,99 @@ async fn handle_claude_authentication(
     }
     
     Ok(())
+}
+
+// Handle regular text messages (for authentication codes)
+async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> ResponseResult<()> {
+    let chat_id = msg.chat.id.0;
+    
+    if let Some(text) = msg.text() {
+        // Check if there's an active authentication session
+        let session = {
+            let sessions = bot_state.auth_sessions.lock().await;
+            sessions.get(&chat_id).cloned()
+        };
+
+        if let Some(auth_session) = session {
+            // Check if the text looks like an authentication code
+            if is_authentication_code(text) {
+                // Send the code to the authentication process
+                if let Err(_) = auth_session.code_sender.send(text.to_string()) {
+                    bot.send_message(
+                        msg.chat.id,
+                        "❌ Failed to send authentication code\\. The authentication session may have expired\\.\n\nPlease restart authentication with `/authenticateclaude`"
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
+                } else {
+                    bot.send_message(
+                        msg.chat.id,
+                        "✅ Authentication code received\\! Please wait while we complete the authentication process\\.\\.\\."
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
+                }
+            } else {
+                // Not an auth code, inform user about the ongoing session
+                bot.send_message(
+                    msg.chat.id,
+                    "🔐 *Authentication in Progress*\n\nI'm currently waiting for your authentication code\\. Please paste the code you received during the OAuth flow\\.\n\nIf you need to restart authentication, use `/authenticateclaude`"
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            }
+        }
+        // If no auth session is active, we don't respond to regular text messages
+    }
+    
+    Ok(())
+}
+
+// Helper function to determine if a text looks like an authentication code
+fn is_authentication_code(text: &str) -> bool {
+    let text = text.trim();
+    
+    // Common patterns for authentication codes:
+    // - Claude codes: long alphanumeric with _, -, # (e.g., 'yHNxk8SH0fw861QGEXP80UeTIzJUbSg6BDQWvtN80ecoOGAf#ybFaWRHX0Y5YdJaM9ET8_06if-w9Rwg0X-4lEMdyT7I')
+    // - Other service codes: shorter alphanumeric with dashes or underscores
+    // - Hexadecimal-looking codes
+    // - Base64-looking codes
+    
+    // Check length (typical auth codes are 6-128 characters, Claude codes can be ~96 chars)
+    if text.len() < 6 || text.len() > 128 {
+        return false;
+    }
+    
+    // Check if it contains only valid characters for auth codes
+    // Allow alphanumeric, dashes, underscores, dots, and hash (for Claude codes)
+    let valid_chars = text.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '#');
+    
+    if !valid_chars {
+        return false;
+    }
+    
+    // Check if it looks like a code (has some structure)
+    // At least 6 alphanumeric characters
+    let alphanumeric_count = text.chars().filter(|c| c.is_alphanumeric()).count();
+    
+    if alphanumeric_count < 6 {
+        return false;
+    }
+    
+    // Additional check: if it contains a hash, it should look like a Claude code
+    // Claude codes have the pattern: base64-like#base64-like
+    if text.contains('#') {
+        let parts: Vec<&str> = text.split('#').collect();
+        if parts.len() != 2 {
+            return false; // Should have exactly one # dividing two parts
+        }
+        // Both parts should be substantial (at least 20 chars each for Claude codes)
+        if parts[0].len() < 20 || parts[1].len() < 20 {
+            return false;
+        }
+    }
+    
+    true
 }
 
 // Handler function for bot commands
@@ -768,10 +846,6 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         }
         Command::GitHubRepoList => {
             handle_github_repo_list(bot.clone(), msg, bot_state.clone(), chat_id).await?;
-        }
-
-        Command::AuthCode { code } => {
-            handle_auth_code(bot.clone(), msg, bot_state.clone(), chat_id, code).await?;
         }
     }
 
@@ -981,5 +1055,59 @@ mod repo_format_tests {
         let input = "owner/project1\tDescription 1\nowner/project2    Description 2\nowner/project3";
         let expected = "• [owner/project1](https://github.com/owner/project1) \\- Description 1\n• [owner/project2](https://github.com/owner/project2) \\- Description 2\n• [owner/project3](https://github.com/owner/project3)";
         assert_eq!(format_repo_list_markdown_v2(input), expected);
+    }
+}
+
+#[cfg(test)]
+mod auth_code_detection_tests {
+    use super::*;
+
+    #[test]
+    fn test_is_authentication_code_valid_codes() {
+        // Test valid authentication codes
+        assert!(is_authentication_code("abc123def456"));
+        assert!(is_authentication_code("auth-code-123"));
+        assert!(is_authentication_code("AUTH_CODE_456"));
+        assert!(is_authentication_code("a1b2c3d4e5f6"));
+        assert!(is_authentication_code("code123"));
+        assert!(is_authentication_code("authentication.code.here"));
+        assert!(is_authentication_code("ABCDEF123456"));
+        assert!(is_authentication_code("auth_token_12345"));
+        
+        // Test Claude authentication code format
+        assert!(is_authentication_code("yHNxk8SH0fw861QGEXP80UeTIzJUbSg6BDQWvtN80ecoOGAf#ybFaWRHX0Y5YdJaM9ET8_06if-w9Rwg0X-4lEMdyT7I"));
+        assert!(is_authentication_code("abcd1234567890abcd1234567890#efgh5678901234efgh5678901234_code-part"));
+        assert!(is_authentication_code("long_part_with_underscores_123#another_long_part_with_more_data_456"));
+    }
+
+    #[test]
+    fn test_is_authentication_code_invalid_codes() {
+        // Test invalid authentication codes
+        assert!(!is_authentication_code(""));
+        assert!(!is_authentication_code("12345")); // Too short
+        assert!(!is_authentication_code("a")); // Too short
+        assert!(!is_authentication_code("hello world")); // Contains space
+        assert!(!is_authentication_code("code@123")); // Contains @
+        assert!(!is_authentication_code("code with spaces")); // Contains spaces
+        assert!(!is_authentication_code("a".repeat(129).as_str())); // Too long
+        assert!(!is_authentication_code("!@#$%^")); // Only special chars
+        assert!(!is_authentication_code("ab123")); // Less than 6 alphanumeric
+        
+        // Test invalid Claude code formats
+        assert!(!is_authentication_code("short#part")); // Parts too short for Claude code
+        assert!(!is_authentication_code("abc#def#ghi")); // Multiple hash symbols
+        assert!(!is_authentication_code("this_is_long_enough_but#short")); // Second part too short
+        assert!(!is_authentication_code("short#this_is_long_enough_but_first_was_short")); // First part too short
+    }
+
+    #[test]
+    fn test_is_authentication_code_edge_cases() {
+        // Test edge cases
+        assert!(is_authentication_code("      abc123def      ")); // With whitespace (trimmed)
+        assert!(is_authentication_code("123456")); // All numeric, minimum length
+        assert!(is_authentication_code("abcdef")); // All letters, minimum length
+        assert!(is_authentication_code("a-b-c-1-2-3")); // With dashes
+        assert!(is_authentication_code("a_b_c_1_2_3")); // With underscores
+        assert!(is_authentication_code("a.b.c.1.2.3")); // With dots
     }
 }

@@ -1,8 +1,9 @@
-use bollard::container::{Config, CreateContainerOptions, RemoveContainerOptions};
+use bollard::container::{Config, CreateContainerOptions, RemoveContainerOptions, ListContainersOptions};
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::image::CreateImageOptions;
 use bollard::Docker;
 use futures_util::StreamExt;
+use std::collections::HashMap;
 
 /// Container image used by the main application
 /// This is the Claude Code runtime image that provides multi-language development environment with Claude Code pre-installed
@@ -138,6 +139,8 @@ pub async fn start_coding_session(
         // Override the default command to prevent interactive shell hang
         // Run setup script then keep container alive with sleep
         cmd: Some(vec!["-c", "sleep infinity"]),
+        // Set stop timeout to ensure graceful shutdown
+        stop_timeout: Some(3),
         ..Default::default()
     };
 
@@ -243,4 +246,49 @@ pub async fn create_test_container(
     wait_for_container_ready(docker, &container.id).await?;
 
     Ok(container.id)
+}
+
+/// Clear all existing session containers on startup
+/// This function finds and removes all containers with names matching the pattern "coding-session-*"
+pub async fn clear_all_session_containers(
+    docker: &Docker,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Clearing all existing session containers...");
+    
+    let mut filters = HashMap::new();
+    filters.insert("name".to_string(), vec!["coding-session-".to_string()]);
+    
+    let list_options = ListContainersOptions {
+        all: true,
+        filters,
+        ..Default::default()
+    };
+    
+    let containers = docker.list_containers(Some(list_options)).await?;
+    let mut cleared_count = 0;
+    
+    for container in containers {
+        if let Some(names) = &container.names {
+            for name in names {
+                // Remove the leading "/" from container name
+                let clean_name = name.strip_prefix('/').unwrap_or(name);
+                if clean_name.starts_with("coding-session-") {
+                    log::info!("Clearing existing session container: {}", clean_name);
+                    match clear_coding_session(docker, clean_name).await {
+                        Ok(()) => {
+                            cleared_count += 1;
+                            log::info!("Successfully cleared container: {}", clean_name);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to clear container {}: {}", clean_name, e);
+                        }
+                    }
+                    break; // Only process the first matching name
+                }
+            }
+        }
+    }
+    
+    log::info!("Cleared {} existing session containers", cleared_count);
+    Ok(cleared_count)
 }
