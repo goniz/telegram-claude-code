@@ -138,6 +138,8 @@ pub async fn start_coding_session(
         // Override the default command to prevent interactive shell hang
         // Run setup script then keep container alive with sleep
         cmd: Some(vec!["-c", "sleep infinity"]),
+        // Set stop timeout to ensure graceful shutdown
+        stop_timeout: Some(3),
         ..Default::default()
     };
 

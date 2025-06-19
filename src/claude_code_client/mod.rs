@@ -34,7 +34,7 @@ pub struct ClaudeCodeConfig {
     pub working_directory: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InteractiveLoginState {
     Starting,
     SelectLoginMethod,
@@ -324,6 +324,7 @@ impl ClaudeCodeClient {
                     .to_string(),
                 "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
                 "TERM=xterm".to_string(),
+                "BROWSER=none".to_string(),
             ]),
             ..Default::default()
         };
@@ -358,8 +359,6 @@ impl ClaudeCodeClient {
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
             bollard::exec::StartExecResults::Attached { mut output, input } => {
                 log::debug!("Successfully attached to exec {}, waiting for CLI to initialize", exec.id);
-                // Give some time for the interactive CLI to start
-                sleep(Duration::from_millis(500)).await;
 
                 let mut stdin = input;
                 let mut log_writer = log_file;
@@ -368,8 +367,8 @@ impl ClaudeCodeClient {
                 let mut cancel_receiver = Some(cancel_receiver);
 
                 // Process the interactive session with channel communication
-                log::debug!("Starting interactive authentication loop with 30s timeout");
-                let timeout_result = tokio::time::timeout(Duration::from_secs(30), async {
+                log::debug!("Starting interactive authentication loop with 2-minute timeout");
+                let timeout_result = tokio::time::timeout(Duration::from_secs(120), async {
                     loop {
                         log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
@@ -400,16 +399,11 @@ impl ClaudeCodeClient {
                                     log::info!("Received auth code from user, sending to CLI");
                                     log::debug!("Auth code: '{}'", &code);
 
-                                    if let Err(e) = stdin.write_all(format!("{}\r", code).as_bytes()).await {
-                                        log::error!("Failed to write auth code to stdin: {}", e);
-                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to send code: {}", e)));
-                                        return Err(e.into());
-                                    }
-                                    if let Err(e) = stdin.flush().await {
-                                        log::error!("Failed to flush stdin after auth code: {}", e);
-                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to flush stdin: {}", e)));
-                                        return Err(e.into());
-                                    }
+                                    let _ = stdin.write_all(code.as_bytes()).await;
+                                    let _ = stdin.flush().await;
+
+                                    let _ = stdin.write_all("\r".as_bytes()).await;
+                                    let _ = stdin.flush().await;
                                     
                                     log::debug!("Successfully sent auth code to CLI");
                                 } else {
@@ -443,7 +437,6 @@ impl ClaudeCodeClient {
                                     // Strip ANSI escape sequences for clean processing
                                     let text = Self::strip_ansi_codes(&raw_text);
                                     session.last_output = Some(text.clone());
-
                                     log::debug!("Claude CLI output: {}", text);
 
                                     // Write all CLI output to log file (both raw and cleaned)
@@ -461,7 +454,7 @@ impl ClaudeCodeClient {
                                         }
                                     }
 
-                                    // Update state based on output
+                                    // Update state based on accumulated output buffer
                                     log::debug!("Parsing CLI output to determine new state");
                                     let new_state = self.parse_cli_output_for_state(session.state.clone(), &text);
                                     log::debug!("State transition: {:?} -> {:?}", session.state, new_state);
@@ -469,13 +462,19 @@ impl ClaudeCodeClient {
                                     match &new_state {
                                         InteractiveLoginState::Starting => {
                                             log::info!("State: Starting - waiting output from CLI");
+
+                                            if new_state == session.state {
+                                                log::debug!("State is still Starting, no action needed");
+                                                continue; // No change, continue waiting
+                                            }
+
                                             session.state = new_state.clone();
                                             let _ = state_sender.send(AuthState::Starting);
                                             log::debug!("Successfully handled Starting state");
                                         }
                                         InteractiveLoginState::SelectLoginMethod => {
                                             log::debug!("State: SelectLoginMethod detected, choosing option 1 (account authentication)");
-                                            if let Err(e) = stdin.write_all(b"1\r").await {
+                                            if let Err(e) = stdin.write_all(b"\r").await {
                                                 log::error!("Failed to send login method selection: {}", e);
                                                 return Err(e.into());
                                             }
@@ -627,9 +626,12 @@ impl ClaudeCodeClient {
     /// Parse CLI output to determine the new state
     fn parse_cli_output_for_state(&self, current_state: InteractiveLoginState, output: &str) -> InteractiveLoginState {
         let output_lower = output.to_lowercase();
+    
+        log::debug!("Current state: {:?}", current_state);
+        log::debug!("Output buffer length: {}, contains 'select login method': {}", output.len(), output_lower.contains("select login method"));
 
-        if output_lower.contains("select login method") {
-            log::debug!("Detected 'select login method' pattern");
+        if output_lower.contains("select login method") || output_lower.contains("claude account with subscription") {
+            log::debug!("Detected login method selection screen");
             InteractiveLoginState::SelectLoginMethod
         } else if output_lower.contains("use the url below to sign in") || output_lower.contains("visit:") || output_lower.contains("https://") {
             // Extract URL from output - look for any https:// URL
