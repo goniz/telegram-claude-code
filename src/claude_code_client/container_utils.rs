@@ -161,6 +161,7 @@ pub async fn exec_command_in_container(
     container_id: &str,
     command: Vec<String>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    println!("Exec Command: {:?}", &command);
     let exec_config = CreateExecOptions {
         cmd: Some(command),
         attach_stdout: Some(true),
