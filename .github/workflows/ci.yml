@@ -22,6 +22,29 @@ jobs:
     - name: Test
       run: cargo test --verbose -- --nocapture
 
+  integration-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - bot_workflow_test
+          - claude_integration_tests
+          - github_status_integration_test
+          - timeout_integration_test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+      
+    - name: Run integration test - ${{ matrix.test }}
+      run: cargo test --test ${{ matrix.test }} --verbose -- --nocapture
+
   docker:
     runs-on: ${{ matrix.runner }}
     strategy:
