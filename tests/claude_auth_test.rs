@@ -2,11 +2,32 @@ use bollard::Docker;
 use rstest::*;
 use std::env;
 use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, AuthState};
+use uuid;
 
 /// Test fixture that provides a Docker client
 #[fixture]
 pub fn docker() -> Docker {
     Docker::connect_with_local_defaults().expect("Failed to connect to Docker")
+}
+
+/// Test fixture that creates a coding session container outside timeout blocks
+/// This ensures Docker image pulling doesn't interfere with timing accuracy
+#[fixture]
+pub async fn claude_auth_session() -> (Docker, ClaudeCodeClient, String) {
+    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
+    let container_name = format!("test-auth-{}", uuid::Uuid::new_v4());
+    
+    // Start coding session outside of timeout - this may pull Docker images
+    let claude_client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        12345, // Test user ID
+    )
+    .await
+    .expect("Failed to start coding session for auth test");
+    
+    (docker, claude_client, container_name)
 }
 
 /// Cleanup fixture that ensures test containers are removed
@@ -17,7 +38,11 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 #[rstest]
 #[tokio::test]
 #[allow(unused_variables)]
-async fn test_claude_authentication_command_workflow(docker: Docker) {
+async fn test_claude_authentication_command_workflow(
+    #[future] claude_auth_session: (Docker, ClaudeCodeClient, String)
+) {
+    let (docker, claude_client, container_name) = claude_auth_session.await;
+    
     // Check if we're in a CI environment
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
     if is_ci {
@@ -26,10 +51,9 @@ async fn test_claude_authentication_command_workflow(docker: Docker) {
         );
     }
 
-    let container_name = format!("test-auth-{}", uuid::Uuid::new_v4());
-
     // Test the authentication workflow as it would happen with the /authenticateclaude command
     // Use a timeout to prevent hanging in CI environments
+    // Note: Container creation now happens outside this timeout block for timing accuracy
     let test_timeout = if is_ci {
         tokio::time::Duration::from_secs(60) // 1 minute in CI
     } else {
@@ -37,48 +61,9 @@ async fn test_claude_authentication_command_workflow(docker: Docker) {
     };
 
     let test_result = tokio::time::timeout(test_timeout, async {
-        // Step 1: Start a coding session first (prerequisite for authentication)
-        println!("=== STEP 1: Starting coding session (prerequisite) ===");
-
-        // Set a shorter timeout for container creation in CI environments
-        let container_timeout = if is_ci {
-            tokio::time::Duration::from_secs(30)
-        } else {
-            tokio::time::Duration::from_secs(90)
-        };
-
-        let claude_client_result = tokio::time::timeout(
-            container_timeout,
-            container_utils::start_coding_session(&docker, &container_name, ClaudeCodeConfig::default(), 12345)
-        ).await;
-
-        let claude_client = match claude_client_result {
-            Ok(Ok(client)) => {
-                println!("✅ Coding session started successfully! Container ID: {}", client.container_id().chars().take(12).collect::<String>());
-                client
-            }
-            Ok(Err(e)) => {
-                println!("⚠️  Container creation failed: {}", e);
-                // In CI, be more lenient about container creation failures
-                if is_ci && (e.to_string().contains("timeout") ||
-                            e.to_string().contains("image") ||
-                            e.to_string().contains("pull") ||
-                            e.to_string().contains("network") ||
-                            e.to_string().contains("docker")) {
-                    println!("🔄 Skipping test due to container/infrastructure issues in CI environment");
-                    return Ok::<(), Box<dyn std::error::Error + Send + Sync>>(());
-                }
-                return Err(format!("Container creation failed: {}", e).into());
-            }
-            Err(_) => {
-                if is_ci {
-                    println!("⚠️  Container creation timed out in CI - skipping test");
-                    return Ok::<(), Box<dyn std::error::Error + Send + Sync>>(());
-                } else {
-                    return Err("Container creation timed out".into());
-                }
-            }
-        };
+        // Step 1: Coding session is already started (outside timeout)
+        println!("=== STEP 1: Coding session already started (prerequisite) ===");
+        println!("✅ Coding session started successfully! Container ID: {}", claude_client.container_id().chars().take(12).collect::<String>());
 
         // Step 2: Simulate finding the session (what happens in /authenticateclaude command)
         println!("=== STEP 2: Finding session for authentication ===");
