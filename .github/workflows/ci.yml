@@ -54,6 +54,15 @@ jobs:
       
     - name: Run integration test - ${{ matrix.test }}
       run: cargo test --test ${{ matrix.test }} --verbose -- --nocapture
+      
+    - name: Upload claude output file on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: claude-output-${{ matrix.test }}
+        path: /tmp/claude_auth_output.log
+        retention-days: 7
+        if-no-files-found: ignore
 
   docker:
     runs-on: ${{ matrix.runner }}
