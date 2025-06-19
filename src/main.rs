@@ -742,6 +742,9 @@ fn is_authentication_code(text: &str) -> bool {
 // Handler function for bot commands
 async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
+    
+    // Use the user ID for volume persistence (same user across different chats)
+    let user_id = msg.from.as_ref().map(|user| user.id.0 as i64).unwrap_or(chat_id);
 
     match cmd {
         Command::Help => {
@@ -768,6 +771,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 &bot_state.docker,
                 &container_name,
                 ClaudeCodeConfig::default(),
+                user_id,
             )
             .await
             {

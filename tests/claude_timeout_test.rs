@@ -36,6 +36,7 @@ async fn test_claude_authentication_timeout_behavior(docker: Docker) {
             &docker,
             &container_name,
             ClaudeCodeConfig::default(),
+            12345, // Test user ID
         )
         .await
         {

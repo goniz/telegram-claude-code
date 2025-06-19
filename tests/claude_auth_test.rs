@@ -49,7 +49,7 @@ async fn test_claude_authentication_command_workflow(docker: Docker) {
 
         let claude_client_result = tokio::time::timeout(
             container_timeout,
-            container_utils::start_coding_session(&docker, &container_name, ClaudeCodeConfig::default())
+            container_utils::start_coding_session(&docker, &container_name, ClaudeCodeConfig::default(), 12345)
         ).await;
 
         let claude_client = match claude_client_result {
