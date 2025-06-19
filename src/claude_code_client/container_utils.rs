@@ -122,11 +122,11 @@ async fn init_volume_structure(
             ).await
             .map_err(|e| format!("Failed to copy existing .claude.json to volume: {}", e))?;
         } else {
-            // File doesn't exist anywhere, initialize with empty JSON
+            // File doesn't exist anywhere, initialize with proper Claude configuration
             exec_command_in_container(
                 docker,
                 container_id,
-                vec!["sh".to_string(), "-c".to_string(), "echo '{}' > /volume_data/claude.json".to_string()]
+                vec!["sh".to_string(), "-c".to_string(), "echo '{ \"hasCompletedOnboarding\": true }' > /volume_data/claude.json".to_string()]
             ).await
             .map_err(|e| format!("Failed to initialize .claude.json in volume: {}", e))?;
         }
@@ -197,6 +197,19 @@ pub async fn exec_command_in_container(
         }
         bollard::exec::StartExecResults::Detached => {
             return Err("Unexpected detached execution".into());
+        }
+    }
+
+    // Check the exit code of the command
+    let inspect_exec = docker.inspect_exec(&exec.id).await?;
+    if let Some(exit_code) = inspect_exec.exit_code {
+        if exit_code != 0 {
+            return Err(format!(
+                "Command failed with exit code {}: {}",
+                exit_code,
+                output.trim()
+            )
+            .into());
         }
     }
 
