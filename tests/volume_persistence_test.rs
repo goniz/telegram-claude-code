@@ -32,6 +32,7 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
         &container_name,
         ClaudeCodeConfig::default(),
         test_user_id,
+        container_utils::CodingContainerConfig { use_persistant_volume: true },
     )
     .await;
     
@@ -84,6 +85,7 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
         &second_container_name,
         ClaudeCodeConfig::default(),
         test_user_id, // Same user ID
+        container_utils::CodingContainerConfig { use_persistant_volume: true },
     )
     .await;
     
@@ -148,6 +150,7 @@ async fn test_volume_isolation_between_users(docker: Docker) {
         &container_name_1,
         ClaudeCodeConfig::default(),
         user_id_1,
+        container_utils::CodingContainerConfig { use_persistant_volume: true },
     )
     .await;
     
@@ -156,6 +159,7 @@ async fn test_volume_isolation_between_users(docker: Docker) {
         &container_name_2,
         ClaudeCodeConfig::default(),
         user_id_2,
+        container_utils::CodingContainerConfig { use_persistant_volume: true },
     )
     .await;
     
@@ -237,4 +241,64 @@ async fn test_volume_name_generation() {
     
     assert_eq!(volume_name_2, "dev-session-claude-67890");
     assert_ne!(volume_name, volume_name_2, "Different users should have different volume names");
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_use_persistant_volume_setting(docker: Docker) {
+    let test_user_id = 555555; // Test user ID
+    let container_name_with_volume = format!("test-with-volume-{}", Uuid::new_v4());
+    let container_name_without_volume = format!("test-without-volume-{}", Uuid::new_v4());
+    
+    // Test 1: Start session WITH persistent volume
+    println!("=== Testing with use_persistant_volume = true ===");
+    let session_with_volume = container_utils::start_coding_session(
+        &docker,
+        &container_name_with_volume,
+        ClaudeCodeConfig::default(),
+        test_user_id,
+        container_utils::CodingContainerConfig { use_persistant_volume: true },
+    )
+    .await;
+    
+    assert!(session_with_volume.is_ok(), "Session with persistent volume should start successfully");
+    let client_with_volume = session_with_volume.unwrap();
+    
+    // Verify volume mounts exist in container (volumes should be mounted at /volume_data)
+    let volume_check_result = container_utils::exec_command_in_container(
+        &docker,
+        client_with_volume.container_id(),
+        vec!["test".to_string(), "-d".to_string(), "/volume_data".to_string()],
+    ).await;
+    
+    assert!(volume_check_result.is_ok(), "Volume directory should exist when persistent volume is enabled");
+    
+    // Test 2: Start session WITHOUT persistent volume
+    println!("=== Testing with use_persistant_volume = false ===");
+    let session_without_volume = container_utils::start_coding_session(
+        &docker,
+        &container_name_without_volume,
+        ClaudeCodeConfig::default(),
+        test_user_id,
+        container_utils::CodingContainerConfig { use_persistant_volume: false },
+    )
+    .await;
+    
+    assert!(session_without_volume.is_ok(), "Session without persistent volume should start successfully");
+    let client_without_volume = session_without_volume.unwrap();
+    
+    // Verify volume directory does NOT exist in container
+    let no_volume_check_result = container_utils::exec_command_in_container(
+        &docker,
+        client_without_volume.container_id(),
+        vec!["test".to_string(), "-d".to_string(), "/volume_data".to_string()],
+    ).await;
+    
+    assert!(no_volume_check_result.is_err(), "Volume directory should NOT exist when persistent volume is disabled");
+    
+    println!("✅ use_persistant_volume setting works correctly!");
+    
+    // Cleanup
+    cleanup_test_resources(&docker, &container_name_with_volume, test_user_id).await;
+    cleanup_test_resources(&docker, &container_name_without_volume, test_user_id).await;
 }

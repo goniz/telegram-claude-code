@@ -22,6 +22,7 @@ pub async fn claude_session(docker: Docker) -> (Docker, ClaudeCodeClient, String
         &container_name,
         ClaudeCodeConfig::default(),
         12345, // Test user ID
+        container_utils::CodingContainerConfig::default(),
     )
     .await
     .expect("Failed to start coding session for timeout test");

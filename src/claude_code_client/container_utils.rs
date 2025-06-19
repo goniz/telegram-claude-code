@@ -7,6 +7,20 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 
+/// Configuration for coding container behavior
+#[derive(Debug, Clone)]
+pub struct CodingContainerConfig {
+    pub use_persistant_volume: bool,
+}
+
+impl Default for CodingContainerConfig {
+    fn default() -> Self {
+        Self {
+            use_persistant_volume: false,
+        }
+    }
+}
+
 /// Container image used by the main application
 /// This is the Claude Code runtime image that provides multi-language development environment with Claude Code pre-installed
 pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/goniz/telegram-claude-code-runtime:main";
@@ -243,6 +257,7 @@ pub async fn start_coding_session(
     container_name: &str,
     claude_config: crate::ClaudeCodeConfig,
     telegram_user_id: i64,
+    container_config: CodingContainerConfig,
 ) -> Result<crate::ClaudeCodeClient, Box<dyn std::error::Error + Send + Sync>> {
     use crate::ClaudeCodeClient;
 
@@ -266,11 +281,16 @@ pub async fn start_coding_session(
         }
     }
 
-    // Ensure user volume exists for authentication persistence
-    let volume_name = ensure_user_volume(docker, telegram_user_id).await?;
-    
-    // Create volume mounts for authentication persistence
-    let auth_mounts = create_auth_mounts(&volume_name);
+    // Conditionally handle persistent volumes based on configuration
+    let auth_mounts = if container_config.use_persistant_volume {
+        // Ensure user volume exists for authentication persistence
+        let volume_name = ensure_user_volume(docker, telegram_user_id).await?;
+        
+        // Create volume mounts for authentication persistence
+        create_auth_mounts(&volume_name)
+    } else {
+        Vec::new()
+    };
 
     let options = CreateContainerOptions {
         name: container_name,
@@ -294,7 +314,7 @@ pub async fn start_coding_session(
         // Run setup script then keep container alive with sleep
         cmd: Some(vec!["-c", "sleep infinity"]),
         host_config: Some(HostConfig {
-            mounts: Some(auth_mounts),
+            mounts: if auth_mounts.is_empty() { None } else { Some(auth_mounts) },
             ..Default::default()
         }),
         // Set stop timeout to ensure graceful shutdown
@@ -310,8 +330,10 @@ pub async fn start_coding_session(
     // Wait for container to be ready
     wait_for_container_ready(docker, &container.id).await?;
     
-    // Initialize volume structure for authentication persistence
-    init_volume_structure(docker, &container.id).await?;
+    // Initialize volume structure for authentication persistence only if using persistent volumes
+    if container_config.use_persistant_volume {
+        init_volume_structure(docker, &container.id).await?;
+    }
 
     // Create Claude Code client (Claude Code is pre-installed in the runtime image)
     let claude_client = ClaudeCodeClient::new(docker.clone(), container.id.clone(), claude_config);
