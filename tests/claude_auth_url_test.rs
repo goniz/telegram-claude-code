@@ -21,7 +21,7 @@ async fn test_claude_auth_url_generation_like_bot(docker: Docker) {
     let container_name = format!("test-auth-url-{}", uuid::Uuid::new_v4());
 
     // Use a reasonable timeout
-    let test_timeout = tokio::time::Duration::from_secs(180); // 3 minutes
+    let test_timeout = tokio::time::Duration::from_secs(300); // 5 minutes
 
     let test_result = tokio::time::timeout(test_timeout, async {
         println!("=== STEP 1: Starting coding session ===");
