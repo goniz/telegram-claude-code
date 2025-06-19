@@ -22,7 +22,7 @@ pub async fn claude_auth_session() -> (Docker, ClaudeCodeClient, String) {
         &docker,
         &container_name,
         ClaudeCodeConfig::default(),
-        12345, // Test user ID
+        container_utils::CodingContainerConfig::default(),
     )
     .await
     .expect("Failed to start coding session for auth test");
