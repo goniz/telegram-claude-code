@@ -366,6 +366,10 @@ impl ClaudeCodeClient {
                 // Wrap cancel_receiver in Option to handle one-time usage
                 let mut cancel_receiver = Some(cancel_receiver);
 
+                // Add buffering support for CLI output to prevent partial parsing
+                let mut output_buffer = String::new();
+                let buffer_timeout_ms = 200;
+
                 // Process the interactive session with channel communication
                 log::debug!("Starting interactive authentication loop with 1-minute timeout");
                 let timeout_result = tokio::time::timeout(Duration::from_secs(60), async {
@@ -455,9 +459,74 @@ impl ClaudeCodeClient {
                                         }
                                     }
 
+                                    // Add to buffer for accumulated processing
+                                    output_buffer.push_str(&text);
+                                    log::debug!("Added to output buffer, total length: {}", output_buffer.len());
+
+                                    // Use timeout to wait for 200ms of no new output, then process buffer
+                                    let buffer_result = tokio::time::timeout(
+                                        Duration::from_millis(buffer_timeout_ms),
+                                        async {
+                                            // Wait for more output or timeout
+                                            loop {
+                                                tokio::select! {
+                                                    // If we get more output within 200ms, add it to buffer
+                                                    msg = output.next() => {
+                                                        if let Some(Ok(msg)) = msg {
+                                                            let raw_text = match msg {
+                                                                bollard::container::LogOutput::StdOut { message } => {
+                                                                    String::from_utf8_lossy(&message).to_string()
+                                                                }
+                                                                bollard::container::LogOutput::StdErr { message } => {
+                                                                    String::from_utf8_lossy(&message).to_string()
+                                                                }
+                                                                bollard::container::LogOutput::Console { message } => {
+                                                                    String::from_utf8_lossy(&message).to_string()
+                                                                }
+                                                                bollard::container::LogOutput::StdIn { message: _ } => {
+                                                                    continue; // Skip stdin
+                                                                }
+                                                            };
+                                                            let additional_text = Self::strip_ansi_codes(&raw_text);
+                                                            output_buffer.push_str(&additional_text);
+                                                            log::debug!("Added more to buffer, new length: {}", output_buffer.len());
+                                                            
+                                                            // Write to log file
+                                                            if let Some(ref mut writer) = log_writer {
+                                                                use std::time::SystemTime;
+                                                                let timestamp = SystemTime::now()
+                                                                    .duration_since(SystemTime::UNIX_EPOCH)
+                                                                    .map(|d| d.as_secs())
+                                                                    .unwrap_or(0);
+                                                                let log_entry = format!("[{}] TEXT: {}", timestamp, additional_text);
+                                                                if let Err(e) = writer.write_all(log_entry.as_bytes()).await {
+                                                                    log::warn!("Failed to write to Claude CLI log file: {}", e);
+                                                                } else if let Err(e) = writer.flush().await {
+                                                                    log::warn!("Failed to flush Claude CLI log file: {}", e);
+                                                                }
+                                                            }
+                                                            // Continue waiting for more or timeout
+                                                        } else {
+                                                            return "stream_ended";
+                                                        }
+                                                    }
+                                                    // If no more output for 200ms, break and process
+                                                    _ = tokio::time::sleep(Duration::from_millis(buffer_timeout_ms)) => {
+                                                        return "timeout";
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    ).await;
+
+                                    // Process the accumulated buffer
+                                    log::debug!("Processing accumulated buffer (reason: {:?}, length: {})", 
+                                        buffer_result.as_ref().map_or("timeout", |r| r), output_buffer.len());
+                                    let buffered_text = std::mem::take(&mut output_buffer);
+                                    
                                     // Update state based on accumulated output buffer
-                                    log::debug!("Parsing CLI output to determine new state");
-                                    let new_state = self.parse_cli_output_for_state(session.state.clone(), &text);
+                                    log::debug!("Parsing accumulated CLI output to determine new state");
+                                    let new_state = self.parse_cli_output_for_state(session.state.clone(), &buffered_text);
                                     log::debug!("State transition: {:?} -> {:?}", session.state, new_state);
 
                                     if new_state == session.state {
