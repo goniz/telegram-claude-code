@@ -383,7 +383,7 @@ impl ClaudeCodeClient {
                             // Check for code processing timeout
                             _ = async {
                                 if let Some(sent_time) = code_sent_time {
-                                    let remaining = Duration::from_secs(10).saturating_sub(sent_time.elapsed());
+                                    let remaining = Duration::from_secs(3).saturating_sub(sent_time.elapsed());
                                     if remaining.is_zero() {
                                         // Timeout exceeded
                                         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -396,7 +396,7 @@ impl ClaudeCodeClient {
                                     std::future::pending::<()>().await;
                                 }
                             } => {
-                                log::error!("Authentication code processing timed out after 10 seconds - likely invalid code");
+                                log::error!("Authentication code processing timed out after 3 seconds - likely invalid code");
                                 let _ = state_sender.send(AuthState::Failed("Authentication failed: Invalid code (CLI rejected code after processing)".to_string()));
                                 return Err("Authentication code processing timed out".into());
                             }
@@ -428,16 +428,15 @@ impl ClaudeCodeClient {
                                     log::info!("Received auth code from user, sending to CLI");
                                     log::debug!("Auth code: '{}'", &code);
 
-                                    let _ = stdin.write_all(code.as_bytes()).await;
-                                    let _ = stdin.write_all(b"\r").await;
-                                    let _ = stdin.flush().await;
-
-                                    let _ = stdin.write_all(b"\n").await;
+                                    // Send the authentication code as a single atomic write
+                                    // This prevents TTY line processing from interfering with special characters
+                                    let code_with_newline = format!("{}\n", code);
+                                    let _ = stdin.write_all(code_with_newline.as_bytes()).await;
                                     let _ = stdin.flush().await;
                                     
                                     code_sent = true; // Mark that we've sent a code
                                     code_sent_time = Some(std::time::Instant::now()); // Record when we sent it
-                                    log::debug!("Successfully sent auth code to CLI");
+                                    log::debug!("Successfully sent auth code to CLI as atomic write");
                                 } else {
                                     break;
                                 }
@@ -810,7 +809,14 @@ impl ClaudeCodeClient {
                   output_lower.contains("login failed") ||
                   output_lower.contains("invalid authorization code") ||
                   output_lower.contains("invalid code") ||
-                  output_lower.contains("error") && (output_lower.contains("auth") || output_lower.contains("login") || output_lower.contains("code")) {
+                  output_lower.contains("bad request") ||
+                  output_lower.contains("access denied") ||
+                  output_lower.contains("forbidden") ||
+                  output_lower.contains("not found") ||
+                  output_lower.contains("connection refused") ||
+                  output_lower.contains("timeout") ||
+                  output_lower.contains("network error") ||
+                  (output_lower.contains("error") && (output_lower.contains("auth") || output_lower.contains("login") || output_lower.contains("code"))) {
             log::debug!("Detected authentication failure in CLI output");
             InteractiveLoginState::Error(format!("Authentication failed: {}", output.trim()))
         } else {
