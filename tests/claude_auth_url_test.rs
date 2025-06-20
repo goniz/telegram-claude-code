@@ -238,22 +238,25 @@ async fn test_claude_auth_invalid_code_handling(
                     }
                 }
                 AuthState::Failed(error) => {
-                    println!("❌ Authentication failed as expected: {}", error);
+                    println!("❌ Authentication failed: {}", error);
                     auth_failed_received = true;
                     
-                    // Verify that the error indicates invalid authentication code
+                    // Check if this is a timeout error - this should fail the test
                     let error_lower = error.to_lowercase();
+                    if error_lower.contains("timed out") || error_lower.contains("timeout") {
+                        return Err(format!("Test failed: Authentication timed out, indicating the invalid code never reached the CLI. Error: {}", error).into());
+                    }
+                    
+                    // Verify that the error indicates the CLI processed and rejected the invalid code
                     if error_lower.contains("invalid") || 
                        error_lower.contains("unauthorized") || 
                        error_lower.contains("authentication") ||
                        error_lower.contains("code") ||
-                       error_lower.contains("failed") ||
-                       error_lower.contains("timed out") ||
-                       error_lower.contains("timeout") {
-                        println!("✅ Error message indicates invalid authentication code as expected");
+                       error_lower.contains("failed") {
+                        println!("✅ Error message indicates the CLI processed and rejected the invalid authentication code as expected");
                         break;
                     } else {
-                        return Err(format!("Unexpected error message - does not indicate invalid code: {}", error).into());
+                        return Err(format!("Unexpected error message - does not indicate the CLI processed the invalid code: {}", error).into());
                     }
                 }
                 AuthState::Completed(message) => {
