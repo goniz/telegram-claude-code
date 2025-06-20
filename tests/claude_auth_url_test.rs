@@ -244,7 +244,7 @@ async fn test_claude_auth_invalid_code_handling(
                     // Check if this is a timeout error - this should fail the test
                     let error_lower = error.to_lowercase();
                     if error_lower.contains("timed out") || error_lower.contains("timeout") {
-                        return Err(format!("Test failed: Authentication timed out, indicating the invalid code never reached the CLI. Error: {}", error).into());
+                        return Err(format!("Test failed: Authentication timed out, indicating the invalid code never reached the CLI properly. Error: {}", error).into());
                     }
                     
                     // Verify that the error indicates the CLI processed and rejected the invalid code

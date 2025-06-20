@@ -344,7 +344,7 @@ impl ClaudeCodeClient {
 
         let start_config = StartExecOptions {
             detach: false,
-            tty: true,
+            tty: true,  // Re-enable TTY as CLI likely requires it
             ..Default::default()
         };
 
@@ -380,24 +380,18 @@ impl ClaudeCodeClient {
                     loop {
                         log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
-                            // Check for code processing timeout
+                            // Check for code processing timeout - temporarily disabled for debugging
                             _ = async {
-                                if let Some(sent_time) = code_sent_time {
-                                    let remaining = Duration::from_secs(3).saturating_sub(sent_time.elapsed());
-                                    if remaining.is_zero() {
-                                        // Timeout exceeded
-                                        tokio::time::sleep(Duration::from_millis(1)).await;
-                                    } else {
-                                        // Wait for remaining time
-                                        tokio::time::sleep(remaining).await;
-                                    }
+                                if let Some(_sent_time) = code_sent_time {
+                                    // Wait much longer to see if CLI eventually responds
+                                    tokio::time::sleep(Duration::from_secs(15)).await;
                                 } else {
                                     // No code sent yet, wait indefinitely
                                     std::future::pending::<()>().await;
                                 }
                             } => {
-                                log::error!("Authentication code processing timed out after 3 seconds - CLI did not respond to invalid code");
-                                let _ = state_sender.send(AuthState::Failed("Authentication failed: Invalid code (CLI processed and rejected code)".to_string()));
+                                log::error!("Authentication code processing timed out after 15 seconds - CLI did not respond to invalid code");
+                                let _ = state_sender.send(AuthState::Failed("Authentication timed out after 15 seconds".to_string()));
                                 return Err("Authentication code processing timed out".into());
                             }
                             
@@ -428,15 +422,18 @@ impl ClaudeCodeClient {
                                     log::info!("Received auth code from user, sending to CLI");
                                     log::debug!("Auth code: '{}'", &code);
 
-                                    // Use $'...' quoting to allow escape sequences while preserving literal characters
-                                    let escaped_code = format!("$'{}'", code.replace("#", "\\x23").replace("'", "\\'"));
-                                    let code_with_newline = format!("{}\n", escaped_code);
-                                    let _ = stdin.write_all(code_with_newline.as_bytes()).await;
+                                    // Try sending the code byte by byte to see if that helps with TTY processing
+                                    for byte in code.as_bytes() {
+                                        let _ = stdin.write_all(&[*byte]).await;
+                                        let _ = stdin.flush().await;
+                                    }
+                                    // Send Enter (carriage return + line feed)
+                                    let _ = stdin.write_all(b"\r\n").await;
                                     let _ = stdin.flush().await;
                                     
                                     code_sent = true; // Mark that we've sent a code
                                     code_sent_time = Some(std::time::Instant::now()); // Record when we sent it
-                                    log::debug!("Successfully sent $'...' quoted auth code to CLI: {}", escaped_code);
+                                    log::debug!("Successfully sent auth code byte-by-byte to CLI");
                                 } else {
                                     break;
                                 }
@@ -469,6 +466,11 @@ impl ClaudeCodeClient {
                                     let text = Self::strip_ansi_codes(&raw_text);
                                     session.last_output = Some(text.clone());
                                     log::debug!("Claude CLI output: {}", text);
+
+                                    // If we've sent a code and CLI is producing output, log it for debugging
+                                    if code_sent {
+                                        log::info!("CLI output after sending auth code: '{}'", text);
+                                    }
 
                                     // Write all CLI output to log file (both raw and cleaned)
                                     if let Some(ref mut writer) = log_writer {
