@@ -15,7 +15,7 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
     let _ = container_utils::clear_coding_session(docker, container_name).await;
     
     // Clean up volume
-    let volume_name = container_utils::generate_volume_name(user_id);
+    let volume_name = container_utils::generate_volume_name(&user_id.to_string());
     let _ = docker.remove_volume(&volume_name, None).await;
 }
 
@@ -31,7 +31,7 @@ async fn test_claude_json_initialization_from_runtime(docker: Docker) {
         &docker,
         &container_name,
         ClaudeCodeConfig::default(),
-        test_user_id,
+        container_utils::CodingContainerConfig::default(),
     )
     .await;
     
@@ -86,7 +86,7 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
         &docker,
         &container_name_1,
         ClaudeCodeConfig::default(),
-        test_user_id,
+        container_utils::CodingContainerConfig::default(),
     )
     .await;
     
@@ -115,7 +115,7 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
         &docker,
         &container_name_2,
         ClaudeCodeConfig::default(),
-        test_user_id, // Same user ID
+        container_utils::CodingContainerConfig::default(),
     )
     .await;
     
