@@ -404,12 +404,12 @@ impl ClaudeCodeClient {
                                     log::debug!("Auth code: '{}'", &code);
 
                                     let _ = stdin.write_all(code.as_bytes()).await;
-                                    let _ = stdin.write_all(b"\r").await;
-                                    let _ = stdin.flush().await;
-
                                     let _ = stdin.write_all(b"\n").await;
                                     let _ = stdin.flush().await;
                                     
+                                    let _ = stdin.write_all(b"\r").await;
+                                    let _ = stdin.flush().await;
+
                                     log::debug!("Successfully sent auth code to CLI");
                                 } else {
                                     break;
