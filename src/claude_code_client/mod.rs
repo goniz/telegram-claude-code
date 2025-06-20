@@ -396,8 +396,8 @@ impl ClaudeCodeClient {
                                     std::future::pending::<()>().await;
                                 }
                             } => {
-                                log::error!("Authentication code processing timed out after 3 seconds - likely invalid code");
-                                let _ = state_sender.send(AuthState::Failed("Authentication failed: Invalid code (CLI rejected code after processing)".to_string()));
+                                log::error!("Authentication code processing timed out after 3 seconds - CLI did not respond to invalid code");
+                                let _ = state_sender.send(AuthState::Failed("Authentication failed: Invalid code (CLI processed and rejected code)".to_string()));
                                 return Err("Authentication code processing timed out".into());
                             }
                             
@@ -428,15 +428,15 @@ impl ClaudeCodeClient {
                                     log::info!("Received auth code from user, sending to CLI");
                                     log::debug!("Auth code: '{}'", &code);
 
-                                    // Send the authentication code as a single atomic write
-                                    // This prevents TTY line processing from interfering with special characters
-                                    let code_with_newline = format!("{}\n", code);
+                                    // Use $'...' quoting to allow escape sequences while preserving literal characters
+                                    let escaped_code = format!("$'{}'", code.replace("#", "\\x23").replace("'", "\\'"));
+                                    let code_with_newline = format!("{}\n", escaped_code);
                                     let _ = stdin.write_all(code_with_newline.as_bytes()).await;
                                     let _ = stdin.flush().await;
                                     
                                     code_sent = true; // Mark that we've sent a code
                                     code_sent_time = Some(std::time::Instant::now()); // Record when we sent it
-                                    log::debug!("Successfully sent auth code to CLI as atomic write");
+                                    log::debug!("Successfully sent $'...' quoted auth code to CLI: {}", escaped_code);
                                 } else {
                                     break;
                                 }
