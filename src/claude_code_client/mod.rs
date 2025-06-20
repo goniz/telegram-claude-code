@@ -369,6 +369,10 @@ impl ClaudeCodeClient {
                 // Add buffering support for CLI output to prevent partial parsing
                 let mut output_buffer = String::new();
                 let buffer_timeout_ms = 200;
+                
+                // Track if we've sent an authentication code
+                let mut code_sent = false;
+                let mut code_sent_time: Option<std::time::Instant> = None;
 
                 // Process the interactive session with channel communication
                 log::debug!("Starting interactive authentication loop with 1-minute timeout");
@@ -376,6 +380,27 @@ impl ClaudeCodeClient {
                     loop {
                         log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
+                            // Check for code processing timeout
+                            _ = async {
+                                if let Some(sent_time) = code_sent_time {
+                                    let remaining = Duration::from_secs(10).saturating_sub(sent_time.elapsed());
+                                    if remaining.is_zero() {
+                                        // Timeout exceeded
+                                        tokio::time::sleep(Duration::from_millis(1)).await;
+                                    } else {
+                                        // Wait for remaining time
+                                        tokio::time::sleep(remaining).await;
+                                    }
+                                } else {
+                                    // No code sent yet, wait indefinitely
+                                    std::future::pending::<()>().await;
+                                }
+                            } => {
+                                log::error!("Authentication code processing timed out after 10 seconds - likely invalid code");
+                                let _ = state_sender.send(AuthState::Failed("Authentication failed: Invalid code (CLI rejected code after processing)".to_string()));
+                                return Err("Authentication code processing timed out".into());
+                            }
+                            
                             // Handle cancellation - only if the sender explicitly sends cancellation
                             result = async {
                                 if let Some(receiver) = cancel_receiver.take() {
@@ -410,6 +435,8 @@ impl ClaudeCodeClient {
                                     let _ = stdin.write_all(b"\n").await;
                                     let _ = stdin.flush().await;
                                     
+                                    code_sent = true; // Mark that we've sent a code
+                                    code_sent_time = Some(std::time::Instant::now()); // Record when we sent it
                                     log::debug!("Successfully sent auth code to CLI");
                                 } else {
                                     break;
@@ -584,6 +611,9 @@ impl ClaudeCodeClient {
                                         }
                                         InteractiveLoginState::LoginSuccessful => {
                                             log::info!("State: LoginSuccessful - pressing enter to continue");
+                                            
+                                            // Clear code timeout since we got a response
+                                            code_sent_time = None;
                                           
                                             if let Err(e) = stdin.write_all(b"\r").await {
                                                 log::error!("Failed to send enter for login successful: {}", e);
@@ -645,6 +675,10 @@ impl ClaudeCodeClient {
                                         }
                                         InteractiveLoginState::Error(err) => {
                                             log::warn!("State: Error encountered in interactive login: {}", err);
+                                            
+                                            // Clear code timeout since we got a response (even if it's an error)
+                                            code_sent_time = None;
+                                            
                                             log::debug!("Sending error state to user");
                                             let _ = state_sender.send(AuthState::Failed(err.clone()));
                                             log::error!("Authentication failed due to error state: {}", err);
@@ -658,6 +692,11 @@ impl ClaudeCodeClient {
                                 } else {
                                     // Stream ended
                                     log::warn!("CLI output stream ended unexpectedly (received None)");
+                                    if code_sent && session.awaiting_user_code {
+                                        log::error!("Stream ended after sending authentication code - likely authentication failure");
+                                        let _ = state_sender.send(AuthState::Failed("Authentication failed: CLI stopped responding after receiving code (likely invalid)".to_string()));
+                                        return Err("Authentication failed: CLI stopped responding after receiving code".into());
+                                    }
                                     break;
                                 }
                             }
@@ -763,6 +802,17 @@ impl ClaudeCodeClient {
             InteractiveLoginState::SecurityNotes
         } else if output_lower.contains("do you trust the files in this folder") {
             InteractiveLoginState::TrustFiles
+        } else if output_lower.contains("invalid") ||
+                  output_lower.contains("unauthorized") ||
+                  output_lower.contains("expired") ||
+                  output_lower.contains("authentication failed") ||
+                  output_lower.contains("auth failed") ||
+                  output_lower.contains("login failed") ||
+                  output_lower.contains("invalid authorization code") ||
+                  output_lower.contains("invalid code") ||
+                  output_lower.contains("error") && (output_lower.contains("auth") || output_lower.contains("login") || output_lower.contains("code")) {
+            log::debug!("Detected authentication failure in CLI output");
+            InteractiveLoginState::Error(format!("Authentication failed: {}", output.trim()))
         } else {
             // Don't treat everything as an error, just continue with current state
             log::debug!("Unrecognized CLI output state, continuing with current state: {}", output);
