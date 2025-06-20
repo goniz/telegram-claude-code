@@ -371,8 +371,8 @@ impl ClaudeCodeClient {
                 let buffer_timeout_ms = 200;
 
                 // Process the interactive session with channel communication
-                log::debug!("Starting interactive authentication loop with 5-minute timeout");
-                let timeout_result = tokio::time::timeout(Duration::from_secs(300), async {
+                log::debug!("Starting interactive authentication loop with 1-minute timeout");
+                let timeout_result = tokio::time::timeout(Duration::from_secs(60), async {
                     loop {
                         log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
@@ -687,12 +687,12 @@ impl ClaudeCodeClient {
                         let _ = state_sender.send(AuthState::Failed(format!("Authentication error: {}", e)));
                     }
                     Err(_) => {
-                        log::warn!("Authentication process timed out after 5 minutes (300 seconds)");
+                        log::warn!("Authentication process timed out after 1 minutes (60 seconds)");
                         log::debug!("Timeout context - CLI may be unresponsive or waiting for input");
                         log::debug!("Current session state: {:?}", session.state);
                         log::debug!("Awaiting user code: {}", session.awaiting_user_code);
                         log::debug!("Session URL: {:?}", session.url);
-                        let _ = state_sender.send(AuthState::Failed("Authentication timed out after 5 minutes".to_string()));
+                        let _ = state_sender.send(AuthState::Failed("Authentication timed out after 60 seconds".to_string()));
                     }
                 }
             }

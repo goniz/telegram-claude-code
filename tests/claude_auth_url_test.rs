@@ -44,7 +44,7 @@ async fn test_claude_auth_url_generation_like_bot(
 
     // Use a reasonable timeout for the time-sensitive test logic
     // Note: Container creation now happens outside this timeout block for timing accuracy
-    let test_timeout = tokio::time::Duration::from_secs(300); // 5 minutes
+    let test_timeout = tokio::time::Duration::from_secs(60); // 1 minutes
 
     let test_result = tokio::time::timeout(test_timeout, async {
         println!("=== STEP 1: Coding session already started ===");
