@@ -3,7 +3,8 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{prelude::*, utils::command::BotCommands, types::{ParseMode, InlineKeyboardMarkup, InlineKeyboardButton}, dispatching::UpdateFilterExt, dptree};
+use std::path::Path;
+use teloxide::{prelude::*, utils::command::BotCommands, types::{ParseMode, InlineKeyboardMarkup, InlineKeyboardButton, InputFile}, dispatching::UpdateFilterExt, dptree};
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -106,6 +107,8 @@ enum Command {
     GitHubStatus,
     #[command(description = "List GitHub repositories for the authenticated user")]
     GitHubRepoList,
+    #[command(description = "Get Claude authentication debug log file")]
+    DebugClaudeLogin,
 }
 
 // Authentication session state
@@ -123,6 +126,40 @@ type AuthSessions = Arc<Mutex<HashMap<i64, AuthSession>>>;
 struct BotState {
     docker: Docker,
     auth_sessions: AuthSessions,
+}
+
+/// Find Claude authentication log files for a specific chat ID
+async fn find_claude_auth_log_file(chat_id: i64) -> Option<String> {
+    let log_pattern = format!("/tmp/claude_auth_output_{}.log", chat_id);
+    
+    // Check if the specific log file exists
+    if Path::new(&log_pattern).exists() {
+        return Some(log_pattern);
+    }
+    
+    // If specific file doesn't exist, look for any recent Claude auth log files
+    match tokio::fs::read_dir("/tmp").await {
+        Ok(mut entries) => {
+            let mut claude_files = Vec::new();
+            
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Some(file_name) = entry.file_name().to_str() {
+                    if file_name.starts_with("claude_auth_output_") && file_name.ends_with(".log") {
+                        if let Ok(metadata) = entry.metadata().await {
+                            claude_files.push((entry.path(), metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)));
+                        }
+                    }
+                }
+            }
+            
+            // Sort by modification time (newest first)
+            claude_files.sort_by(|a, b| b.1.cmp(&a.1));
+            
+            // Return the most recent file if any exist
+            claude_files.first().map(|(path, _)| path.to_string_lossy().to_string())
+        }
+        Err(_) => None
+    }
 }
 
 /// Pull the runtime image asynchronously in the background
@@ -467,6 +504,83 @@ async fn handle_github_status(
             bot.send_message(
                 msg.chat.id, 
                 format!("❌ No active coding session found: {}\n\nPlease start a coding session first using /start", escape_markdown_v2(&e.to_string()))
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
+        }
+    }
+    
+    Ok(())
+}
+
+// Handle debug Claude login command
+async fn handle_debug_claude_login(
+    bot: Bot,
+    msg: Message,
+    chat_id: i64,
+) -> ResponseResult<()> {
+    // Send initial message
+    bot.send_message(
+        msg.chat.id,
+        "🔍 Searching for Claude authentication debug logs\\.\\.\\."
+    )
+    .parse_mode(ParseMode::MarkdownV2)
+    .await?;
+
+    match find_claude_auth_log_file(chat_id).await {
+        Some(log_file_path) => {
+            // Check if file exists and get its size
+            match tokio::fs::metadata(&log_file_path).await {
+                Ok(metadata) => {
+                    let file_size = metadata.len();
+                    let file_name = Path::new(&log_file_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    
+                    // Telegram has a 50MB file size limit
+                    if file_size > 50 * 1024 * 1024 {
+                        bot.send_message(
+                            msg.chat.id,
+                            format!("📁 Found debug log file: `{}`\n\n⚠️ File is too large to send via Telegram \\({:.1} MB\\)\\. Log files are automatically cleaned up periodically\\.", 
+                                escape_markdown_v2(&file_name), 
+                                file_size as f64 / (1024.0 * 1024.0)
+                            )
+                        )
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                        return Ok(());
+                    }
+                    
+                    // Send the file as an attachment
+                    let input_file = InputFile::file(&log_file_path);
+                    let caption = format!(
+                        "🔍 *Claude Authentication Debug Log*\n\n📁 File: `{}`\n📊 Size: {:.1} KB\n🕒 Chat ID: `{}`\n\n💡 This log contains detailed information about the Claude authentication process\\.",
+                        escape_markdown_v2(&file_name),
+                        file_size as f64 / 1024.0,
+                        chat_id
+                    );
+                    
+                    bot.send_document(msg.chat.id, input_file)
+                        .caption(caption)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id,
+                        format!("❌ Found log file but couldn't access it: {}", escape_markdown_v2(&e.to_string()))
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
+                }
+            }
+        }
+        None => {
+            bot.send_message(
+                msg.chat.id,
+                "📂 *No Claude authentication debug logs found*\n\n💡 Debug logs are created when:\n• Claude authentication is attempted\n• An authentication session fails or encounters errors\n\n🔄 Try running `/authenticateclaude` first to generate debug logs\\."
             )
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
@@ -852,6 +966,9 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         }
         Command::GitHubRepoList => {
             handle_github_repo_list(bot.clone(), msg, bot_state.clone(), chat_id).await?;
+        }
+        Command::DebugClaudeLogin => {
+            handle_debug_claude_login(bot.clone(), msg, chat_id).await?;
         }
     }
 
