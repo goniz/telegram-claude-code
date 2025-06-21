@@ -288,12 +288,12 @@ impl ClaudeCodeClient {
         log::debug!("Starting background_interactive_login function for container: {}", self.container_id);
 
         // Create log file for Claude CLI output
-        let log_file_path = format!("/tmp/claude_auth_output_{}.log", self.container_id);
+        let log_file_path = "/tmp/claude_auth_output.log";
         let log_file = match OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open(&log_file_path)
+            .open(log_file_path)
             .await
         {
             Ok(file) => {
