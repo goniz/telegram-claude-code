@@ -45,7 +45,6 @@ pub enum InteractiveLoginState {
     TrustFiles,
     Completed,
     OAuthPortError,
-    PressEnterToRetry,
     Error(String),
 }
 
@@ -415,40 +414,16 @@ impl ClaudeCodeClient {
                                         }
                                     }
 
-                                    // Try multiple line ending combinations for better TTY compatibility
-                                    // Some TTY implementations expect different line endings
-                                    let line_endings = vec!["\r\n", "\n", "\r"];
-                                    let mut write_success = false;
-                                    
-                                    for ending in line_endings {
-                                        let code_with_ending = format!("{}{}", code, ending);
-                                        log::debug!("Trying to send code with ending: {:?}", ending);
-                                        
-                                        match stdin.write_all(code_with_ending.as_bytes()).await {
-                                            Ok(_) => {
-                                                match stdin.flush().await {
-                                                    Ok(_) => {
-                                                        log::debug!("Successfully sent auth code with ending: {:?}", ending);
-                                                        write_success = true;
-                                                        break;
-                                                    }
-                                                    Err(e) => {
-                                                        log::warn!("Failed to flush stdin with ending {:?}: {}", ending, e);
-                                                        continue;
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                log::warn!("Failed to write auth code with ending {:?}: {}", ending, e);
-                                                continue;
-                                            }
-                                        }
+                                    // Send auth code with proper line ending
+                                    if let Err(e) = stdin.write_all(format!("{}\r\n", code).as_bytes()).await {
+                                        log::error!("Failed to write auth code to stdin: {}", e);
+                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to send code: {}", e)));
+                                        return Err(e.into());
                                     }
-                                    
-                                    if !write_success {
-                                        log::error!("Failed to write auth code with any line ending");
-                                        let _ = state_sender.send(AuthState::Failed("Failed to send authentication code to CLI".to_string()));
-                                        return Err("Failed to send authentication code".into());
+                                    if let Err(e) = stdin.flush().await {
+                                        log::error!("Failed to flush stdin after auth code: {}", e);
+                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to flush stdin: {}", e)));
+                                        return Err(e.into());
                                     }
                                     
                                     // Add a small delay to ensure the TTY processes the input
@@ -586,19 +561,6 @@ impl ClaudeCodeClient {
                                             session.state = new_state.clone();
                                             let _ = state_sender.send(AuthState::Starting);
                                             log::debug!("Successfully handled Starting state");
-                                        }
-                                        InteractiveLoginState::PressEnterToRetry => {
-                                            log::debug!("State: PressEnterToRetry detected, pressing enter to continue");
-                                            if let Err(e) = stdin.write_all(b"\r").await {
-                                                log::error!("Failed to send enter: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            if let Err(e) = stdin.flush().await {
-                                                log::error!("Failed to flush stdin: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            session.state = new_state.clone();
-                                            log::debug!("Successfully handled PressEnterToRetry state");
                                         }
                                         InteractiveLoginState::SelectLoginMethod => {
                                             log::debug!("State: SelectLoginMethod detected, choosing option 1 (account authentication)");
@@ -816,8 +778,6 @@ impl ClaudeCodeClient {
             InteractiveLoginState::SecurityNotes
         } else if output_lower.contains("do you trust the files in this folder") {
             InteractiveLoginState::TrustFiles
-        } else if output_lower.contains("press enter to retry") {
-            InteractiveLoginState::PressEnterToRetry
         } else {
             // Don't treat everything as an error, just continue with current state
             log::debug!("Unrecognized CLI output state, continuing with current state: {}", output);
