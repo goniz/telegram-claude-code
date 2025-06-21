@@ -128,37 +128,15 @@ struct BotState {
     auth_sessions: AuthSessions,
 }
 
-/// Find Claude authentication log files for a specific chat ID
-async fn find_claude_auth_log_file(chat_id: i64) -> Option<String> {
-    let log_pattern = format!("/tmp/claude_auth_output_{}.log", chat_id);
+/// Find Claude authentication log file (fixed filename)
+async fn find_claude_auth_log_file() -> Option<String> {
+    let log_file_path = "/tmp/claude_auth_output.log";
     
-    // Check if the specific log file exists
-    if Path::new(&log_pattern).exists() {
-        return Some(log_pattern);
-    }
-    
-    // If specific file doesn't exist, look for any recent Claude auth log files
-    match tokio::fs::read_dir("/tmp").await {
-        Ok(mut entries) => {
-            let mut claude_files = Vec::new();
-            
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                if let Some(file_name) = entry.file_name().to_str() {
-                    if file_name.starts_with("claude_auth_output_") && file_name.ends_with(".log") {
-                        if let Ok(metadata) = entry.metadata().await {
-                            claude_files.push((entry.path(), metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)));
-                        }
-                    }
-                }
-            }
-            
-            // Sort by modification time (newest first)
-            claude_files.sort_by(|a, b| b.1.cmp(&a.1));
-            
-            // Return the most recent file if any exist
-            claude_files.first().map(|(path, _)| path.to_string_lossy().to_string())
-        }
-        Err(_) => None
+    // Check if the fixed log file exists
+    if Path::new(log_file_path).exists() {
+        Some(log_file_path.to_string())
+    } else {
+        None
     }
 }
 
@@ -517,7 +495,7 @@ async fn handle_github_status(
 async fn handle_debug_claude_login(
     bot: Bot,
     msg: Message,
-    chat_id: i64,
+    _chat_id: i64,
 ) -> ResponseResult<()> {
     // Send initial message
     bot.send_message(
@@ -527,7 +505,7 @@ async fn handle_debug_claude_login(
     .parse_mode(ParseMode::MarkdownV2)
     .await?;
 
-    match find_claude_auth_log_file(chat_id).await {
+    match find_claude_auth_log_file().await {
         Some(log_file_path) => {
             // Check if file exists and get its size
             match tokio::fs::metadata(&log_file_path).await {
@@ -556,10 +534,9 @@ async fn handle_debug_claude_login(
                     // Send the file as an attachment
                     let input_file = InputFile::file(&log_file_path);
                     let caption = format!(
-                        "🔍 *Claude Authentication Debug Log*\n\n📁 File: `{}`\n📊 Size: {:.1} KB\n🕒 Chat ID: `{}`\n\n💡 This log contains detailed information about the Claude authentication process\\.",
+                        "🔍 *Claude Authentication Debug Log*\n\n📁 File: `{}`\n📊 Size: {:.1} KB\n\n💡 This log contains detailed information about the Claude authentication process\\.",
                         escape_markdown_v2(&file_name),
-                        file_size as f64 / 1024.0,
-                        chat_id
+                        file_size as f64 / 1024.0
                     );
                     
                     bot.send_document(msg.chat.id, input_file)
