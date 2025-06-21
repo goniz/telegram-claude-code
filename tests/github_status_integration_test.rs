@@ -17,7 +17,7 @@ async fn test_github_status_integration() {
     println!("Starting coding session for GitHub status test...");
 
     // Start a coding session (creates a container with GitHub CLI)
-    let claude_client = match container_utils::start_coding_session(&docker, container_name, config).await {
+    let claude_client = match container_utils::start_coding_session(&docker, container_name, config, container_utils::CodingContainerConfig::default()).await {
         Ok(client) => client,
         Err(e) => {
             eprintln!("Failed to start coding session: {}", e);

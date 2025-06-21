@@ -2,16 +2,54 @@ use bollard::Docker;
 use rstest::*;
 use std::env;
 use std::time::Duration;
-use telegram_bot::{container_utils, ClaudeCodeConfig};
+use telegram_bot::{container_utils, ClaudeCodeConfig, ClaudeCodeClient};
 use tokio::time::timeout;
-
-#[allow(unused_imports)]
-use telegram_bot::ClaudeCodeClient;
+use uuid;
 
 /// Test fixture that provides a Docker client
 #[fixture]
 pub fn docker() -> Docker {
     Docker::connect_with_local_defaults().expect("Failed to connect to Docker")
+}
+
+/// Test fixture that creates a coding session container for cancel testing
+/// Container setup happens outside timeout blocks to avoid timing interference
+#[fixture]
+pub async fn claude_session_for_cancel() -> (Docker, ClaudeCodeClient, String) {
+    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
+    let container_name = format!("test-cancel-{}", uuid::Uuid::new_v4());
+    
+    // Start coding session outside of timeout - this may pull Docker images
+    let claude_client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    .expect("Failed to start coding session for cancel test");
+    
+    (docker, claude_client, container_name)
+}
+
+/// Test fixture that creates a coding session container for multiple polls testing
+/// Container setup happens outside timeout blocks to avoid timing interference
+#[fixture]
+pub async fn claude_session_for_polls() -> (Docker, ClaudeCodeClient, String) {
+    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
+    let container_name = format!("test-multiple-polls-{}", uuid::Uuid::new_v4());
+    
+    // Start coding session outside of timeout - this may pull Docker images
+    let claude_client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    .expect("Failed to start coding session for polls test");
+    
+    (docker, claude_client, container_name)
 }
 
 /// Cleanup fixture that ensures test containers are removed
@@ -21,7 +59,9 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 
 #[rstest]
 #[tokio::test]
-async fn test_claude_auth_no_panic_on_cancel(docker: Docker) {
+async fn test_claude_auth_no_panic_on_cancel(
+    #[future] claude_session_for_cancel: (Docker, ClaudeCodeClient, String)
+) {
     // Skip in CI to avoid Docker dependency issues
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
     if is_ci {
@@ -29,17 +69,10 @@ async fn test_claude_auth_no_panic_on_cancel(docker: Docker) {
         return;
     }
 
-    let container_name = format!("test-cancel-{}", uuid::Uuid::new_v4());
+    let (docker, claude_client, container_name) = claude_session_for_cancel.await;
 
+    // Container is already set up - run time-sensitive test logic with timeout
     let test_result = timeout(Duration::from_secs(15), async {
-        // Start a coding session
-        let claude_client = container_utils::start_coding_session(
-            &docker,
-            &container_name,
-            ClaudeCodeConfig::default(),
-        )
-        .await?;
-
         // Start authentication
         let auth_result = claude_client.authenticate_claude_account().await;
 
@@ -90,7 +123,9 @@ async fn test_claude_auth_no_panic_on_cancel(docker: Docker) {
 
 #[rstest]
 #[tokio::test]
-async fn test_claude_auth_no_panic_with_multiple_polls(docker: Docker) {
+async fn test_claude_auth_no_panic_with_multiple_polls(
+    #[future] claude_session_for_polls: (Docker, ClaudeCodeClient, String)
+) {
     // Skip in CI to avoid Docker dependency issues
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
     if is_ci {
@@ -98,17 +133,10 @@ async fn test_claude_auth_no_panic_with_multiple_polls(docker: Docker) {
         return;
     }
 
-    let container_name = format!("test-multiple-polls-{}", uuid::Uuid::new_v4());
+    let (docker, claude_client, container_name) = claude_session_for_polls.await;
 
+    // Container is already set up - run time-sensitive test logic with timeout
     let test_result = timeout(Duration::from_secs(10), async {
-        // Start a coding session
-        let claude_client = container_utils::start_coding_session(
-            &docker,
-            &container_name,
-            ClaudeCodeConfig::default(),
-        )
-        .await?;
-
         // Start authentication
         let auth_result = claude_client.authenticate_claude_account().await;
 
