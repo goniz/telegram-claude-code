@@ -8,7 +8,7 @@ use teloxide::{
     dispatching::UpdateFilterExt,
     dptree,
     prelude::*,
-    types::{InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ParseMode},
+    types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ParseMode},
     utils::command::BotCommands,
 };
 use tokio::sync::Mutex;
@@ -118,6 +118,8 @@ enum Command {
     GitHubStatus,
     #[command(description = "List GitHub repositories for the authenticated user")]
     GitHubRepoList,
+    #[command(description = "Clone a GitHub repository")]
+    GitHubClone(String),
     #[command(description = "Get Claude authentication debug log file")]
     DebugClaudeLogin,
 }
@@ -218,6 +220,7 @@ async fn main() {
     // Set up message handler that handles both commands and regular text
     let bot_state_clone1 = bot_state.clone();
     let bot_state_clone2 = bot_state.clone();
+    let bot_state_clone3 = bot_state.clone();
 
     let handler = Update::filter_message()
         .branch(
@@ -232,6 +235,12 @@ async fn main() {
             dptree::filter(|msg: Message| msg.text().is_some()).endpoint(move |bot, msg| {
                 let bot_state = bot_state_clone2.clone();
                 handle_text_message(bot, msg, bot_state)
+            }),
+        )
+        .branch(
+            Update::filter_callback_query().endpoint(move |bot, query| {
+                let bot_state = bot_state_clone3.clone();
+                handle_callback_query(bot, query, bot_state)
             }),
         );
 
@@ -758,6 +767,240 @@ async fn handle_github_repo_list(
     Ok(())
 }
 
+// Handle GitHub repository clone command
+async fn handle_github_clone(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    chat_id: i64,
+    repository: Option<String>,
+) -> ResponseResult<()> {
+    let container_name = format!("coding-session-{}", chat_id);
+
+    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+        Ok(client) => {
+            let github_client = GithubClient::new(
+                bot_state.docker.clone(),
+                client.container_id().to_string(),
+                GithubClientConfig::default(),
+            );
+
+            if let Some(repo) = repository {
+                // Direct clone with provided repository name
+                perform_github_clone(&bot, msg.chat.id, &github_client, &repo).await?;
+            } else {
+                // Show repository selection UI
+                show_repository_selection(&bot, &msg, &github_client).await?;
+            }
+        }
+        Err(e) => {
+            bot.send_message(
+                msg.chat.id,
+                format!(
+                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                     first using /start",
+                    escape_markdown_v2(&e.to_string())
+                ),
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+// Perform the actual GitHub clone operation
+async fn perform_github_clone(
+    bot: &Bot,
+    chat_id: teloxide::types::ChatId,
+    github_client: &GithubClient,
+    repository: &str,
+) -> ResponseResult<()> {
+    bot.send_message(
+        chat_id,
+        format!(
+            "🔄 *Cloning Repository*\\n\\n📦 Repository: {}\\n⏳ Please wait\\.\\.\\.",
+            escape_markdown_v2(repository)
+        ),
+    )
+    .parse_mode(ParseMode::MarkdownV2)
+    .await?;
+
+    match github_client.repo_clone(repository, None).await {
+        Ok(clone_result) => {
+            let message = if clone_result.success {
+                format!(
+                    "✅ *Repository Cloned Successfully*\\n\\n📦 Repository: {}\\n📁 Location: {}\\n✨ {}",
+                    escape_markdown_v2(&clone_result.repository),
+                    escape_markdown_v2(&clone_result.target_directory),
+                    escape_markdown_v2(&clone_result.message)
+                )
+            } else {
+                format!(
+                    "❌ *Repository Clone Failed*\\n\\n📦 Repository: {}\\n🔍 Error: {}",
+                    escape_markdown_v2(&clone_result.repository),
+                    escape_markdown_v2(&clone_result.message)
+                )
+            };
+
+            bot.send_message(chat_id, message)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+        }
+        Err(e) => {
+            let error_message = if e.to_string().contains("authentication required")
+                || e.to_string().contains("not authenticated")
+            {
+                "❌ *GitHub Authentication Required*\\n\\n🔐 Please authenticate with GitHub \
+                 first using /githubauth"
+            } else if e.to_string().contains("gh: command not found")
+                || e.to_string().contains("executable file not found")
+            {
+                "❌ *GitHub CLI Not Available*\\n\\n⚠️ The GitHub CLI \\\\(gh\\\\) is not \
+                 installed in the coding session\\\\."
+            } else {
+                &format!(
+                    "❌ *Failed to clone repository*\\n\\n🔍 Error: {}",
+                    escape_markdown_v2(&e.to_string())
+                )
+            };
+
+            bot.send_message(chat_id, error_message)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+// Show repository selection with clickable buttons
+async fn show_repository_selection(
+    bot: &Bot,
+    msg: &Message,
+    github_client: &GithubClient,
+) -> ResponseResult<()> {
+    match github_client.repo_list().await {
+        Ok(repo_list) => {
+            if repo_list.trim().is_empty() {
+                bot.send_message(
+                    msg.chat.id,
+                    "📁 *GitHub Repository Selection*\\n\\n💡 No repositories found or no \
+                     repositories accessible with current authentication\\\\.",
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            } else {
+                // Parse repositories and create buttons
+                let repos = parse_repository_list(&repo_list);
+                if repos.is_empty() {
+                    bot.send_message(
+                        msg.chat.id,
+                        "📁 *GitHub Repository Selection*\\n\\n💡 No valid repositories found\\\\.",
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
+                } else {
+                    // Create inline keyboard with repository buttons
+                    let mut keyboard_rows = Vec::new();
+                    
+                    // Show up to 10 repositories to avoid UI clutter
+                    let display_repos = &repos[..repos.len().min(10)];
+                    
+                    for repo in display_repos.iter() {
+                        let button = InlineKeyboardButton::callback(
+                            format!("📦 {}", repo.name),
+                            format!("clone:{}", repo.full_name),
+                        );
+                        keyboard_rows.push(vec![button]);
+                    }
+
+                    let keyboard = InlineKeyboardMarkup::new(keyboard_rows);
+
+                    let repo_count_text = if repos.len() > 10 {
+                        format!("\\(showing first 10 of {} repositories\\)", repos.len())
+                    } else {
+                        format!("\\({} repositories\\)", repos.len())
+                    };
+
+                    bot.send_message(
+                        msg.chat.id,
+                        format!(
+                            "📁 *GitHub Repository Selection*\\n\\n🎯 Select a repository to clone {}\\n\\n💡 Click a repository button below to clone it:",
+                            repo_count_text
+                        ),
+                    )
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .reply_markup(keyboard)
+                    .await?;
+                }
+            }
+        }
+        Err(e) => {
+            let error_message = if e.to_string().contains("authentication required")
+                || e.to_string().contains("not authenticated")
+            {
+                "❌ *GitHub Authentication Required*\\n\\n🔐 Please authenticate with GitHub \
+                 first using /githubauth"
+            } else if e.to_string().contains("gh: command not found")
+                || e.to_string().contains("executable file not found")
+            {
+                "❌ *GitHub CLI Not Available*\\n\\n⚠️ The GitHub CLI \\\\(gh\\\\) is not \
+                 installed in the coding session\\\\."
+            } else {
+                &format!(
+                    "❌ *Failed to list repositories*\\n\\n🔍 Error: {}",
+                    escape_markdown_v2(&e.to_string())
+                )
+            };
+
+            bot.send_message(msg.chat.id, error_message)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+// Parse repository list into structured data
+#[derive(Debug)]
+pub struct Repository {
+    pub full_name: String,
+    pub name: String,
+}
+
+pub fn parse_repository_list(repo_list: &str) -> Vec<Repository> {
+    let lines: Vec<&str> = repo_list.trim().lines().collect();
+    let mut repos = Vec::new();
+
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // gh repo list output format is typically: "repo_name    description"
+        // Split by whitespace and take the first part as the repo name
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if let Some(full_name) = parts.first() {
+            let name = full_name
+                .split('/')
+                .last()
+                .unwrap_or(full_name)
+                .to_string();
+            
+            repos.push(Repository {
+                full_name: full_name.to_string(),
+                name,
+            });
+        }
+    }
+
+    repos
+}
+
 // Handle clear session command
 async fn handle_clear_session(
     bot: Bot,
@@ -1139,9 +1382,73 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         Command::GitHubRepoList => {
             handle_github_repo_list(bot.clone(), msg, bot_state.clone(), chat_id).await?;
         }
+        Command::GitHubClone(repository) => {
+            let repo_option = if repository.trim().is_empty() {
+                None
+            } else {
+                Some(repository)
+            };
+            handle_github_clone(bot.clone(), msg, bot_state.clone(), chat_id, repo_option).await?;
+        }
         Command::DebugClaudeLogin => {
             handle_debug_claude_login(bot.clone(), msg, chat_id).await?;
         }
+    }
+
+    Ok(())
+}
+
+// Handle callback queries from inline keyboard buttons
+async fn handle_callback_query(
+    bot: Bot,
+    query: CallbackQuery,
+    bot_state: BotState,
+) -> ResponseResult<()> {
+    if let Some(data) = &query.data {
+        if data.starts_with("clone:") {
+            // Extract repository name from callback data
+            let repository = data.strip_prefix("clone:").unwrap_or("");
+            
+            if let Some(message) = &query.message {
+                // Handle both accessible and inaccessible messages
+                let chat_id = message.chat().id;
+                let container_name = format!("coding-session-{}", chat_id.0);
+
+                // Answer the callback query to remove the loading state
+                bot.answer_callback_query(&query.id).await?;
+
+                match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                    Ok(client) => {
+                        let github_client = GithubClient::new(
+                            bot_state.docker.clone(),
+                            client.container_id().to_string(),
+                            GithubClientConfig::default(),
+                        );
+
+                        // Perform the clone operation
+                        perform_github_clone(&bot, chat_id, &github_client, repository).await?;
+                    }
+                    Err(e) => {
+                        bot.send_message(
+                            chat_id,
+                            format!(
+                                "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                 first using /start",
+                                escape_markdown_v2(&e.to_string())
+                            ),
+                        )
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                    }
+                }
+            }
+        } else {
+            // Unknown callback data, just answer the query
+            bot.answer_callback_query(&query.id).await?;
+        }
+    } else {
+        // No callback data, just answer the query
+        bot.answer_callback_query(&query.id).await?;
     }
 
     Ok(())
@@ -1437,5 +1744,64 @@ mod auth_code_detection_tests {
         assert!(is_authentication_code("a-b-c-1-2-3")); // With dashes
         assert!(is_authentication_code("a_b_c_1_2_3")); // With underscores
         assert!(is_authentication_code("a.b.c.1.2.3")); // With dots
+    }
+}
+
+#[cfg(test)]
+mod github_clone_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_repository_list_single_repo() {
+        let repo_list = "owner/repo1\tFirst repository";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].full_name, "owner/repo1");
+        assert_eq!(repos[0].name, "repo1");
+    }
+
+    #[test]
+    fn test_parse_repository_list_multiple_repos() {
+        let repo_list = "owner/repo1\tFirst repository\nowner/repo2\tSecond repository\nowner/repo3";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 3);
+        assert_eq!(repos[0].full_name, "owner/repo1");
+        assert_eq!(repos[0].name, "repo1");
+        assert_eq!(repos[1].full_name, "owner/repo2");
+        assert_eq!(repos[1].name, "repo2");
+        assert_eq!(repos[2].full_name, "owner/repo3");
+        assert_eq!(repos[2].name, "repo3");
+    }
+
+    #[test]
+    fn test_parse_repository_list_empty_input() {
+        let repo_list = "";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_repository_list_whitespace_only() {
+        let repo_list = "   \n\t\n   ";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_repository_list_mixed_formatting() {
+        let repo_list = "owner/project1\tDescription 1\nowner/project2    Description 2\nowner/project3";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 3);
+        assert_eq!(repos[0].full_name, "owner/project1");
+        assert_eq!(repos[0].name, "project1");
+        assert_eq!(repos[1].full_name, "owner/project2");
+        assert_eq!(repos[1].name, "project2");
+        assert_eq!(repos[2].full_name, "owner/project3");
+        assert_eq!(repos[2].name, "project3");
     }
 }
