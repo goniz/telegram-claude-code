@@ -41,7 +41,6 @@ pub enum InteractiveLoginState {
     ProvideUrl(String),
     WaitingForCode,
     LoginSuccessful,
-    Completed,
     OAuthPortError,
     Error(String),
 }
@@ -593,29 +592,21 @@ impl ClaudeCodeClient {
                                         InteractiveLoginState::LoginSuccessful => {
                                             log::info!("State: LoginSuccessful - pressing enter to continue");
                                           
-                                            if let Err(e) = stdin.write_all(b"/exit\r").await {
-                                                log::error!("Failed to send enter for login successful: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            if let Err(e) = stdin.flush().await {
-                                                log::error!("Failed to flush stdin for login successful: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            
-                                            session.state = InteractiveLoginState::Completed;
+                                            let _ = stdin.write_all(b"/exit").await;
+                                            let _ = stdin.flush().await;
 
-                                            let success_msg = "✅ **Claude Authentication Completed!**\n\nYour Claude account has been successfully authenticated.\n\nYou can now use Claude Code with your account privileges.".to_string();
-                                            log::debug!("Sending authentication completion state to user");
-                                            let _ = state_sender.send(AuthState::Completed(success_msg));
-                                            log::debug!("Successfully handled LoginSuccessful state");
-                                            return Ok(());
-                                        }
-                                        InteractiveLoginState::Completed => {
-                                            log::info!("State: Completed - Authentication process completed");
+                                            // Add a small delay to ensure the TTY processes the input
+                                            tokio::time::sleep(Duration::from_millis(100)).await;
+
+                                            let _ = stdin.write_all(b"\r").await;
+                                            let _ = stdin.flush().await;
+                                            
+                                            session.state = new_state.clone();
+
                                             let success_msg = "✅ Claude Code authentication completed successfully!".to_string();
                                             log::debug!("Sending final completion state to user");
                                             let _ = state_sender.send(AuthState::Completed(success_msg));
-                                            log::info!("Authentication completed successfully via Completed state");
+                                            log::debug!("Successfully handled LoginSuccessful state");
                                             return Ok(());
                                         }
                                         InteractiveLoginState::OAuthPortError => {

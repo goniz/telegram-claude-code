@@ -269,6 +269,7 @@ async fn handle_auth_state_updates(
     bot_state: BotState,
 ) {
     while let Some(state) = state_receiver.recv().await {
+        log::debug!("Received authentication state update: {:?}", state);
         match state {
             AuthState::Starting => {
                 let _ = bot
@@ -310,7 +311,7 @@ async fn handle_auth_state_updates(
             }
             AuthState::Completed(message) => {
                 let _ = bot
-                    .send_message(chat_id, message)
+                    .send_message(chat_id, escape_markdown_v2(&message))
                     .parse_mode(ParseMode::MarkdownV2)
                     .await;
                 // Clean up the session
@@ -336,6 +337,18 @@ async fn handle_auth_state_updates(
                 break;
             }
         }
+    }
+
+    // Log when the state_receiver is closed
+    log::warn!(
+        "Authentication state receiver closed for chat_id: {}",
+        chat_id.0
+    );
+
+    // Clean up the session if it still exists
+    {
+        let mut sessions = bot_state.auth_sessions.lock().await;
+        sessions.remove(&chat_id.0);
     }
 }
 
