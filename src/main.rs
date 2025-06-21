@@ -703,11 +703,11 @@ async fn handle_update_claude(
             match client.update_claude().await {
                 Ok(output) => {
                     let message = format!(
-                        "✅ *Claude CLI Update Complete*\n\n```\n{}\n```",
-                        escape_markdown_v2(&output)
+                        "✅ Claude CLI Update Complete\n\n{}", 
+                        output
                     );
                     
-                    bot.send_message(msg.chat.id, message)
+                    bot.send_message(msg.chat.id, escape_markdown_v2(&message))
                         .parse_mode(ParseMode::MarkdownV2)
                         .await?;
                 }
