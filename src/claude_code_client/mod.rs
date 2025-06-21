@@ -45,7 +45,6 @@ pub enum InteractiveLoginState {
     TrustFiles,
     Completed,
     OAuthPortError,
-    PressEnterToRetry,
     Error(String),
 }
 
