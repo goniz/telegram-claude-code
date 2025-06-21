@@ -41,9 +41,6 @@ pub enum InteractiveLoginState {
     ProvideUrl(String),
     WaitingForCode,
     LoginSuccessful,
-    SecurityNotes,
-    TrustFiles,
-    Completed,
     OAuthPortError,
     Error(String),
 }
@@ -293,7 +290,7 @@ impl ClaudeCodeClient {
             .create(true)
             .write(true)
             .truncate(true)
-            .open(&log_file_path)
+            .open(log_file_path)
             .await
         {
             Ok(file) => {
@@ -317,6 +314,7 @@ impl ClaudeCodeClient {
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             tty: Some(true),
+            privileged: Some(false),
             working_dir: self.config.working_directory.clone(),
             env: Some(vec![
                 "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:\
@@ -324,7 +322,9 @@ impl ClaudeCodeClient {
                  usr/bin:/sbin:/bin"
                     .to_string(),
                 "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
-                "TERM=xterm".to_string(),
+                "TERM=xterm-256color".to_string(),
+                "TERMINFO=/usr/share/terminfo".to_string(),
+                "DEBIAN_FRONTEND=noninteractive".to_string(),
             ]),
             ..Default::default()
         };
@@ -371,8 +371,8 @@ impl ClaudeCodeClient {
                 let buffer_timeout_ms = 200;
 
                 // Process the interactive session with channel communication
-                log::debug!("Starting interactive authentication loop with 1-minute timeout");
-                let timeout_result = tokio::time::timeout(Duration::from_secs(60), async {
+                log::debug!("Starting interactive authentication loop with 2-minute timeout");
+                let timeout_result = tokio::time::timeout(Duration::from_secs(120), async {
                     loop {
                         log::debug!("Waiting for events in authentication select loop");
                         tokio::select! {
@@ -401,13 +401,24 @@ impl ClaudeCodeClient {
                                 log::debug!("Code receiver branch triggered");
                                 if let Some(code) = code {
                                     log::info!("Received auth code from user, sending to CLI");
-                                    log::debug!("Auth code: '{}'", &code);
+                                    log::debug!("Auth code: '{}' (length: {})", &code, code.len());
+                                    log::debug!("Current session state: {:?}", session.state);
 
+                                    if let Some(last_output) = session.last_output.as_ref() {
+                                        if last_output.contains("Press Enter to retry") {
+                                            stdin.write_all(b"\r").await?;
+                                            stdin.flush().await?;
+                                        }
+                                    }
+
+                                    // Send auth code with proper line ending
                                     let _ = stdin.write_all(code.as_bytes()).await;
-                                    let _ = stdin.write_all(b"\r").await;
                                     let _ = stdin.flush().await;
+                                    
+                                    // Add a small delay to ensure the TTY processes the input
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
 
-                                    let _ = stdin.write_all(b"\n").await;
+                                    let _ = stdin.write_all(b"\r").await;
                                     let _ = stdin.flush().await;
                                     
                                     log::debug!("Successfully sent auth code to CLI");
@@ -442,6 +453,7 @@ impl ClaudeCodeClient {
                                     // Strip ANSI escape sequences for clean processing
                                     let text = Self::strip_ansi_codes(&raw_text);
                                     session.last_output = Some(text.clone());
+
                                     log::debug!("Claude CLI output: {}", text);
 
                                     // Write all CLI output to log file (both raw and cleaned)
@@ -558,18 +570,13 @@ impl ClaudeCodeClient {
                                         InteractiveLoginState::ProvideUrl(url) => {
                                             log::info!("State: ProvideUrl - Authentication URL detected: {}", url);
                                             session.url = Some(url.clone());
-                                            session.state = new_state.clone();
 
                                             // Send URL to user via channel
                                             log::debug!("Sending UrlReady state to user");
                                             let _ = state_sender.send(AuthState::UrlReady(url.clone()));
-
-                                            log::info!("Authentication URL sent to user, waiting for code input");
-                                            log::debug!("Sending WaitingForCode state to user");
                                             let _ = state_sender.send(AuthState::WaitingForCode);
-                                            session.awaiting_user_code = true;
                                             session.state = InteractiveLoginState::WaitingForCode;
-
+                                            log::info!("Authentication URL sent to user, waiting for code input");
                                             log::debug!("Successfully handled ProvideUrl state");
                                         }
                                         InteractiveLoginState::WaitingForCode => {
@@ -585,54 +592,21 @@ impl ClaudeCodeClient {
                                         InteractiveLoginState::LoginSuccessful => {
                                             log::info!("State: LoginSuccessful - pressing enter to continue");
                                           
-                                            if let Err(e) = stdin.write_all(b"\r").await {
-                                                log::error!("Failed to send enter for login successful: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            if let Err(e) = stdin.flush().await {
-                                                log::error!("Failed to flush stdin for login successful: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            session.state = new_state.clone();
-                                            log::debug!("Successfully handled LoginSuccessful state");
-                                        }
-                                        InteractiveLoginState::SecurityNotes => {
-                                            log::debug!("State: SecurityNotes detected, pressing enter to continue");
-                                            if let Err(e) = stdin.write_all(b"\r").await {
-                                                log::error!("Failed to send enter for security notes: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            if let Err(e) = stdin.flush().await {
-                                                log::error!("Failed to flush stdin for security notes: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            session.state = new_state.clone();
-                                            log::debug!("Successfully handled SecurityNotes state");
-                                        }
-                                        InteractiveLoginState::TrustFiles => {
-                                            log::info!("State: TrustFiles prompt detected, completing authentication");
-                                            if let Err(e) = stdin.write_all(b"\r").await {
-                                                log::error!("Failed to send enter for trust files: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            if let Err(e) = stdin.flush().await {
-                                                log::error!("Failed to flush stdin for trust files: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            session.state = InteractiveLoginState::Completed;
+                                            let _ = stdin.write_all(b"/exit").await;
+                                            let _ = stdin.flush().await;
 
-                                            let success_msg = "✅ **Claude Authentication Completed!**\n\nYour Claude account has been successfully authenticated.\n\nYou can now use Claude Code with your account privileges.".to_string();
-                                            log::debug!("Sending authentication completion state to user");
-                                            let _ = state_sender.send(AuthState::Completed(success_msg));
-                                            log::info!("Authentication completed successfully via TrustFiles state");
-                                            return Ok(());
-                                        }
-                                        InteractiveLoginState::Completed => {
-                                            log::info!("State: Completed - Authentication process completed");
+                                            // Add a small delay to ensure the TTY processes the input
+                                            tokio::time::sleep(Duration::from_millis(100)).await;
+
+                                            let _ = stdin.write_all(b"\r").await;
+                                            let _ = stdin.flush().await;
+                                            
+                                            session.state = new_state.clone();
+
                                             let success_msg = "✅ Claude Code authentication completed successfully!".to_string();
                                             log::debug!("Sending final completion state to user");
                                             let _ = state_sender.send(AuthState::Completed(success_msg));
-                                            log::info!("Authentication completed successfully via Completed state");
+                                            log::debug!("Successfully handled LoginSuccessful state");
                                             return Ok(());
                                         }
                                         InteractiveLoginState::OAuthPortError => {
@@ -759,10 +733,6 @@ impl ClaudeCodeClient {
             InteractiveLoginState::WaitingForCode
         } else if output_lower.contains("login successful") {
             InteractiveLoginState::LoginSuccessful
-        } else if output_lower.contains("security notes") {
-            InteractiveLoginState::SecurityNotes
-        } else if output_lower.contains("do you trust the files in this folder") {
-            InteractiveLoginState::TrustFiles
         } else {
             // Don't treat everything as an error, just continue with current state
             log::debug!("Unrecognized CLI output state, continuing with current state: {}", output);
