@@ -318,6 +318,7 @@ impl ClaudeCodeClient {
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             tty: Some(true),
+            privileged: Some(false),
             working_dir: self.config.working_directory.clone(),
             env: Some(vec![
                 "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:\
@@ -325,7 +326,9 @@ impl ClaudeCodeClient {
                  usr/bin:/sbin:/bin"
                     .to_string(),
                 "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
-                "TERM=xterm".to_string(),
+                "TERM=xterm-256color".to_string(),
+                "TERMINFO=/usr/share/terminfo".to_string(),
+                "DEBIAN_FRONTEND=noninteractive".to_string(),
             ]),
             ..Default::default()
         };
@@ -402,7 +405,8 @@ impl ClaudeCodeClient {
                                 log::debug!("Code receiver branch triggered");
                                 if let Some(code) = code {
                                     log::info!("Received auth code from user, sending to CLI");
-                                    log::debug!("Auth code: '{}'", &code);
+                                    log::debug!("Auth code: '{}' (length: {})", &code, code.len());
+                                    log::debug!("Current session state: {:?}", session.state);
 
                                     if let Some(last_output) = session.last_output.as_ref() {
                                         if last_output.contains("Press Enter to retry") {
@@ -411,16 +415,44 @@ impl ClaudeCodeClient {
                                         }
                                     }
 
-                                    if let Err(e) = stdin.write_all(format!("{}\r", code).as_bytes()).await {
-                                        log::error!("Failed to write auth code to stdin: {}", e);
-                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to send code: {}", e)));
-                                        return Err(e.into());
+                                    // Try multiple line ending combinations for better TTY compatibility
+                                    // Some TTY implementations expect different line endings
+                                    let line_endings = vec!["\r\n", "\n", "\r"];
+                                    let mut write_success = false;
+                                    
+                                    for ending in line_endings {
+                                        let code_with_ending = format!("{}{}", code, ending);
+                                        log::debug!("Trying to send code with ending: {:?}", ending);
+                                        
+                                        match stdin.write_all(code_with_ending.as_bytes()).await {
+                                            Ok(_) => {
+                                                match stdin.flush().await {
+                                                    Ok(_) => {
+                                                        log::debug!("Successfully sent auth code with ending: {:?}", ending);
+                                                        write_success = true;
+                                                        break;
+                                                    }
+                                                    Err(e) => {
+                                                        log::warn!("Failed to flush stdin with ending {:?}: {}", ending, e);
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::warn!("Failed to write auth code with ending {:?}: {}", ending, e);
+                                                continue;
+                                            }
+                                        }
                                     }
-                                    if let Err(e) = stdin.flush().await {
-                                        log::error!("Failed to flush stdin after auth code: {}", e);
-                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to flush stdin: {}", e)));
-                                        return Err(e.into());
+                                    
+                                    if !write_success {
+                                        log::error!("Failed to write auth code with any line ending");
+                                        let _ = state_sender.send(AuthState::Failed("Failed to send authentication code to CLI".to_string()));
+                                        return Err("Failed to send authentication code".into());
                                     }
+                                    
+                                    // Add a small delay to ensure the TTY processes the input
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
                                     
                                     log::debug!("Successfully sent auth code to CLI");
                                 } else {
