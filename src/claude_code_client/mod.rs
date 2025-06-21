@@ -41,8 +41,6 @@ pub enum InteractiveLoginState {
     ProvideUrl(String),
     WaitingForCode,
     LoginSuccessful,
-    SecurityNotes,
-    TrustFiles,
     Completed,
     OAuthPortError,
     Error(String),
@@ -415,19 +413,14 @@ impl ClaudeCodeClient {
                                     }
 
                                     // Send auth code with proper line ending
-                                    if let Err(e) = stdin.write_all(format!("{}\r\n", code).as_bytes()).await {
-                                        log::error!("Failed to write auth code to stdin: {}", e);
-                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to send code: {}", e)));
-                                        return Err(e.into());
-                                    }
-                                    if let Err(e) = stdin.flush().await {
-                                        log::error!("Failed to flush stdin after auth code: {}", e);
-                                        let _ = state_sender.send(AuthState::Failed(format!("Failed to flush stdin: {}", e)));
-                                        return Err(e.into());
-                                    }
+                                    let _ = stdin.write_all(code.as_bytes()).await;
+                                    let _ = stdin.flush().await;
                                     
                                     // Add a small delay to ensure the TTY processes the input
                                     tokio::time::sleep(Duration::from_millis(100)).await;
+
+                                    let _ = stdin.write_all(b"\r").await;
+                                    let _ = stdin.flush().await;
                                     
                                     log::debug!("Successfully sent auth code to CLI");
                                 } else {
@@ -600,7 +593,7 @@ impl ClaudeCodeClient {
                                         InteractiveLoginState::LoginSuccessful => {
                                             log::info!("State: LoginSuccessful - pressing enter to continue");
                                           
-                                            if let Err(e) = stdin.write_all(b"\r").await {
+                                            if let Err(e) = stdin.write_all(b"/exit\r").await {
                                                 log::error!("Failed to send enter for login successful: {}", e);
                                                 return Err(e.into());
                                             }
@@ -608,38 +601,13 @@ impl ClaudeCodeClient {
                                                 log::error!("Failed to flush stdin for login successful: {}", e);
                                                 return Err(e.into());
                                             }
-                                            session.state = new_state.clone();
-                                            log::debug!("Successfully handled LoginSuccessful state");
-                                        }
-                                        InteractiveLoginState::SecurityNotes => {
-                                            log::debug!("State: SecurityNotes detected, pressing enter to continue");
-                                            if let Err(e) = stdin.write_all(b"\r").await {
-                                                log::error!("Failed to send enter for security notes: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            if let Err(e) = stdin.flush().await {
-                                                log::error!("Failed to flush stdin for security notes: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            session.state = new_state.clone();
-                                            log::debug!("Successfully handled SecurityNotes state");
-                                        }
-                                        InteractiveLoginState::TrustFiles => {
-                                            log::info!("State: TrustFiles prompt detected, completing authentication");
-                                            if let Err(e) = stdin.write_all(b"\r").await {
-                                                log::error!("Failed to send enter for trust files: {}", e);
-                                                return Err(e.into());
-                                            }
-                                            if let Err(e) = stdin.flush().await {
-                                                log::error!("Failed to flush stdin for trust files: {}", e);
-                                                return Err(e.into());
-                                            }
+                                            
                                             session.state = InteractiveLoginState::Completed;
 
                                             let success_msg = "✅ **Claude Authentication Completed!**\n\nYour Claude account has been successfully authenticated.\n\nYou can now use Claude Code with your account privileges.".to_string();
                                             log::debug!("Sending authentication completion state to user");
                                             let _ = state_sender.send(AuthState::Completed(success_msg));
-                                            log::info!("Authentication completed successfully via TrustFiles state");
+                                            log::debug!("Successfully handled LoginSuccessful state");
                                             return Ok(());
                                         }
                                         InteractiveLoginState::Completed => {
@@ -774,10 +742,6 @@ impl ClaudeCodeClient {
             InteractiveLoginState::WaitingForCode
         } else if output_lower.contains("login successful") {
             InteractiveLoginState::LoginSuccessful
-        } else if output_lower.contains("security notes") {
-            InteractiveLoginState::SecurityNotes
-        } else if output_lower.contains("do you trust the files in this folder") {
-            InteractiveLoginState::TrustFiles
         } else {
             // Don't treat everything as an error, just continue with current state
             log::debug!("Unrecognized CLI output state, continuing with current state: {}", output);
