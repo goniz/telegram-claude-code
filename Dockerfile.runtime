@@ -14,6 +14,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
 # Ensure the claude binary is in PATH
 ENV PATH="/usr/local/bin:$PATH"
 
+ENV CODEX_ENV_PYTHON_VERSION="3.12"
+ENV CODEX_ENV_NODE_VERSION="22"
+ENV CODEX_ENV_RUST_VERSION="1.87.0"
+ENV CODEX_ENV_GO_VERSION="1.23.8"
+
 # Install Claude Code via npm globally
 RUN /opt/entrypoint.sh -c \
 		"nvm use default && npm install -g @anthropic-ai/claude-code"
