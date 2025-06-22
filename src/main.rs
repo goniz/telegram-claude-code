@@ -852,15 +852,13 @@ async fn perform_github_clone(
             let error_message = if e.to_string().contains("authentication required")
                 || e.to_string().contains("not authenticated")
             {
-                "❌ *GitHub Authentication Required*\\n\\n🔐 Please authenticate with GitHub \
-                 first using /githubauth"
+                escape_markdown_v2("❌ *GitHub Authentication Required*\n\n🔐 Please authenticate with GitHub first using /githubauth")
             } else if e.to_string().contains("gh: command not found")
                 || e.to_string().contains("executable file not found")
             {
-                "❌ *GitHub CLI Not Available*\\n\\n⚠️ The GitHub CLI \\\\(gh\\\\) is not \
-                 installed in the coding session\\\\."
+                escape_markdown_v2("❌ *GitHub CLI Not Available*\n\n⚠️ The GitHub CLI (gh) is not installed in the coding session.")
             } else {
-                &format!(
+                format!(
                     "❌ *Failed to clone repository*\\n\\n🔍 Error: {}",
                     escape_markdown_v2(&e.to_string())
                 )
