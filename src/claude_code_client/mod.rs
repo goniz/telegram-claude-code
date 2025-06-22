@@ -828,6 +828,14 @@ To authenticate with your Claude account, please follow these steps:
         self.exec_command(command).await
     }
 
+    /// Update Claude CLI to latest version
+    pub async fn update_claude(
+        &self,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let command = vec!["claude".to_string(), "update".to_string()];
+        self.exec_command(command).await
+    }
+
     /// Execute a command in the container and return output
     async fn exec_command(
         &self,
