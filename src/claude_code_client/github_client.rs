@@ -294,28 +294,11 @@ impl GithubClient {
                 .to_string()
         };
 
-        match self.exec_command(clone_command).await {
-            Ok(output) => {
+        match self.exec_command_allow_failure(clone_command).await {
+            Ok((output, success)) => {
                 log::debug!("Clone command output: {}", output);
 
-                // Check if the output contains error patterns
-                let is_error = output.contains("exec failed")
-                    || output.contains("executable file not found")
-                    || output.contains("not found")
-                    || output.contains("permission denied")
-                    || output.contains("authentication required")
-                    || output.contains("repository not found")
-                    || output.contains("404");
-
-                if is_error {
-                    log::error!("Repository clone failed with error in output: {}", output);
-                    Ok(GithubCloneResult {
-                        success: false,
-                        repository: repository.to_string(),
-                        target_directory,
-                        message: format!("Clone failed: {}", output),
-                    })
-                } else {
+                if success {
                     log::info!("Repository cloned successfully");
                     Ok(GithubCloneResult {
                         success: true,
@@ -323,10 +306,18 @@ impl GithubClient {
                         target_directory,
                         message: format!("Successfully cloned {}", repository),
                     })
+                } else {
+                    log::error!("Repository clone failed with error in output: {}", output);
+                    Ok(GithubCloneResult {
+                        success: false,
+                        repository: repository.to_string(),
+                        target_directory,
+                        message: format!("Clone failed: {}", output),
+                    })
                 }
             }
             Err(e) => {
-                log::error!("Repository clone failed: {}", e);
+                log::error!("Repository clone command execution failed: {}", e);
                 Ok(GithubCloneResult {
                     success: false,
                     repository: repository.to_string(),
@@ -528,6 +519,85 @@ impl GithubClient {
         }
 
         (oauth_url, device_code)
+    }
+
+    /// Execute a command in the container and return output with success status
+    /// This method returns the output even if the command fails (non-zero exit code)
+    async fn exec_command_allow_failure(
+        &self,
+        command: Vec<String>,
+    ) -> Result<(String, bool), Box<dyn std::error::Error + Send + Sync>> {
+        let exec_config = CreateExecOptions {
+            cmd: Some(command.clone()),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            working_dir: self.config.working_directory.clone(),
+            env: Some(vec![
+                // Set up PATH to include standard paths and potential gh installation locations
+                "PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string(),
+                // Set HOME directory for gh configuration
+                "HOME=/root".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let exec = self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await?;
+
+        let start_config = StartExecOptions {
+            detach: false,
+            ..Default::default()
+        };
+
+        let mut output = String::new();
+
+        // Wrap the exec operation in a timeout
+        let timeout_duration = Duration::from_secs(self.config.exec_timeout_secs);
+        
+        let exec_result = timeout(timeout_duration, async {
+            match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+                bollard::exec::StartExecResults::Attached {
+                    output: mut output_stream,
+                    ..
+                } => {
+                    while let Some(Ok(msg)) = output_stream.next().await {
+                        match msg {
+                            bollard::container::LogOutput::StdOut { message } => {
+                                output.push_str(&String::from_utf8_lossy(&message));
+                            }
+                            bollard::container::LogOutput::StdErr { message } => {
+                                output.push_str(&String::from_utf8_lossy(&message));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                bollard::exec::StartExecResults::Detached => {
+                    return Err("Unexpected detached execution".into());
+                }
+            }
+
+            // Check the exit code of the command but return output regardless
+            let inspect_exec = self.docker.inspect_exec(&exec.id).await?;
+            let success = if let Some(exit_code) = inspect_exec.exit_code {
+                exit_code == 0
+            } else {
+                false // If we can't determine exit code, assume failure
+            };
+
+            Ok::<(String, bool), Box<dyn std::error::Error + Send + Sync>>((output.trim().to_string(), success))
+        }).await;
+
+        match exec_result {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "Command timed out after {} seconds: {}", 
+                self.config.exec_timeout_secs,
+                command.join(" ")
+            ).into()),
+        }
     }
 
     /// Execute a command in the container and return output
