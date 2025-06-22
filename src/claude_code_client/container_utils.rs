@@ -30,6 +30,23 @@ pub fn generate_volume_name(volume_key: &str) -> String {
     format!("dev-session-claude-{}", volume_key)
 }
 
+/// Prepare environment variables for container creation with dynamic GH_TOKEN support
+/// Includes common development environment variables and optionally GH_TOKEN
+fn prepare_container_env_vars_dynamic() -> Vec<String> {
+    let mut env_vars = vec![
+        "CODEX_ENV_PYTHON_VERSION=3.12".to_string(),
+        "CODEX_ENV_NODE_VERSION=22".to_string(),
+        "CODEX_ENV_RUST_VERSION=1.87.0".to_string(),
+        "CODEX_ENV_GO_VERSION=1.23.8".to_string(),
+    ];
+    
+    if let Ok(gh_token) = std::env::var("GH_TOKEN") {
+        env_vars.push(format!("GH_TOKEN={}", gh_token));
+    }
+    
+    env_vars
+}
+
 /// Create or get existing volume for user authentication persistence
 /// This function is idempotent - it will not fail if the volume already exists
 pub async fn ensure_user_volume(
@@ -321,24 +338,8 @@ pub async fn start_coding_session(
     };
 
     // Prepare environment variables for the container
-    let gh_token_env_var;
-    let env_vars = if let Ok(gh_token) = std::env::var("GH_TOKEN") {
-        gh_token_env_var = format!("GH_TOKEN={}", gh_token);
-        vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=22",
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-            &gh_token_env_var,
-        ]
-    } else {
-        vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=22",
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-        ]
-    };
+    let env_vars_owned = prepare_container_env_vars_dynamic();
+    let env_vars: Vec<&str> = env_vars_owned.iter().map(|s| s.as_str()).collect();
 
     let config = Config {
         image: Some(MAIN_CONTAINER_IMAGE),
@@ -445,24 +446,8 @@ pub async fn create_test_container(
     };
 
     // Prepare environment variables for the container
-    let gh_token_env_var;
-    let env_vars = if let Ok(gh_token) = std::env::var("GH_TOKEN") {
-        gh_token_env_var = format!("GH_TOKEN={}", gh_token);
-        vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=22",
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-            &gh_token_env_var,
-        ]
-    } else {
-        vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=22",
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-        ]
-    };
+    let env_vars_owned = prepare_container_env_vars_dynamic();
+    let env_vars: Vec<&str> = env_vars_owned.iter().map(|s| s.as_str()).collect();
 
     let config = Config {
         image: Some(MAIN_CONTAINER_IMAGE),

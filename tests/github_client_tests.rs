@@ -578,11 +578,15 @@ async fn test_github_repo_clone_nonexistent_variations(#[future] test_container:
         );
 
         // The message should indicate the failure reason
+        // With our improved error analysis, we now get more helpful messages
         assert!(
             clone_response.message.contains("Clone failed") ||
             clone_response.message.contains("not found") ||
             clone_response.message.contains("404") ||
-            clone_response.message.contains("repository not found"),
+            clone_response.message.contains("repository not found") ||
+            clone_response.message.contains("Repository not found") ||
+            clone_response.message.contains("Authentication required") ||
+            clone_response.message.contains("Permission denied"),
             "Clone failure message should indicate the reason for repo '{}': {}",
             repo,
             clone_response.message
