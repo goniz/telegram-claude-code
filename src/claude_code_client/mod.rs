@@ -404,7 +404,6 @@ impl ClaudeCodeClient {
                                     log::info!("Received auth code from user, sending to CLI");
                                     log::debug!("Auth code: '{}' (length: {})", &code, code.len());
                                     log::debug!("Current session state: {:?}", session.state);
-
                                     if let Some(last_output) = session.last_output.as_ref() {
                                         if last_output.contains("Press Enter to retry") {
                                             stdin.write_all(b"\r").await?;
