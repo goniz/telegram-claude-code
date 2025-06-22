@@ -30,6 +30,23 @@ pub fn generate_volume_name(volume_key: &str) -> String {
     format!("dev-session-claude-{}", volume_key)
 }
 
+/// Prepare environment variables for container creation with dynamic GH_TOKEN support
+/// Includes common development environment variables and optionally GH_TOKEN
+fn prepare_container_env_vars_dynamic() -> Vec<String> {
+    let mut env_vars = vec![
+        "CODEX_ENV_PYTHON_VERSION=3.12".to_string(),
+        "CODEX_ENV_NODE_VERSION=22".to_string(),
+        "CODEX_ENV_RUST_VERSION=1.87.0".to_string(),
+        "CODEX_ENV_GO_VERSION=1.23.8".to_string(),
+    ];
+    
+    if let Ok(gh_token) = std::env::var("GH_TOKEN") {
+        env_vars.push(format!("GH_TOKEN={}", gh_token));
+    }
+    
+    env_vars
+}
+
 /// Create or get existing volume for user authentication persistence
 /// This function is idempotent - it will not fail if the volume already exists
 pub async fn ensure_user_volume(
@@ -94,15 +111,39 @@ async fn init_claude_configuration(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     log::info!("Initializing Claude configuration...");
     
-    // Initialize .claude.json with required configuration
-    exec_command_in_container(
+    // Check if .claude.json already exists and has valid content
+    let existing_content_check = exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "echo '{ \"hasCompletedOnboarding\": true }' > /root/.claude.json".to_string()]
-    ).await
-    .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
+        vec!["sh".to_string(), "-c".to_string(), "test -f /root/.claude.json && cat /root/.claude.json".to_string()]
+    ).await;
     
-    // Set Claude configuration for trust dialog
+    let should_initialize = match existing_content_check {
+        Ok(content) => {
+            // Check if content contains the required hasCompletedOnboarding field
+            !content.contains("hasCompletedOnboarding") || content.trim().is_empty()
+        }
+        Err(_) => {
+            // File doesn't exist or can't be read
+            true
+        }
+    };
+    
+    if should_initialize {
+        // Initialize .claude.json with required configuration
+        exec_command_in_container(
+            docker,
+            container_id,
+            vec!["sh".to_string(), "-c".to_string(), "echo '{ \"hasCompletedOnboarding\": true }' > /root/.claude.json".to_string()]
+        ).await
+        .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
+        
+        log::info!("Created new .claude.json configuration");
+    } else {
+        log::info!("Using existing .claude.json configuration");
+    }
+    
+    // Set Claude configuration for trust dialog (always run to ensure it's set)
     exec_command_in_container(
         docker,
         container_id,
@@ -139,8 +180,8 @@ async fn init_volume_structure(
             .map_err(|e| format!("Failed to initialize volume directory structure: {}", e))?;
     }
     
-    // Handle .claude.json file for volume persistence
-    // First check if it already exists in the volume (from previous sessions)
+    // Create .claude.json placeholder in volume if it doesn't exist
+    // This will be overwritten by init_claude_configuration if needed
     let volume_claude_json_check = exec_command_in_container(
         docker, 
         container_id, 
@@ -148,16 +189,19 @@ async fn init_volume_structure(
     ).await;
     
     if volume_claude_json_check.is_err() {
-        // File doesn't exist in volume, copy the one we just created to volume
+        // File doesn't exist in volume, create placeholder
         exec_command_in_container(
             docker,
             container_id,
-            vec!["cp".to_string(), "/root/.claude.json".to_string(), "/volume_data/claude.json".to_string()]
+            vec!["touch".to_string(), "/volume_data/claude.json".to_string()]
         ).await
-        .map_err(|e| format!("Failed to copy .claude.json to volume: {}", e))?;
+        .map_err(|e| format!("Failed to create .claude.json placeholder in volume: {}", e))?;
+    } else {
+        // File already exists in volume from previous session, we'll use that
+        log::info!(".claude.json already exists in volume, using persistent version");
     }
     
-    // Remove existing .claude.json if it exists
+    // Remove existing .claude.json if it exists (will be replaced by symlink)
     let _ = exec_command_in_container(
         docker,
         container_id,
@@ -320,6 +364,10 @@ pub async fn start_coding_session(
         ..Default::default()
     };
 
+    // Prepare environment variables for the container
+    let env_vars_owned = prepare_container_env_vars_dynamic();
+    let env_vars: Vec<&str> = env_vars_owned.iter().map(|s| s.as_str()).collect();
+
     let config = Config {
         image: Some(MAIN_CONTAINER_IMAGE),
         working_dir: Some("/workspace"),
@@ -327,12 +375,7 @@ pub async fn start_coding_session(
         attach_stdin: Some(true),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
-        env: Some(vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=22",
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-        ]),
+        env: Some(env_vars),
         // Override the default command to prevent interactive shell hang
         // Run setup script then keep container alive with sleep
         cmd: Some(vec!["-c", "sleep infinity"]),
@@ -353,13 +396,14 @@ pub async fn start_coding_session(
     // Wait for container to be ready
     wait_for_container_ready(docker, &container.id).await?;
     
-    // Initialize Claude configuration (always needed regardless of volume usage)
-    init_claude_configuration(docker, &container.id).await?;
-    
     // Initialize volume structure for authentication persistence only if using persistent volumes
     if container_config.persistent_volume_key.is_some() {
         init_volume_structure(docker, &container.id).await?;
     }
+    
+    // Initialize Claude configuration after volume structure (always needed regardless of volume usage)
+    // If volume is used, this will be symlinked to the volume, otherwise it's created locally
+    init_claude_configuration(docker, &container.id).await?;
 
     // Create Claude Code client (Claude Code is pre-installed in the runtime image)
     let claude_client = ClaudeCodeClient::new(docker.clone(), container.id.clone(), claude_config);
@@ -429,6 +473,10 @@ pub async fn create_test_container(
         ..Default::default()
     };
 
+    // Prepare environment variables for the container
+    let env_vars_owned = prepare_container_env_vars_dynamic();
+    let env_vars: Vec<&str> = env_vars_owned.iter().map(|s| s.as_str()).collect();
+
     let config = Config {
         image: Some(MAIN_CONTAINER_IMAGE),
         working_dir: Some("/workspace"),
@@ -436,12 +484,7 @@ pub async fn create_test_container(
         attach_stdin: Some(true),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
-        env: Some(vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=22",
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-        ]),
+        env: Some(env_vars),
         cmd: Some(vec!["/bin/bash"]),
         ..Default::default()
     };

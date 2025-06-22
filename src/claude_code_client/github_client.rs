@@ -294,44 +294,50 @@ impl GithubClient {
                 .to_string()
         };
 
-        match self.exec_command(clone_command).await {
-            Ok(output) => {
+        match self.exec_command_allow_failure(clone_command).await {
+            Ok((output, success)) => {
                 log::debug!("Clone command output: {}", output);
 
-                // Check if the output contains error patterns
-                let is_error = output.contains("exec failed")
-                    || output.contains("executable file not found")
-                    || output.contains("not found")
-                    || output.contains("permission denied")
-                    || output.contains("authentication required")
-                    || output.contains("repository not found")
-                    || output.contains("404");
-
-                if is_error {
-                    log::error!("Repository clone failed with error in output: {}", output);
+                if success {
+                    // Double-check success by looking for common success indicators
+                    // This provides additional validation beyond exit code
+                    if output.contains("Cloning into") || output.is_empty() {
+                        log::info!("Repository cloned successfully");
+                        Ok(GithubCloneResult {
+                            success: true,
+                            repository: repository.to_string(),
+                            target_directory,
+                            message: format!("Successfully cloned {}", repository),
+                        })
+                    } else {
+                        // Exit code was 0 but output doesn't look like success
+                        log::warn!("Clone command succeeded but output is unexpected: {}", output);
+                        Ok(GithubCloneResult {
+                            success: true,
+                            repository: repository.to_string(),
+                            target_directory,
+                            message: format!("Clone completed with warnings: {}", output),
+                        })
+                    }
+                } else {
+                    // Analyze the failure to provide better error messages
+                    let error_message = self.analyze_clone_failure(&output);
+                    log::error!("Repository clone failed: {}", error_message);
                     Ok(GithubCloneResult {
                         success: false,
                         repository: repository.to_string(),
                         target_directory,
-                        message: format!("Clone failed: {}", output),
-                    })
-                } else {
-                    log::info!("Repository cloned successfully");
-                    Ok(GithubCloneResult {
-                        success: true,
-                        repository: repository.to_string(),
-                        target_directory,
-                        message: format!("Successfully cloned {}", repository),
+                        message: error_message,
                     })
                 }
             }
             Err(e) => {
-                log::error!("Repository clone failed: {}", e);
+                log::error!("Repository clone command execution failed: {}", e);
                 Ok(GithubCloneResult {
                     success: false,
                     repository: repository.to_string(),
                     target_directory,
-                    message: format!("Clone failed: {}", e),
+                    message: format!("Command execution failed: {}", e),
                 })
             }
         }
@@ -528,6 +534,125 @@ impl GithubClient {
         }
 
         (oauth_url, device_code)
+    }
+
+    /// Analyze clone failure output to provide better error messages
+    fn analyze_clone_failure(&self, output: &str) -> String {
+        let output_lower = output.to_lowercase();
+        
+        // Check for common error patterns and provide helpful messages
+        if output_lower.contains("repository not found") || output_lower.contains("404") {
+            format!("Repository not found. Please check the repository name and ensure it exists.")
+        } else if output_lower.contains("permission denied") || output_lower.contains("403") {
+            format!("Permission denied. The repository may be private or require authentication.")
+        } else if output_lower.contains("authentication required") || output_lower.contains("auth") {
+            format!("Authentication required. Please authenticate with GitHub first using 'gh auth login'.")
+        } else if output_lower.contains("network") || output_lower.contains("connection") {
+            format!("Network error. Please check your internet connection and try again.")
+        } else if output_lower.contains("timeout") {
+            format!("Operation timed out. The repository may be very large or network is slow.")
+        } else if output_lower.contains("already exists") {
+            format!("Target directory already exists. Please choose a different directory or remove the existing one.")
+        } else if output_lower.contains("not found") && output_lower.contains("gh") {
+            format!("GitHub CLI (gh) not found. Please ensure GitHub CLI is installed and available in PATH.")
+        } else if output_lower.contains("fatal:") {
+            // Extract the fatal error message
+            if let Some(start) = output_lower.find("fatal:") {
+                let fatal_msg = &output[start..];
+                if let Some(end) = fatal_msg.find('\n') {
+                    format!("Git error: {}", &fatal_msg[..end])
+                } else {
+                    format!("Git error: {}", fatal_msg)
+                }
+            } else {
+                format!("Git fatal error occurred: {}", output.trim())
+            }
+        } else if output.trim().is_empty() {
+            format!("Clone failed with no error message. This may indicate a configuration issue.")
+        } else {
+            // Generic error message with the actual output
+            format!("Clone failed: {}", output.trim())
+        }
+    }
+
+    /// Execute a command in the container and return output with success status  
+    /// This method returns the output even if the command fails (non-zero exit code)
+    /// Made public for testing purposes
+    pub async fn exec_command_allow_failure(
+        &self,
+        command: Vec<String>,
+    ) -> Result<(String, bool), Box<dyn std::error::Error + Send + Sync>> {
+        let exec_config = CreateExecOptions {
+            cmd: Some(command.clone()),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            working_dir: self.config.working_directory.clone(),
+            env: Some(vec![
+                // Set up PATH to include standard paths and potential gh installation locations
+                "PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string(),
+                // Set HOME directory for gh configuration
+                "HOME=/root".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let exec = self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await?;
+
+        let start_config = StartExecOptions {
+            detach: false,
+            ..Default::default()
+        };
+
+        let mut output = String::new();
+
+        // Wrap the exec operation in a timeout
+        let timeout_duration = Duration::from_secs(self.config.exec_timeout_secs);
+        
+        let exec_result = timeout(timeout_duration, async {
+            match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+                bollard::exec::StartExecResults::Attached {
+                    output: mut output_stream,
+                    ..
+                } => {
+                    while let Some(Ok(msg)) = output_stream.next().await {
+                        match msg {
+                            bollard::container::LogOutput::StdOut { message } => {
+                                output.push_str(&String::from_utf8_lossy(&message));
+                            }
+                            bollard::container::LogOutput::StdErr { message } => {
+                                output.push_str(&String::from_utf8_lossy(&message));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                bollard::exec::StartExecResults::Detached => {
+                    return Err("Unexpected detached execution".into());
+                }
+            }
+
+            // Check the exit code of the command but return output regardless
+            let inspect_exec = self.docker.inspect_exec(&exec.id).await?;
+            let success = if let Some(exit_code) = inspect_exec.exit_code {
+                exit_code == 0
+            } else {
+                false // If we can't determine exit code, assume failure
+            };
+
+            Ok::<(String, bool), Box<dyn std::error::Error + Send + Sync>>((output.trim().to_string(), success))
+        }).await;
+
+        match exec_result {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "Command timed out after {} seconds: {}", 
+                self.config.exec_timeout_secs,
+                command.join(" ")
+            ).into()),
+        }
     }
 
     /// Execute a command in the container and return output
