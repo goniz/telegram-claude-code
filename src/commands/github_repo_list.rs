@@ -1,6 +1,6 @@
 use teloxide::{prelude::*, types::ParseMode};
 use crate::{
-    escape_markdown_v2, BotState, format_repo_list_markdown_v2,
+    escape_markdown_v2, BotState,
     claude_code_client::{ClaudeCodeClient, GithubClient, GithubClientConfig}
 };
 
@@ -81,4 +81,122 @@ pub async fn handle_github_repo_list(
     }
 
     Ok(())
+}
+
+/// Format repository list for display in MarkdownV2 format
+fn format_repo_list_markdown_v2(repo_list: &str) -> String {
+    let lines: Vec<&str> = repo_list.trim().lines().collect();
+    if lines.is_empty() {
+        return "💡 No repositories found or no repositories accessible with current \
+                authentication\\."
+            .to_string();
+    }
+
+    let mut formatted_repos = Vec::new();
+
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // gh repo list output format is typically: "repo_name    description"
+        // Split by whitespace and take the first part as the repo name
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if let Some(repo_name) = parts.first() {
+            // Create GitHub URL for the repository
+            let github_url = format!("https://github.com/{}", repo_name);
+
+            // Extract description (everything after the first whitespace-separated token)
+            let description = if parts.len() > 1 {
+                parts[1..].join(" ")
+            } else {
+                String::new()
+            };
+
+            // Create MarkdownV2 list item with hyperlink
+            // Format: • [repo_name](https://github.com/repo_name) - description
+            let escaped_repo_name = escape_markdown_v2(repo_name);
+            let escaped_description = if !description.is_empty() {
+                format!(" \\- {}", escape_markdown_v2(&description))
+            } else {
+                String::new()
+            };
+
+            let formatted_item = format!(
+                "• [{}]({}){}",
+                escaped_repo_name, github_url, escaped_description
+            );
+            formatted_repos.push(formatted_item);
+        }
+    }
+
+    if formatted_repos.is_empty() {
+        "💡 No repositories found or no repositories accessible with current authentication\\."
+            .to_string()
+    } else {
+        formatted_repos.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_repo_list_markdown_v2_empty_input() {
+        assert_eq!(
+            format_repo_list_markdown_v2(""),
+            "💡 No repositories found or no repositories accessible with current authentication\\."
+        );
+        assert_eq!(
+            format_repo_list_markdown_v2("   \n  \n  "),
+            "💡 No repositories found or no repositories accessible with current authentication\\."
+        );
+    }
+
+    #[test]
+    fn test_format_repo_list_markdown_v2_single_repo() {
+        let input = "user/repo1\tA sample repository";
+        let expected = "• [user/repo1](https://github.com/user/repo1) \\- A sample repository";
+        assert_eq!(format_repo_list_markdown_v2(input), expected);
+    }
+
+    #[test]
+    fn test_format_repo_list_markdown_v2_single_repo_no_description() {
+        let input = "user/repo1";
+        let expected = "• [user/repo1](https://github.com/user/repo1)";
+        assert_eq!(format_repo_list_markdown_v2(input), expected);
+    }
+
+    #[test]
+    fn test_format_repo_list_markdown_v2_multiple_repos() {
+        let input = "user/repo1\tFirst repository\nuser/repo2\tSecond repository";
+        let expected = "• [user/repo1](https://github.com/user/repo1) \\- First repository\n• [user/repo2](https://github.com/user/repo2) \\- Second repository";
+        assert_eq!(format_repo_list_markdown_v2(input), expected);
+    }
+
+    #[test]
+    fn test_format_repo_list_markdown_v2_with_special_characters() {
+        let input = "user/repo-test\tRepository with special chars: [test] (v1.0)";
+        let expected = "• [user/repo\\-test](https://github.com/user/repo-test) \\- Repository \
+                        with special chars: \\[test\\] \\(v1\\.0\\)";
+        assert_eq!(format_repo_list_markdown_v2(input), expected);
+    }
+
+    #[test]
+    fn test_format_repo_list_markdown_v2_space_separated() {
+        let input = "user/repo1    First repository with spaces";
+        let expected =
+            "• [user/repo1](https://github.com/user/repo1) \\- First repository with spaces";
+        assert_eq!(format_repo_list_markdown_v2(input), expected);
+    }
+
+    #[test]
+    fn test_format_repo_list_markdown_v2_mixed_formatting() {
+        let input =
+            "owner/project1\tDescription 1\nowner/project2    Description 2\nowner/project3";
+        let expected = "• [owner/project1](https://github.com/owner/project1) \\- Description 1\n• [owner/project2](https://github.com/owner/project2) \\- Description 2\n• [owner/project3](https://github.com/owner/project3)";
+        assert_eq!(format_repo_list_markdown_v2(input), expected);
+    }
 }

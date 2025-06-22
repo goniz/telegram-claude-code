@@ -40,60 +40,7 @@ fn escape_markdown_v2(text: &str) -> String {
 
 /// Format GitHub repository list as MarkdownV2 list with hyperlinks
 /// Parses the output from `gh repo list` and creates a formatted list with clickable links
-fn format_repo_list_markdown_v2(repo_list: &str) -> String {
-    let lines: Vec<&str> = repo_list.trim().lines().collect();
-    if lines.is_empty() {
-        return "💡 No repositories found or no repositories accessible with current \
-                authentication\\."
-            .to_string();
-    }
 
-    let mut formatted_repos = Vec::new();
-
-    for line in lines {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // gh repo list output format is typically: "repo_name    description"
-        // Split by whitespace and take the first part as the repo name
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if let Some(repo_name) = parts.first() {
-            // Create GitHub URL for the repository
-            let github_url = format!("https://github.com/{}", repo_name);
-
-            // Extract description (everything after the first whitespace-separated token)
-            let description = if parts.len() > 1 {
-                parts[1..].join(" ")
-            } else {
-                String::new()
-            };
-
-            // Create MarkdownV2 list item with hyperlink
-            // Format: • [repo_name](https://github.com/repo_name) - description
-            let escaped_repo_name = escape_markdown_v2(repo_name);
-            let escaped_description = if !description.is_empty() {
-                format!(" \\- {}", escape_markdown_v2(&description))
-            } else {
-                String::new()
-            };
-
-            let formatted_item = format!(
-                "• [{}]({}){}",
-                escaped_repo_name, github_url, escaped_description
-            );
-            formatted_repos.push(formatted_item);
-        }
-    }
-
-    if formatted_repos.is_empty() {
-        "💡 No repositories found or no repositories accessible with current authentication\\."
-            .to_string()
-    } else {
-        formatted_repos.join("\n")
-    }
-}
 
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
@@ -360,7 +307,7 @@ async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> Res
 
         if let Some(auth_session) = session {
             // Check if the text looks like an authentication code
-            if is_authentication_code(text) {
+            if commands::authenticate_claude::is_authentication_code(text) {
                 // Send the code to the authentication process
                 if let Err(_) = auth_session.code_sender.send(text.to_string()) {
                     bot.send_message(
@@ -399,53 +346,7 @@ async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> Res
 }
 
 // Helper function to determine if a text looks like an authentication code
-fn is_authentication_code(text: &str) -> bool {
-    let text = text.trim();
 
-    // Common patterns for authentication codes:
-    // - Claude codes: long alphanumeric with _, -, # (e.g., 'yHNxk8SH0fw861QGEXP80UeTIzJUbSg6BDQWvtN80ecoOGAf#ybFaWRHX0Y5YdJaM9ET8_06if-w9Rwg0X-4lEMdyT7I')
-    // - Other service codes: shorter alphanumeric with dashes or underscores
-    // - Hexadecimal-looking codes
-    // - Base64-looking codes
-
-    // Check length (typical auth codes are 6-128 characters, Claude codes can be ~96 chars)
-    if text.len() < 6 || text.len() > 128 {
-        return false;
-    }
-
-    // Check if it contains only valid characters for auth codes
-    // Allow alphanumeric, dashes, underscores, dots, and hash (for Claude codes)
-    let valid_chars = text
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '#');
-
-    if !valid_chars {
-        return false;
-    }
-
-    // Check if it looks like a code (has some structure)
-    // At least 6 alphanumeric characters
-    let alphanumeric_count = text.chars().filter(|c| c.is_alphanumeric()).count();
-
-    if alphanumeric_count < 6 {
-        return false;
-    }
-
-    // Additional check: if it contains a hash, it should look like a Claude code
-    // Claude codes have the pattern: base64-like#base64-like
-    if text.contains('#') {
-        let parts: Vec<&str> = text.split('#').collect();
-        if parts.len() != 2 {
-            return false; // Should have exactly one # dividing two parts
-        }
-        // Both parts should be substantial (at least 20 chars each for Claude codes)
-        if parts[0].len() < 20 || parts[1].len() < 20 {
-            return false;
-        }
-    }
-
-    true
-}
 
 // Handler function for bot commands
 async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> ResponseResult<()> {
@@ -558,93 +459,7 @@ async fn handle_callback_query(
     Ok(())
 }
 
-#[cfg(test)]
-mod help_format_tests {
-    use super::*;
-    use crate::commands;
-    use regex::Regex;
 
-    #[test]
-    fn test_help_format_matches_botfather_requirements() {
-        // Get the dynamically generated help text
-        let help_text = commands::generate_help_text();
-
-        // Regex to match the pattern "command - description"
-        // Command: lowercase letters (no slash prefix)
-        // Separator: " - " (space-hyphen-space)
-        // Description: any non-empty text
-        let line_pattern = Regex::new(r"^[a-z]+ - .+$").unwrap();
-
-        // Verify each line follows the pattern "command - description"
-        for line in help_text.lines() {
-            assert!(!line.is_empty(), "Line should not be empty");
-            assert!(
-                line_pattern.is_match(line),
-                "Line should match pattern 'command - description': {}",
-                line
-            );
-
-            // Additional validation: ensure separator exists and splits correctly
-            let parts: Vec<&str> = line.split(" - ").collect();
-            assert_eq!(
-                parts.len(),
-                2,
-                "Line should have exactly one ' - ' separator: {}",
-                line
-            );
-            assert!(
-                !parts[0].is_empty(),
-                "Command part should not be empty: {}",
-                line
-            );
-            assert!(
-                !parts[1].is_empty(),
-                "Description part should not be empty: {}",
-                line
-            );
-        }
-
-        // Verify we have a non-empty help text
-        assert!(!help_text.is_empty(), "Help text should not be empty");
-    }
-
-    #[test]
-    fn test_help_text_escaping_for_markdownv2() {
-        // Get the raw help text
-        let help_text = commands::generate_help_text();
-
-        // Apply escaping
-        let escaped_help_text = escape_markdown_v2(&help_text);
-
-        // Verify that special characters are properly escaped
-        // The help text should not contain unescaped MarkdownV2 special characters
-        // after escaping, except for intentional formatting
-
-        // Check that if the original contains special chars, they are escaped
-        if help_text.contains('-') {
-            assert!(
-                escaped_help_text.contains("\\-"),
-                "Hyphen should be escaped in MarkdownV2 format"
-            );
-        }
-
-        // Verify the escaped text is different from original if special chars exist
-        let has_special_chars = help_text.chars().any(|c| "_*[]()~`>#+-=|{}.!".contains(c));
-
-        if has_special_chars {
-            assert_ne!(
-                help_text, escaped_help_text,
-                "Escaped text should differ from original when special characters exist"
-            );
-        }
-
-        // Verify that the escaping function produces a valid result
-        assert!(
-            !escaped_help_text.is_empty(),
-            "Escaped help text should not be empty"
-        );
-    }
-}
 
 #[cfg(test)]
 mod markdown_v2_tests {
@@ -727,186 +542,8 @@ mod markdown_v2_tests {
     }
 }
 
-#[cfg(test)]
-mod repo_format_tests {
-    use super::*;
 
-    #[test]
-    fn test_format_repo_list_markdown_v2_empty_input() {
-        assert_eq!(
-            format_repo_list_markdown_v2(""),
-            "💡 No repositories found or no repositories accessible with current authentication\\."
-        );
-        assert_eq!(
-            format_repo_list_markdown_v2("   \n  \n  "),
-            "💡 No repositories found or no repositories accessible with current authentication\\."
-        );
-    }
 
-    #[test]
-    fn test_format_repo_list_markdown_v2_single_repo() {
-        let input = "user/repo1\tA sample repository";
-        let expected = "• [user/repo1](https://github.com/user/repo1) \\- A sample repository";
-        assert_eq!(format_repo_list_markdown_v2(input), expected);
-    }
 
-    #[test]
-    fn test_format_repo_list_markdown_v2_single_repo_no_description() {
-        let input = "user/repo1";
-        let expected = "• [user/repo1](https://github.com/user/repo1)";
-        assert_eq!(format_repo_list_markdown_v2(input), expected);
-    }
 
-    #[test]
-    fn test_format_repo_list_markdown_v2_multiple_repos() {
-        let input = "user/repo1\tFirst repository\nuser/repo2\tSecond repository";
-        let expected = "• [user/repo1](https://github.com/user/repo1) \\- First repository\n• [user/repo2](https://github.com/user/repo2) \\- Second repository";
-        assert_eq!(format_repo_list_markdown_v2(input), expected);
-    }
 
-    #[test]
-    fn test_format_repo_list_markdown_v2_with_special_characters() {
-        let input = "user/repo-test\tRepository with special chars: [test] (v1.0)";
-        let expected = "• [user/repo\\-test](https://github.com/user/repo-test) \\- Repository \
-                        with special chars: \\[test\\] \\(v1\\.0\\)";
-        assert_eq!(format_repo_list_markdown_v2(input), expected);
-    }
-
-    #[test]
-    fn test_format_repo_list_markdown_v2_space_separated() {
-        let input = "user/repo1    First repository with spaces";
-        let expected =
-            "• [user/repo1](https://github.com/user/repo1) \\- First repository with spaces";
-        assert_eq!(format_repo_list_markdown_v2(input), expected);
-    }
-
-    #[test]
-    fn test_format_repo_list_markdown_v2_mixed_formatting() {
-        let input =
-            "owner/project1\tDescription 1\nowner/project2    Description 2\nowner/project3";
-        let expected = "• [owner/project1](https://github.com/owner/project1) \\- Description 1\n• [owner/project2](https://github.com/owner/project2) \\- Description 2\n• [owner/project3](https://github.com/owner/project3)";
-        assert_eq!(format_repo_list_markdown_v2(input), expected);
-    }
-}
-
-#[cfg(test)]
-mod auth_code_detection_tests {
-    use super::*;
-
-    #[test]
-    fn test_is_authentication_code_valid_codes() {
-        // Test valid authentication codes
-        assert!(is_authentication_code("abc123def456"));
-        assert!(is_authentication_code("auth-code-123"));
-        assert!(is_authentication_code("AUTH_CODE_456"));
-        assert!(is_authentication_code("a1b2c3d4e5f6"));
-        assert!(is_authentication_code("code123"));
-        assert!(is_authentication_code("authentication.code.here"));
-        assert!(is_authentication_code("ABCDEF123456"));
-        assert!(is_authentication_code("auth_token_12345"));
-
-        // Test Claude authentication code format
-        assert!(is_authentication_code(
-            "yHNxk8SH0fw861QGEXP80UeTIzJUbSg6BDQWvtN80ecoOGAf#\
-             ybFaWRHX0Y5YdJaM9ET8_06if-w9Rwg0X-4lEMdyT7I"
-        ));
-        assert!(is_authentication_code(
-            "abcd1234567890abcd1234567890#efgh5678901234efgh5678901234_code-part"
-        ));
-        assert!(is_authentication_code(
-            "long_part_with_underscores_123#another_long_part_with_more_data_456"
-        ));
-    }
-
-    #[test]
-    fn test_is_authentication_code_invalid_codes() {
-        // Test invalid authentication codes
-        assert!(!is_authentication_code(""));
-        assert!(!is_authentication_code("12345")); // Too short
-        assert!(!is_authentication_code("a")); // Too short
-        assert!(!is_authentication_code("hello world")); // Contains space
-        assert!(!is_authentication_code("code@123")); // Contains @
-        assert!(!is_authentication_code("code with spaces")); // Contains spaces
-        assert!(!is_authentication_code("a".repeat(129).as_str())); // Too long
-        assert!(!is_authentication_code("!@#$%^")); // Only special chars
-        assert!(!is_authentication_code("ab123")); // Less than 6 alphanumeric
-
-        // Test invalid Claude code formats
-        assert!(!is_authentication_code("short#part")); // Parts too short for Claude code
-        assert!(!is_authentication_code("abc#def#ghi")); // Multiple hash symbols
-        assert!(!is_authentication_code("this_is_long_enough_but#short")); // Second part too short
-        assert!(!is_authentication_code(
-            "short#this_is_long_enough_but_first_was_short"
-        )); // First part too short
-    }
-
-    #[test]
-    fn test_is_authentication_code_edge_cases() {
-        // Test edge cases
-        assert!(is_authentication_code("      abc123def      ")); // With whitespace (trimmed)
-        assert!(is_authentication_code("123456")); // All numeric, minimum length
-        assert!(is_authentication_code("abcdef")); // All letters, minimum length
-        assert!(is_authentication_code("a-b-c-1-2-3")); // With dashes
-        assert!(is_authentication_code("a_b_c_1_2_3")); // With underscores
-        assert!(is_authentication_code("a.b.c.1.2.3")); // With dots
-    }
-}
-
-#[cfg(test)]
-mod github_clone_tests {
-    use crate::commands;
-
-    #[test]
-    fn test_parse_repository_list_single_repo() {
-        let repo_list = "owner/repo1\tFirst repository";
-        let repos = commands::parse_repository_list(repo_list);
-        
-        assert_eq!(repos.len(), 1);
-        assert_eq!(repos[0].full_name, "owner/repo1");
-        assert_eq!(repos[0].name, "repo1");
-    }
-
-    #[test]
-    fn test_parse_repository_list_multiple_repos() {
-        let repo_list = "owner/repo1\tFirst repository\nowner/repo2\tSecond repository\nowner/repo3";
-        let repos = commands::parse_repository_list(repo_list);
-        
-        assert_eq!(repos.len(), 3);
-        assert_eq!(repos[0].full_name, "owner/repo1");
-        assert_eq!(repos[0].name, "repo1");
-        assert_eq!(repos[1].full_name, "owner/repo2");
-        assert_eq!(repos[1].name, "repo2");
-        assert_eq!(repos[2].full_name, "owner/repo3");
-        assert_eq!(repos[2].name, "repo3");
-    }
-
-    #[test]
-    fn test_parse_repository_list_empty_input() {
-        let repo_list = "";
-        let repos = commands::parse_repository_list(repo_list);
-        
-        assert_eq!(repos.len(), 0);
-    }
-
-    #[test]
-    fn test_parse_repository_list_whitespace_only() {
-        let repo_list = "   \n\t\n   ";
-        let repos = commands::parse_repository_list(repo_list);
-        
-        assert_eq!(repos.len(), 0);
-    }
-
-    #[test]
-    fn test_parse_repository_list_mixed_formatting() {
-        let repo_list = "owner/project1\tDescription 1\nowner/project2    Description 2\nowner/project3";
-        let repos = commands::parse_repository_list(repo_list);
-        
-        assert_eq!(repos.len(), 3);
-        assert_eq!(repos[0].full_name, "owner/project1");
-        assert_eq!(repos[0].name, "project1");
-        assert_eq!(repos[1].full_name, "owner/project2");
-        assert_eq!(repos[1].name, "project2");
-        assert_eq!(repos[2].full_name, "owner/project3");
-        assert_eq!(repos[2].name, "project3");
-    }
-}

@@ -238,3 +238,61 @@ pub async fn handle_github_clone(
 
     Ok(())
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_repository_list_single_repo() {
+        let repo_list = "owner/repo1\tFirst repository";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].full_name, "owner/repo1");
+        assert_eq!(repos[0].name, "repo1");
+    }
+
+    #[test]
+    fn test_parse_repository_list_multiple_repos() {
+        let repo_list = "owner/repo1\tFirst repository\nowner/repo2\tSecond repository\nowner/repo3";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 3);
+        assert_eq!(repos[0].full_name, "owner/repo1");
+        assert_eq!(repos[0].name, "repo1");
+        assert_eq!(repos[1].full_name, "owner/repo2");
+        assert_eq!(repos[1].name, "repo2");
+        assert_eq!(repos[2].full_name, "owner/repo3");
+        assert_eq!(repos[2].name, "repo3");
+    }
+
+    #[test]
+    fn test_parse_repository_list_empty_input() {
+        let repo_list = "";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_repository_list_whitespace_only() {
+        let repo_list = "   \n\t\n   ";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_repository_list_mixed_formatting() {
+        let repo_list = "owner/project1\tDescription 1\nowner/project2    Description 2\nowner/project3";
+        let repos = parse_repository_list(repo_list);
+        
+        assert_eq!(repos.len(), 3);
+        assert_eq!(repos[0].full_name, "owner/project1");
+        assert_eq!(repos[0].name, "project1");
+        assert_eq!(repos[1].full_name, "owner/project2");
+        assert_eq!(repos[1].name, "project2");
+        assert_eq!(repos[2].full_name, "owner/project3");
+        assert_eq!(repos[2].name, "project3");
+    }
+}
