@@ -832,7 +832,11 @@ To authenticate with your Claude account, please follow these steps:
     pub async fn update_claude(
         &self,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let command = vec!["claude".to_string(), "update".to_string()];
+        let command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "/opt/entrypoint.sh -c \"nvm use default && claude update\"".to_string(),
+        ];
         self.exec_command(command).await
     }
 
