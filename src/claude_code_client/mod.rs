@@ -781,7 +781,7 @@ To authenticate with your Claude account, please follow these steps:
         let command = vec![
             "claude".to_string(),
             "-p".to_string(),
-            "  ".to_string(),
+            "status".to_string(),
             "--output-format".to_string(),
             "json".to_string(),
         ];
