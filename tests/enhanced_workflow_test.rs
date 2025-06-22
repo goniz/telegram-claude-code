@@ -1,11 +1,12 @@
 use bollard::Docker;
 use rstest::*;
 use telegram_bot::{container_utils, ClaudeCodeConfig, GithubClient, GithubClientConfig};
+use uuid::Uuid;
 
 /// Test fixture that provides a Docker client
 #[fixture]
 pub fn docker() -> Docker {
-    Docker::connect_with_local_defaults().expect("Failed to connect to Docker")
+    Docker::connect_with_socket_defaults().expect("Failed to connect to Docker")
 }
 
 /// Cleanup fixture that ensures test containers are removed
@@ -16,7 +17,7 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 #[rstest]
 #[tokio::test]
 async fn test_enhanced_start_workflow_with_auth_checks(docker: Docker) {
-    let container_name = format!("test-enhanced-workflow-{}", uuid::Uuid::new_v4());
+    let container_name = format!("test-enhanced-workflow-{}", Uuid::new_v4());
 
     // Test the enhanced start workflow that includes authentication checking
 
@@ -110,7 +111,7 @@ async fn test_enhanced_start_workflow_with_auth_checks(docker: Docker) {
 #[rstest]
 #[tokio::test]
 async fn test_authentication_check_resilience(docker: Docker) {
-    let container_name = format!("test-auth-resilience-{}", uuid::Uuid::new_v4());
+    let container_name = format!("test-auth-resilience-{}", Uuid::new_v4());
 
     // Test that authentication checks handle errors gracefully
 

@@ -94,29 +94,44 @@ async fn check_and_guide_authentication(
         GithubClientConfig::default(),
     );
 
-    // Check GitHub authentication
-    let github_authenticated = match github_client.check_auth_status().await {
+    // Check authentication status for both services
+    let github_authenticated = check_github_auth_status(&github_client, &bot, chat_id).await?;
+    let claude_authenticated = check_claude_auth_status(claude_client, &bot, chat_id).await?;
+
+    // Guide user through next steps based on authentication status
+    if github_authenticated && claude_authenticated {
+        // Both authenticated - proceed to repository setup
+        prompt_for_repository_setup(bot, chat_id).await?;
+    } else {
+        // Show authentication guidance
+        show_authentication_guidance(bot, chat_id, github_authenticated, claude_authenticated).await?;
+    }
+
+    Ok(())
+}
+
+/// Check GitHub authentication status and send appropriate status message
+async fn check_github_auth_status(
+    github_client: &GithubClient,
+    bot: &Bot,
+    chat_id: ChatId,
+) -> ResponseResult<bool> {
+    match github_client.check_auth_status().await {
         Ok(auth_result) => {
             if auth_result.authenticated {
-                if let Some(username) = &auth_result.username {
-                    bot.send_message(
-                        chat_id,
-                        format!(
-                            "✅ *GitHub Status:* Authenticated as {}",
-                            escape_markdown_v2(username)
-                        ),
+                let message = if let Some(username) = &auth_result.username {
+                    format!(
+                        "✅ *GitHub Status:* Authenticated as {}",
+                        escape_markdown_v2(username)
                     )
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await?;
                 } else {
-                    bot.send_message(
-                        chat_id,
-                        "✅ *GitHub Status:* Authenticated",
-                    )
+                    "✅ *GitHub Status:* Authenticated".to_string()
+                };
+                
+                bot.send_message(chat_id, message)
                     .parse_mode(ParseMode::MarkdownV2)
                     .await?;
-                }
-                true
+                Ok(true)
             } else {
                 bot.send_message(
                     chat_id,
@@ -124,7 +139,7 @@ async fn check_and_guide_authentication(
                 )
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
-                false
+                Ok(false)
             }
         }
         Err(e) => {
@@ -137,30 +152,29 @@ async fn check_and_guide_authentication(
             )
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
-            false
+            Ok(false)
         }
-    };
+    }
+}
 
-    // Check Claude authentication
-    let claude_authenticated = match claude_client.check_auth_status().await {
+/// Check Claude authentication status and send appropriate status message
+async fn check_claude_auth_status(
+    claude_client: &ClaudeCodeClient,
+    bot: &Bot,
+    chat_id: ChatId,
+) -> ResponseResult<bool> {
+    match claude_client.check_auth_status().await {
         Ok(is_authenticated) => {
-            if is_authenticated {
-                bot.send_message(
-                    chat_id,
-                    "✅ *Claude Status:* Authenticated",
-                )
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
-                true
+            let message = if is_authenticated {
+                "✅ *Claude Status:* Authenticated"
             } else {
-                bot.send_message(
-                    chat_id,
-                    "❌ *Claude Status:* Not authenticated",
-                )
+                "❌ *Claude Status:* Not authenticated"
+            };
+            
+            bot.send_message(chat_id, message)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
-                false
-            }
+            Ok(is_authenticated)
         }
         Err(e) => {
             bot.send_message(
@@ -172,20 +186,9 @@ async fn check_and_guide_authentication(
             )
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
-            false
+            Ok(false)
         }
-    };
-
-    // Guide user through next steps based on authentication status
-    if github_authenticated && claude_authenticated {
-        // Both authenticated - proceed to repository setup
-        prompt_for_repository_setup(bot, chat_id).await?;
-    } else {
-        // Show authentication guidance
-        show_authentication_guidance(bot, chat_id, github_authenticated, claude_authenticated).await?;
     }
-
-    Ok(())
 }
 
 /// Show authentication guidance with appropriate buttons
