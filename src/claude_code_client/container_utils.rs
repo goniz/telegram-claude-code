@@ -320,6 +320,26 @@ pub async fn start_coding_session(
         ..Default::default()
     };
 
+    // Prepare environment variables for the container
+    let gh_token_env_var;
+    let env_vars = if let Ok(gh_token) = std::env::var("GH_TOKEN") {
+        gh_token_env_var = format!("GH_TOKEN={}", gh_token);
+        vec![
+            "CODEX_ENV_PYTHON_VERSION=3.12",
+            "CODEX_ENV_NODE_VERSION=22",
+            "CODEX_ENV_RUST_VERSION=1.87.0",
+            "CODEX_ENV_GO_VERSION=1.23.8",
+            &gh_token_env_var,
+        ]
+    } else {
+        vec![
+            "CODEX_ENV_PYTHON_VERSION=3.12",
+            "CODEX_ENV_NODE_VERSION=22",
+            "CODEX_ENV_RUST_VERSION=1.87.0",
+            "CODEX_ENV_GO_VERSION=1.23.8",
+        ]
+    };
+
     let config = Config {
         image: Some(MAIN_CONTAINER_IMAGE),
         working_dir: Some("/workspace"),
@@ -327,12 +347,7 @@ pub async fn start_coding_session(
         attach_stdin: Some(true),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
-        env: Some(vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=22",
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-        ]),
+        env: Some(env_vars),
         // Override the default command to prevent interactive shell hang
         // Run setup script then keep container alive with sleep
         cmd: Some(vec!["-c", "sleep infinity"]),
@@ -429,6 +444,26 @@ pub async fn create_test_container(
         ..Default::default()
     };
 
+    // Prepare environment variables for the container
+    let gh_token_env_var;
+    let env_vars = if let Ok(gh_token) = std::env::var("GH_TOKEN") {
+        gh_token_env_var = format!("GH_TOKEN={}", gh_token);
+        vec![
+            "CODEX_ENV_PYTHON_VERSION=3.12",
+            "CODEX_ENV_NODE_VERSION=22",
+            "CODEX_ENV_RUST_VERSION=1.87.0",
+            "CODEX_ENV_GO_VERSION=1.23.8",
+            &gh_token_env_var,
+        ]
+    } else {
+        vec![
+            "CODEX_ENV_PYTHON_VERSION=3.12",
+            "CODEX_ENV_NODE_VERSION=22",
+            "CODEX_ENV_RUST_VERSION=1.87.0",
+            "CODEX_ENV_GO_VERSION=1.23.8",
+        ]
+    };
+
     let config = Config {
         image: Some(MAIN_CONTAINER_IMAGE),
         working_dir: Some("/workspace"),
@@ -436,12 +471,7 @@ pub async fn create_test_container(
         attach_stdin: Some(true),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
-        env: Some(vec![
-            "CODEX_ENV_PYTHON_VERSION=3.12",
-            "CODEX_ENV_NODE_VERSION=22",
-            "CODEX_ENV_RUST_VERSION=1.87.0",
-            "CODEX_ENV_GO_VERSION=1.23.8",
-        ]),
+        env: Some(env_vars),
         cmd: Some(vec!["/bin/bash"]),
         ..Default::default()
     };
