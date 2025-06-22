@@ -53,6 +53,8 @@ jobs:
         toolchain: stable
       
     - name: Run integration test - ${{ matrix.test }}
+      env:
+         GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
       run: cargo test --test ${{ matrix.test }} --verbose -- --nocapture
       
     - name: Upload claude output file on failure
