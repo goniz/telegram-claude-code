@@ -29,6 +29,7 @@ jobs:
       matrix:
         test:
           - bot_workflow_test
+          - buffering_test
           - check_auth_status_test
           - claude_auth_panic_test
           - claude_auth_test
