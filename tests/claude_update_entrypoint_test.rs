@@ -42,9 +42,9 @@ mod tests {
         // We'll test by executing a command that verifies the entrypoint is being used
         let test_result = client
             .exec_basic_command(vec![
-                "sh".to_string(),
+                "/opt/entrypoint.sh".to_string(),
                 "-c".to_string(),
-                "/opt/entrypoint.sh -c \"nvm use default && echo 'entrypoint works'\"".to_string(),
+                "nvm use default && echo 'entrypoint works'".to_string(),
             ])
             .await;
 
