@@ -37,7 +37,7 @@ jobs:
     - name: Launch bot with timeout
       timeout-minutes: 15
       env:
-        RUST_LOG: info
+        RUST_LOG: debug,bollard=info
         TELOXIDE_TOKEN: ${{ secrets.STAGING_TOKEN }}
       run: |
         echo "Starting Telegram bot with 15-minute timeout..."
