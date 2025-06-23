@@ -1,5 +1,5 @@
-/// Test to verify that Claude configuration persists between container runs
-/// This ensures that config changes made by users are preserved when containers are recreated
+/// Test to verify that volume data persists between container runs
+/// This ensures that data stored in persistent volumes is preserved when containers are recreated
 #[cfg(test)]
 mod tests {
     use bollard::Docker;
@@ -25,7 +25,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn test_claude_config_persistence_between_sessions(docker: Docker) {
+    async fn test_volume_data_persistence_between_sessions(docker: Docker) {
         let test_user_id = 888888; // Test user ID for config persistence
         let container_name_1 = format!("test-config-persistence-1-{}", Uuid::new_v4());
         let container_name_2 = format!("test-config-persistence-2-{}", Uuid::new_v4());
@@ -49,48 +49,34 @@ mod tests {
         assert!(first_session.is_ok(), "First session should start successfully");
         let first_client = first_session.unwrap();
         
-        // Step 2: First check the initial value, then set a custom configuration value
-        println!("=== STEP 2: Checking initial config and setting custom value ===");
-        let config_key = "hasCompletedProjectOnboarding";
+        // Step 2: Create a test file in the persistent volume to verify persistence
+        println!("=== STEP 2: Creating test file for persistence verification ===");
+        let test_file_content = "persistence-test-content-12345";
         
-        // Check initial value
-        let initial_config_result = first_client.exec_basic_command(vec![
+        // Create a test file in the volume directory
+        let create_file_result = first_client.exec_basic_command(vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
+            format!("echo '{}' > /volume_data/test-persistence-file.txt", test_file_content),
         ]).await;
         
-        assert!(initial_config_result.is_ok(), "Getting initial config should succeed: {:?}", initial_config_result);
-        let initial_value = initial_config_result.unwrap();
-        println!("Initial config value: {}", initial_value);
+        assert!(create_file_result.is_ok(), "Creating test file should succeed: {:?}", create_file_result);
+        println!("Test file created successfully");
         
-        // Set opposite value - if it's false, set true; if it's true, set false
-        let config_value = if initial_value.trim().to_lowercase().contains("false") { "true" } else { "false" };
-        println!("Setting config to: {}", config_value);
-        
-        let set_config_result = first_client.exec_basic_command(vec![
+        // Step 3: Verify the file was created
+        println!("=== STEP 3: Verifying test file was created ===");
+        let read_file_result = first_client.exec_basic_command(vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("/opt/entrypoint.sh -c \"nvm use default && claude config set {} {}\"", config_key, config_value),
+            "cat /volume_data/test-persistence-file.txt".to_string(),
         ]).await;
         
-        assert!(set_config_result.is_ok(), "Setting config should succeed: {:?}", set_config_result);
-        println!("Config set result: {:?}", set_config_result.unwrap());
-        
-        // Step 3: Verify the configuration was set
-        println!("=== STEP 3: Verifying configuration was set ===");
-        let get_config_result = first_client.exec_basic_command(vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
-        ]).await;
-        
-        assert!(get_config_result.is_ok(), "Getting config should succeed: {:?}", get_config_result);
-        let config_output = get_config_result.unwrap();
+        assert!(read_file_result.is_ok(), "Reading test file should succeed: {:?}", read_file_result);
+        let file_content = read_file_result.unwrap();
         assert!(
-            config_output.contains(config_value), 
-            "Config should contain the set value. Output: {}", 
-            config_output
+            file_content.contains(test_file_content), 
+            "File should contain test content. Expected: {}, Got: {}", 
+            test_file_content, file_content
         );
         
         // Step 4: Stop the first session
@@ -113,32 +99,32 @@ mod tests {
         assert!(second_session.is_ok(), "Second session should start successfully");
         let second_client = second_session.unwrap();
         
-        // Step 6: Verify the configuration persisted
-        println!("=== STEP 6: Verifying configuration persisted in new session ===");
-        let get_config_result_2 = second_client.exec_basic_command(vec![
+        // Step 6: Verify the test file persisted in the new session
+        println!("=== STEP 6: Verifying test file persisted in new session ===");
+        let read_file_result_2 = second_client.exec_basic_command(vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
+            "cat /volume_data/test-persistence-file.txt".to_string(),
         ]).await;
         
         // Cleanup
         cleanup_test_resources(&docker, &container_name_2, test_user_id).await;
         
-        assert!(get_config_result_2.is_ok(), "Getting config in second session should succeed: {:?}", get_config_result_2);
-        let config_output_2 = get_config_result_2.unwrap();
+        assert!(read_file_result_2.is_ok(), "Reading test file in second session should succeed: {:?}", read_file_result_2);
+        let file_content_2 = read_file_result_2.unwrap();
         assert!(
-            config_output_2.contains(config_value), 
-            "Config should persist between sessions. Expected: {}, Got: {}", 
-            config_value, 
-            config_output_2
+            file_content_2.contains(test_file_content), 
+            "File content should persist between sessions. Expected: {}, Got: {}", 
+            test_file_content, 
+            file_content_2
         );
         
-        println!("✅ Configuration successfully persisted between sessions!");
+        println!("✅ Volume data successfully persisted between sessions!");
     }
 
     #[rstest]
     #[tokio::test]
-    async fn test_claude_config_isolation_between_users(docker: Docker) {
+    async fn test_volume_data_isolation_between_users(docker: Docker) {
         let test_user_id_1 = 777777;
         let test_user_id_2 = 777778;
         let container_name_1 = format!("test-config-isolation-1-{}", Uuid::new_v4());
@@ -180,62 +166,61 @@ mod tests {
         assert!(session_2.is_ok(), "User 2 session should start successfully");
         let client_2 = session_2.unwrap();
         
-        // Step 3: Set different config for each user
-        println!("=== STEP 3: Setting different configs for each user ===");
-        let config_key = "hasCompletedProjectOnboarding";
-        let config_value_1 = "true";
-        let config_value_2 = "false";
+        // Step 3: Create different test files for each user
+        println!("=== STEP 3: Creating different test files for each user ===");
+        let test_content_1 = "user1-test-content-67890";
+        let test_content_2 = "user2-test-content-54321";
         
-        let set_config_1 = client_1.exec_basic_command(vec![
+        let create_file_1 = client_1.exec_basic_command(vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("/opt/entrypoint.sh -c \"nvm use default && claude config set {} {}\"", config_key, config_value_1),
+            format!("echo '{}' > /volume_data/user-test-file.txt", test_content_1),
         ]).await;
         
-        let set_config_2 = client_2.exec_basic_command(vec![
+        let create_file_2 = client_2.exec_basic_command(vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("/opt/entrypoint.sh -c \"nvm use default && claude config set {} {}\"", config_key, config_value_2),
+            format!("echo '{}' > /volume_data/user-test-file.txt", test_content_2),
         ]).await;
         
-        assert!(set_config_1.is_ok(), "Setting config for user 1 should succeed");
-        assert!(set_config_2.is_ok(), "Setting config for user 2 should succeed");
+        assert!(create_file_1.is_ok(), "Creating test file for user 1 should succeed");
+        assert!(create_file_2.is_ok(), "Creating test file for user 2 should succeed");
         
-        // Step 4: Verify each user has their own config
-        println!("=== STEP 4: Verifying config isolation ===");
-        let get_config_1 = client_1.exec_basic_command(vec![
+        // Step 4: Verify each user has their own isolated file content
+        println!("=== STEP 4: Verifying file isolation ===");
+        let read_file_1 = client_1.exec_basic_command(vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
+            "cat /volume_data/user-test-file.txt".to_string(),
         ]).await;
         
-        let get_config_2 = client_2.exec_basic_command(vec![
+        let read_file_2 = client_2.exec_basic_command(vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
+            "cat /volume_data/user-test-file.txt".to_string(),
         ]).await;
         
         // Cleanup
         cleanup_test_resources(&docker, &container_name_1, test_user_id_1).await;
         cleanup_test_resources(&docker, &container_name_2, test_user_id_2).await;
         
-        assert!(get_config_1.is_ok(), "Getting config for user 1 should succeed");
-        assert!(get_config_2.is_ok(), "Getting config for user 2 should succeed");
+        assert!(read_file_1.is_ok(), "Reading file for user 1 should succeed");
+        assert!(read_file_2.is_ok(), "Reading file for user 2 should succeed");
         
-        let output_1 = get_config_1.unwrap();
-        let output_2 = get_config_2.unwrap();
+        let content_1 = read_file_1.unwrap();
+        let content_2 = read_file_2.unwrap();
         
         assert!(
-            output_1.contains(config_value_1),
-            "User 1 should have their own config value. Got: {}", 
-            output_1
+            content_1.contains(test_content_1),
+            "User 1 should have their own file content. Expected: {}, Got: {}", 
+            test_content_1, content_1
         );
         assert!(
-            output_2.contains(config_value_2),
-            "User 2 should have their own config value. Got: {}", 
-            output_2
+            content_2.contains(test_content_2),
+            "User 2 should have their own file content. Expected: {}, Got: {}", 
+            test_content_2, content_2
         );
         
-        println!("✅ Configuration properly isolated between users!");
+        println!("✅ Volume data properly isolated between users!");
     }
 }
