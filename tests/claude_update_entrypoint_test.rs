@@ -17,11 +17,16 @@ mod tests {
     #[fixture]
     pub async fn test_container(docker: Docker) -> (Docker, String, String) {
         let container_name = format!("test-claude-update-{}", Uuid::new_v4());
-        let container_id = container_utils::create_test_container(&docker, &container_name)
-            .await
-            .expect("Failed to create test container");
+        let client = container_utils::start_coding_session(
+            &docker,
+            &container_name,
+            ClaudeCodeConfig::default(),
+            container_utils::CodingContainerConfig::default(),
+        )
+        .await
+        .expect("Failed to start coding session");
 
-        (docker, container_id, container_name)
+        (docker, client.container_id().to_string(), container_name)
     }
 
     /// Cleanup fixture that ensures test containers are removed

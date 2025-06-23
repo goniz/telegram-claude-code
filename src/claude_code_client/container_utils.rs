@@ -369,13 +369,15 @@ pub async fn start_coding_session(
     // Wait for container to be ready
     wait_for_container_ready(docker, &container.id).await?;
     
+    // Initialize Claude configuration (always needed regardless of volume usage)
+    // This must come BEFORE init_volume_structure because init_volume_structure
+    // tries to copy /root/.claude.json which is created by this function
+    init_claude_configuration(docker, &container.id).await?;
+    
     // Initialize volume structure for authentication persistence only if using persistent volumes
     if container_config.persistent_volume_key.is_some() {
         init_volume_structure(docker, &container.id).await?;
     }
-    
-    // Initialize Claude configuration (always needed regardless of volume usage)
-    init_claude_configuration(docker, &container.id).await?;
 
     // Create Claude Code client (Claude Code is pre-installed in the runtime image)
     let claude_client = ClaudeCodeClient::new(docker.clone(), container.id.clone(), claude_config);
