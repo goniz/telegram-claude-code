@@ -13,16 +13,37 @@ pub mod github_client;
 pub use github_client::{GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Usage {
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub server_tool_use: Option<ServerToolUse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerToolUse {
+    #[serde(default)]
+    pub web_search_requests: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeCodeResult {
     pub r#type: String,
     pub subtype: String,
-    pub cost_usd: f64,
+    #[serde(alias = "cost_usd")]
+    pub total_cost_usd: f64,
     pub is_error: bool,
     pub duration_ms: u64,
     pub duration_api_ms: u64,
     pub num_turns: u32,
     pub result: String,
     pub session_id: String,
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone)]
@@ -198,13 +219,14 @@ impl ClaudeCodeClient {
                         "success"
                     }
                     .to_string(),
-                    cost_usd: 0.0,
+                    total_cost_usd: 0.0,
                     is_error: output.to_lowercase().contains("error"),
                     duration_ms: 0,
                     duration_api_ms: 0,
                     num_turns: 1,
                     result: output,
                     session_id: "unknown".to_string(),
+                    usage: None,
                 })
             }
         }
@@ -777,8 +799,10 @@ To authenticate with your Claude account, please follow these steps:
     pub async fn check_auth_status(
         &self,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        // Try to run a simple claude command with JSON output to check if authentication is working
-        let command = vec![
+        log::debug!("Checking Claude authentication status for container: {}", self.container_id);
+        
+        // First, try the standard status command with JSON output
+        let status_command = vec![
             "claude".to_string(),
             "-p".to_string(),
             "status".to_string(),
@@ -786,25 +810,153 @@ To authenticate with your Claude account, please follow these steps:
             "json".to_string(),
         ];
 
-        match self.exec_command(command).await {
+        log::debug!("Attempting primary auth check command: {:?}", status_command);
+
+        match self.exec_command(status_command).await {
             Ok(output) => {
+                log::debug!("Primary auth check command output: '{}'", output);
+                log::debug!("Primary auth check output length: {} chars", output.len());
+                
                 // Try to parse the JSON output
-                match self.parse_result(output) {
+                match self.parse_result(output.clone()) {
                     Ok(result) => {
+                        log::debug!("Successfully parsed primary auth check result: is_error={}, type={}, subtype={}", 
+                            result.is_error, result.r#type, result.subtype);
+                        log::debug!("Primary auth check result content: '{}'", result.result);
+                        
                         // Authentication is successful if there's no error in the result
-                        Ok(!result.is_error)
+                        let is_authenticated = !result.is_error;
+                        log::info!("Authentication status from primary check: {}", is_authenticated);
+                        return Ok(is_authenticated);
                     }
                     Err(e) => {
-                        // If JSON parsing fails, bubble up the error
-                        Err(e)
+                        log::warn!("Failed to parse primary auth check JSON output: {}", e);
+                        log::debug!("Raw output that failed to parse: '{}'", output);
+                        // Continue to fallback methods
                     }
                 }
             }
-            Err(_) => {
-                // Other errors (network, container issues, etc.) should be bubbled up
-                Ok(false)
+            Err(e) => {
+                log::warn!("Primary auth check command failed: {}", e);
+                log::debug!("Primary auth check error details: {:?}", e);
+                // Continue to fallback methods
             }
         }
+
+        // Fallback 1: Try a simple prompt command that requires authentication
+        // Note: We skip the `claude --help` test because help works even without authentication
+        log::debug!("Trying fallback auth check method 1: simple prompt requiring authentication");
+        let auth_test_command = vec![
+            "claude".to_string(),
+            "-p".to_string(),
+            "auth test".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+        ];
+        
+        match self.exec_command(auth_test_command).await {
+            Ok(output) => {
+                log::debug!("Fallback 1 (auth test) output: '{}'", output);
+                
+                // Try to parse this as JSON to check for authentication errors
+                match self.parse_result(output.clone()) {
+                    Ok(result) => {
+                        log::debug!("Successfully parsed fallback 1 result: is_error={}", result.is_error);
+                        // Check for authentication-specific errors in the result
+                        let result_lower = result.result.to_lowercase();
+                        if result.is_error && (result_lower.contains("invalid api key") || 
+                                              result_lower.contains("please run /login") ||
+                                              result_lower.contains("not authenticated") ||
+                                              result_lower.contains("authentication") ||
+                                              result_lower.contains("login required")) {
+                            log::info!("Authentication status from fallback 1: false (auth error detected)");
+                            return Ok(false);
+                        } else if !result.is_error {
+                            log::info!("Authentication status from fallback 1: true (command succeeded)");
+                            return Ok(true);
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!("Failed to parse fallback 1 JSON: {}", e);
+                        // Check raw output for authentication errors
+                        let output_lower = output.to_lowercase();
+                        if output_lower.contains("invalid api key") || 
+                           output_lower.contains("please run /login") ||
+                           output_lower.contains("not authenticated") || 
+                           output_lower.contains("api key") || 
+                           output_lower.contains("login required") {
+                            log::info!("Authentication status from fallback 1: false (auth error in raw output)");
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::debug!("Fallback 1 (auth test) failed: {}", e);
+                // Check if error message indicates authentication issues
+                let error_str = e.to_string().to_lowercase();
+                if error_str.contains("invalid api key") || 
+                   error_str.contains("please run /login") ||
+                   error_str.contains("not authenticated") || 
+                   error_str.contains("api key") || 
+                   error_str.contains("login required") {
+                    log::info!("Authentication status from fallback 1 error: false");
+                    return Ok(false);
+                }
+            }
+        }
+
+        // Fallback 2: Try to run a simple prompt command
+        log::debug!("Trying fallback auth check method 2: simple prompt");
+        let simple_prompt_command = vec![
+            "claude".to_string(),
+            "-p".to_string(),
+            "echo test".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+        ];
+        
+        match self.exec_command(simple_prompt_command).await {
+            Ok(output) => {
+                log::debug!("Fallback 2 (simple prompt) output: '{}'", output);
+                
+                // Try to parse this as JSON
+                match self.parse_result(output.clone()) {
+                    Ok(result) => {
+                        log::debug!("Successfully parsed fallback 2 result: is_error={}", result.is_error);
+                        let is_authenticated = !result.is_error;
+                        log::info!("Authentication status from fallback 2: {}", is_authenticated);
+                        return Ok(is_authenticated);
+                    }
+                    Err(e) => {
+                        log::debug!("Failed to parse fallback 2 JSON: {}", e);
+                        // Check if output contains authentication errors
+                        let output_lower = output.to_lowercase();
+                        if output_lower.contains("not authenticated") || 
+                           output_lower.contains("api key") || 
+                           output_lower.contains("login required") {
+                            log::info!("Authentication status from fallback 2: false (auth error detected)");
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::debug!("Fallback 2 (simple prompt) failed: {}", e);
+                // Check if error message indicates authentication issues
+                let error_str = e.to_string().to_lowercase();
+                if error_str.contains("not authenticated") || 
+                   error_str.contains("api key") || 
+                   error_str.contains("login required") {
+                    log::info!("Authentication status from fallback 2 error: false");
+                    return Ok(false);
+                }
+            }
+        }
+
+        // If all methods fail, assume not authenticated
+        log::warn!("All authentication check methods failed, assuming not authenticated");
+        Ok(false)
     }
 
     /// Get current authentication info
@@ -845,8 +997,10 @@ To authenticate with your Claude account, please follow these steps:
         &self,
         command: Vec<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        log::debug!("Executing command in container {}: {:?}", self.container_id, command);
+        
         let exec_config = CreateExecOptions {
-            cmd: Some(command),
+            cmd: Some(command.clone()),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),
@@ -862,10 +1016,19 @@ To authenticate with your Claude account, please follow these steps:
             ..Default::default()
         };
 
-        let exec = self
-            .docker
-            .create_exec(&self.container_id, exec_config)
-            .await?;
+        log::debug!("Creating exec for container {} with working_dir: {:?}", 
+            self.container_id, self.config.working_directory);
+
+        let exec = match self.docker.create_exec(&self.container_id, exec_config).await {
+            Ok(exec) => {
+                log::debug!("Successfully created exec with ID: {}", exec.id);
+                exec
+            }
+            Err(e) => {
+                log::error!("Failed to create exec for container {}: {}", self.container_id, e);
+                return Err(e.into());
+            }
+        };
 
         let start_config = StartExecOptions {
             detach: false,
@@ -873,43 +1036,58 @@ To authenticate with your Claude account, please follow these steps:
         };
 
         let mut output = String::new();
+        let mut stderr_output = String::new();
 
         match self.docker.start_exec(&exec.id, Some(start_config)).await? {
             bollard::exec::StartExecResults::Attached {
                 output: mut output_stream,
                 ..
             } => {
+                log::debug!("Successfully attached to exec {}, reading output", exec.id);
                 while let Some(Ok(msg)) = output_stream.next().await {
                     match msg {
                         bollard::container::LogOutput::StdOut { message } => {
-                            output.push_str(&String::from_utf8_lossy(&message));
+                            let stdout_str = String::from_utf8_lossy(&message);
+                            log::debug!("Command stdout: '{}'", stdout_str);
+                            output.push_str(&stdout_str);
                         }
                         bollard::container::LogOutput::StdErr { message } => {
-                            output.push_str(&String::from_utf8_lossy(&message));
+                            let stderr_str = String::from_utf8_lossy(&message);
+                            log::debug!("Command stderr: '{}'", stderr_str);
+                            stderr_output.push_str(&stderr_str);
+                            output.push_str(&stderr_str);
                         }
                         _ => {}
                     }
                 }
             }
             bollard::exec::StartExecResults::Detached => {
+                log::error!("Unexpected detached execution for exec {}", exec.id);
                 return Err("Unexpected detached execution".into());
             }
         }
 
         // Check the exit code of the executed command
         let exec_inspect = self.docker.inspect_exec(&exec.id).await?;
-        if let Some(exit_code) = exec_inspect.exit_code {
-            if exit_code != 0 {
-                // Command failed - return error with the output
-                return Err(format!(
-                    "Command failed with exit code {}: {}",
-                    exit_code,
-                    output.trim()
-                )
-                .into());
-            }
+        let exit_code = exec_inspect.exit_code.unwrap_or(-1);
+        
+        log::debug!("Command completed with exit code: {}", exit_code);
+        log::debug!("Command total output length: {} chars", output.len());
+        log::debug!("Command stderr length: {} chars", stderr_output.len());
+        
+        if exit_code != 0 {
+            log::warn!("Command failed with exit code {}", exit_code);
+            log::debug!("Failed command output: '{}'", output.trim());
+            // Command failed - return error with the output
+            return Err(format!(
+                "Command failed with exit code {}: {}",
+                exit_code,
+                output.trim()
+            )
+            .into());
         }
 
+        log::debug!("Command succeeded, returning output");
         Ok(output.trim().to_string())
     }
 
