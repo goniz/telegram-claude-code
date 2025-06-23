@@ -28,29 +28,10 @@ jobs:
       fail-fast: false
       matrix:
         test:
-          - bot_workflow_test
-          - buffering_test
-          - check_auth_status_test
-          - claude_auth_panic_test
-          - claude_auth_test
-          - claude_auth_url_test
-          - claude_config_persistence_test
-          - claude_integration_tests
-          - claude_json_initialization_test
-          - claude_status_test
-          - claude_timeout_test
-          - claude_update_entrypoint_test
-          - claude_update_test
-          - enhanced_workflow_test
-          - exec_command_allow_failure_tests
-          - github_auth_test
-          - github_client_tests
-          - github_clone_integration_test
-          - github_oauth_early_return_test
-          - github_status_integration_test
-          - github_timeout_test
-          - timeout_integration_test
-          - volume_persistence_test
+          - github_integration_tests
+          - claude_authentication_tests
+          - claude_core_tests
+          - infrastructure_tests
     
     steps:
     - name: Checkout code
