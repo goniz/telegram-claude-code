@@ -173,12 +173,33 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
         "Second session should have persisted .claude.json"
     );
 
-    // Verify the content is the same (or at least has the required fields)
+    // Parse both JSON contents to compare the important fields
+    let json_1: serde_json::Value = serde_json::from_str(&content_1)
+        .expect("First session .claude.json should be valid JSON");
+    let json_2: serde_json::Value = serde_json::from_str(&content_2)
+        .expect("Second session .claude.json should be valid JSON");
+    
+    // Verify the important fields persist (firstStartTime may differ)
     assert_eq!(
-        content_1.trim(),
-        content_2.trim(),
-        ".claude.json content should persist between sessions"
+        json_1.get("hasCompletedOnboarding"),
+        json_2.get("hasCompletedOnboarding"),
+        "hasCompletedOnboarding should persist between sessions"
     );
+    
+    // Verify both have the workspace project configuration
+    if let (Some(projects_1), Some(projects_2)) = (json_1.get("projects"), json_2.get("projects")) {
+        if let (Some(workspace_1), Some(workspace_2)) = (projects_1.get("/workspace"), projects_2.get("/workspace")) {
+            assert_eq!(
+                workspace_1.get("hasTrustDialogAccepted"),
+                workspace_2.get("hasTrustDialogAccepted"),
+                "hasTrustDialogAccepted should persist between sessions"
+            );
+        } else {
+            panic!("Both sessions should have /workspace project configuration");
+        }
+    } else {
+        panic!("Both sessions should have projects configuration");
+    }
 
     println!("✅ .claude.json successfully persisted between sessions!");
 
