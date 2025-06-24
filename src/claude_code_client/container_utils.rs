@@ -111,19 +111,19 @@ async fn init_claude_configuration(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     log::info!("Initializing Claude configuration...");
     
-    // Initialize .claude.json with required configuration
+    // Initialize .claude.json with required configuration in user's home directory
     exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "echo '{ \"hasCompletedOnboarding\": true }' > /root/.claude.json".to_string()]
+        vec!["sh".to_string(), "-c".to_string(), "mkdir -p ~/.claude && echo '{ \"hasCompletedOnboarding\": true }' > ~/.claude.json".to_string()]
     ).await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
     
-    // Set Claude configuration for trust dialog
+    // Set Claude configuration for trust dialog (simplified without entrypoint script)
     exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "/opt/entrypoint.sh -c \"nvm use default && claude config set hasTrustDialogAccepted true\"".to_string()]
+        vec!["claude".to_string(), "config".to_string(), "set".to_string(), "hasTrustDialogAccepted".to_string(), "true".to_string()]
     ).await
     .map_err(|e| format!("Failed to set Claude trust dialog configuration: {}", e))?;
     

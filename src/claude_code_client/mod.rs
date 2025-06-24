@@ -874,9 +874,8 @@ To authenticate with your Claude account, please follow these steps:
         &self,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            "/opt/entrypoint.sh -c \"nvm use default && claude update\"".to_string(),
+            "claude".to_string(),
+            "update".to_string(),
         ];
         self.exec_command(command).await
     }

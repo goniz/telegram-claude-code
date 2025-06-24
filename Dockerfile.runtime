@@ -1,33 +1,78 @@
-# Runtime Dockerfile for development session containers
-# This image pre-installs Claude Code and GitHub CLI for faster container startup
+# Runtime Dockerfile for development session containers with rootless Docker-in-Docker
+# This image provides a secure rootless environment with Claude Code and development tools
 
-FROM ghcr.io/openai/codex-universal:latest
+FROM docker:25.0-dind-rootless
 
-# Install GitHub CLI
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-    && apt-get update \
-    && apt-get install -y gh \
-    && rm -rf /var/lib/apt/lists/*
+# Switch to root for package installation
+USER root
 
-# Ensure the claude binary is in PATH
-ENV PATH="/usr/local/bin:$PATH"
+# Install essential development packages including build tools
+RUN apk add --no-cache \
+    bash \
+    curl \
+    git \
+    nodejs \
+    npm \
+    python3 \
+    py3-pip \
+    github-cli \
+    build-base \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    musl-dev \
+    linux-headers
 
-ENV CODEX_ENV_PYTHON_VERSION="3.12"
-ENV CODEX_ENV_NODE_VERSION="22"
-ENV CODEX_ENV_RUST_VERSION="1.87.0"
-ENV CODEX_ENV_GO_VERSION="1.23.8"
+# Install Go from official source
+RUN wget -O go.tar.gz https://go.dev/dl/go1.21.5.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go.tar.gz && \
+    rm go.tar.gz && \
+    ln -s /usr/local/go/bin/go /usr/local/bin/go && \
+    ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
-# Install Claude Code via npm globally
-RUN /opt/entrypoint.sh -c \
-		"nvm use default && npm install -g @anthropic-ai/claude-code"
+# Install Rust using rustup (as non-root user later)
+# First create a non-root user for rustup installation
+RUN adduser -D -s /bin/bash -u 1000 developer
 
+# Switch to developer user to install Rust
+USER developer
+WORKDIR /home/developer
+
+# Install Rust via rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    . ~/.cargo/env && \
+    rustup component add clippy rustfmt
+
+# Switch back to root for remaining installations
+USER root
+
+# Add Rust binaries to system PATH
+ENV PATH="/home/developer/.cargo/bin:$PATH"
+
+# Install Claude Code globally
+RUN npm install -g @anthropic-ai/claude-code
+
+# Install common Python packages
+RUN pip3 install --break-system-packages \
+    requests \
+    virtualenv \
+    pip-tools
+
+# Create workspace directory and set permissions
+RUN mkdir -p /workspace && chown developer:developer /workspace
+
+# Set environment variables
 ENV DISABLE_AUTOUPDATER=1
 ENV DISABLE_ERROR_REPORTING=1
 ENV DISABLE_TELEMETRY=1
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+ENV GOPATH=/home/developer/go
+ENV GOROOT=/usr/local/go
+ENV PATH="/usr/local/go/bin:/home/developer/.cargo/bin:$PATH"
 
 # Set working directory
 WORKDIR /workspace
 
+# Switch back to rootless user
+USER 1000:1000

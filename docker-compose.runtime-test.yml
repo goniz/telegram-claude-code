@@ -1,0 +1,20 @@
+# Docker Compose file for testing the simplified rootless DinD runtime image
+version: '3.8'
+
+services:
+  telegram-claude-code-runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    container_name: claude-runtime-test
+    privileged: true  # Required for Docker-in-Docker
+    volumes:
+      - ./test-workspace:/workspace:rw
+    environment:
+      - DISABLE_AUTOUPDATER=1
+      - DISABLE_ERROR_REPORTING=1
+      - DISABLE_TELEMETRY=1
+      - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
