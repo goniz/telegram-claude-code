@@ -42,17 +42,20 @@ jobs:
       
     - name: Build runtime image for testing
       run: |
-        # Build runtime image from current branch and tag it as what the code expects
-        # This ensures tests use the branch-specific runtime instead of the main branch
-        echo "Building runtime image from current branch..."
-        
-        docker buildx build \
-          -f Dockerfile.runtime \
-          -t "ghcr.io/goniz/telegram-claude-code-runtime:main" \
-          --load \
-          .
+        # Check if runtime image already exists locally
+        if docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "ghcr.io/goniz/telegram-claude-code-runtime:main"; then
+          echo "Runtime image already exists locally. Skipping build."
+        else
+          echo "Runtime image not found locally. Building from current branch..."
           
-        echo "Runtime image built and tagged. Tests will use this local image."
+          docker buildx build \
+            -f Dockerfile.runtime \
+            -t "ghcr.io/goniz/telegram-claude-code-runtime:main" \
+            --load \
+            .
+            
+          echo "Runtime image built and tagged. Tests will use this local image."
+        fi
       
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -204,16 +207,20 @@ jobs:
       
     - name: Build runtime image for docker-compose testing
       run: |
-        # Build runtime image from current branch for any containers the bot might create
-        echo "Building runtime image from current branch for docker-compose testing..."
-        
-        docker buildx build \
-          -f Dockerfile.runtime \
-          -t "ghcr.io/goniz/telegram-claude-code-runtime:main" \
-          --load \
-          .
+        # Check if runtime image already exists locally
+        if docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "ghcr.io/goniz/telegram-claude-code-runtime:main"; then
+          echo "Runtime image already exists locally. Skipping build."
+        else
+          echo "Runtime image not found locally. Building from current branch for docker-compose testing..."
           
-        echo "Runtime image built and available for docker-compose testing."
+          docker buildx build \
+            -f Dockerfile.runtime \
+            -t "ghcr.io/goniz/telegram-claude-code-runtime:main" \
+            --load \
+            .
+            
+          echo "Runtime image built and available for docker-compose testing."
+        fi
       
     - name: Create test environment file
       run: |
