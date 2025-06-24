@@ -120,47 +120,21 @@ async fn init_claude_configuration(
     ).await;
     log::info!("Debug exec result: {:?}", debug_result);
     
-    // Create .claude directory and config file - run as root to ensure permissions
-    // This is a one-time setup operation that needs elevated permissions
-    exec_command_in_container_as_root(
+    // Create .claude directory and config file
+    exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "mkdir -p /workspace/.claude && echo '{ \"hasCompletedOnboarding\": true }' > /workspace/.claude.json && chown -R 1000:1000 /workspace/.claude /workspace/.claude.json".to_string()]
+        vec!["sh".to_string(), "-c".to_string(), "mkdir -p /workspace/.claude && echo '{ \"hasCompletedOnboarding\": true }' > /workspace/.claude.json".to_string()]
     ).await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
     
-    // Debug: Check where Claude is installed
-    let which_claude = exec_command_in_container(
-        docker,
-        container_id,
-        vec!["sh".to_string(), "-c".to_string(), "which claude || find /usr -name claude 2>/dev/null || find /usr/local -name claude 2>/dev/null || echo 'claude not found'".to_string()]
-    ).await;
-    log::info!("Claude location debug: {:?}", which_claude);
-    
     // Set Claude configuration for trust dialog (required for proper operation)
-    // Use a proper shell environment to ensure all paths and environment are loaded
-    let claude_config_result = exec_command_in_container_as_root(
+    exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "source /etc/profile && claude config set hasTrustDialogAccepted true".to_string()]
-    ).await;
-    
-    if claude_config_result.is_err() {
-        log::warn!("Failed to set Claude config as root with profile: {:?}", claude_config_result);
-        // Try with bash and a more comprehensive environment setup
-        let bash_result = exec_command_in_container_as_root(
-            docker,
-            container_id,
-            vec!["bash".to_string(), "-c".to_string(), "export PATH=/usr/local/bin:$PATH && claude config set hasTrustDialogAccepted true".to_string()]
-        ).await;
-        
-        if bash_result.is_err() {
-            log::warn!("Failed to set Claude config with bash: {:?}", bash_result);
-            // Final fallback - just log the failure and continue
-            // The .claude.json file has been created which provides the basic config
-            log::info!("Claude config command failed but .claude.json is present. Continuing without trust dialog config.");
-        }
-    }
+        vec!["claude".to_string(), "config".to_string(), "set".to_string(), "hasTrustDialogAccepted".to_string(), "true".to_string()]
+    ).await
+    .map_err(|e| format!("Failed to set Claude trust dialog configuration: {}", e))?;
     
     log::info!("Claude configuration initialization completed");
     Ok(())
@@ -232,73 +206,6 @@ async fn init_volume_structure(
     Ok(())
 }
 
-/// Helper function to execute a command in a container as root
-pub async fn exec_command_in_container_as_root(
-    docker: &Docker,
-    container_id: &str,
-    command: Vec<String>,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    println!("Exec Command (as root): {:?}", &command);
-    let exec_config = CreateExecOptions {
-        cmd: Some(command),
-        attach_stdout: Some(true),
-        attach_stderr: Some(true),
-        user: Some("root".to_string()), // Run as root for privileged operations
-        working_dir: Some("/workspace".to_string()),
-        env: Some(vec![
-            "PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin:/home/rootless/.cargo/bin".to_string(),
-            "HOME=/root".to_string(),
-            "USER=root".to_string(),
-        ]),
-        ..Default::default()
-    };
-
-    let exec = docker.create_exec(container_id, exec_config).await?;
-
-    let start_config = StartExecOptions {
-        detach: false,
-        ..Default::default()
-    };
-
-    let mut output = String::new();
-
-    match docker.start_exec(&exec.id, Some(start_config)).await? {
-        bollard::exec::StartExecResults::Attached {
-            output: mut output_stream,
-            ..
-        } => {
-            while let Some(Ok(msg)) = output_stream.next().await {
-                match msg {
-                    bollard::container::LogOutput::StdOut { message } => {
-                        output.push_str(&String::from_utf8_lossy(&message));
-                    }
-                    bollard::container::LogOutput::StdErr { message } => {
-                        output.push_str(&String::from_utf8_lossy(&message));
-                    }
-                    _ => {}
-                }
-            }
-        }
-        bollard::exec::StartExecResults::Detached => {
-            return Err("Unexpected detached execution".into());
-        }
-    }
-
-    // Check the exit code of the command
-    let inspect_exec = docker.inspect_exec(&exec.id).await?;
-    if let Some(exit_code) = inspect_exec.exit_code {
-        if exit_code != 0 {
-            return Err(format!(
-                "Command failed with exit code {}: {}",
-                exit_code,
-                output.trim()
-            )
-            .into());
-        }
-    }
-
-    Ok(output.trim().to_string())
-}
 
 /// Helper function to execute a command in a container
 pub async fn exec_command_in_container(
