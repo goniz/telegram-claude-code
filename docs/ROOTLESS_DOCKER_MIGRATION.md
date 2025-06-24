@@ -34,7 +34,7 @@ The refactored image provides essential development tools:
 - **Node.js**: Alpine's nodejs and npm packages
 - **Python**: Python 3 with pip and virtualenv
 - **Rust**: Installed via rustup (configurable version via `RUST_VERSION` build arg, default: 1.87.0)
-- **Go**: Installed from official source (configurable version via `GO_VERSION` build arg, default: 1.23.4)
+- **Go**: Installed from official source (configurable version via `GO_VERSION` build arg, default: 1.24.4)
 - **GitHub CLI**: For repository operations
 - **Claude Code**: Pre-installed globally via npm
 - **Build Tools**: gcc, g++, make, cmake, musl-dev, linux-headers
@@ -73,7 +73,7 @@ docker build -f Dockerfile.runtime \
 
 **Available build arguments:**
 - `RUST_VERSION`: Rust toolchain version (default: 1.87.0)
-- `GO_VERSION`: Go version (default: 1.23.4)
+- `GO_VERSION`: Go version (default: 1.24.4)
 
 ### Quick Test
 
