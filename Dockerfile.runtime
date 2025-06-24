@@ -1,7 +1,7 @@
 # Runtime Dockerfile for development session containers with rootless Docker-in-Docker
 # This image provides a secure rootless environment with Claude Code and development tools
 
-FROM docker:25.0-dind-rootless
+FROM docker:25.0.3-dind-rootless
 
 # Build arguments for language versions with defaults
 ARG RUST_VERSION=1.87.0
@@ -11,9 +11,10 @@ ARG GO_VERSION=1.24.4
 USER root
 
 # Install essential development packages including build tools
-RUN apk add --no-cache \
+RUN apk update && apk add --no-cache \
     bash \
     curl \
+    wget \
     git \
     nodejs \
     npm \
@@ -26,18 +27,18 @@ RUN apk add --no-cache \
     make \
     cmake \
     musl-dev \
-    linux-headers
+    linux-headers \
+    ca-certificates \
+    && rm -rf /var/cache/apk/*
 
 # Install Go from official source using build arg version
-RUN wget -O go.tar.gz https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
+RUN wget -q -O go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" && \
     tar -C /usr/local -xzf go.tar.gz && \
-    rm go.tar.gz && \
-    ln -s /usr/local/go/bin/go /usr/local/bin/go && \
-    ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+    rm go.tar.gz
 
-# Install Rust using rustup (as non-root user later)
-# First create a non-root user for rustup installation
-RUN adduser -D -s /bin/bash -u 1000 developer
+# The rootless image already has a user with UID 1000, so we'll use that
+# Check if developer user exists, if not create it
+RUN id 1000 >/dev/null 2>&1 || adduser -D -s /bin/bash -u 1000 developer
 
 # Switch to developer user to install Rust
 USER developer
@@ -48,11 +49,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
     . ~/.cargo/env && \
     rustup component add clippy rustfmt
 
-# Switch back to root for remaining installations
+# Switch back to root for global installations
 USER root
-
-# Add Rust binaries to system PATH
-ENV PATH="/home/developer/.cargo/bin:$PATH"
 
 # Install Claude Code globally
 RUN npm install -g @anthropic-ai/claude-code
@@ -64,16 +62,18 @@ RUN pip3 install --break-system-packages \
     pip-tools
 
 # Create workspace directory and set permissions
-RUN mkdir -p /workspace && chown developer:developer /workspace
+RUN mkdir -p /workspace && chown 1000:1000 /workspace
 
-# Set environment variables
+# Set environment variables for development tools
+ENV GOPATH=/home/developer/go
+ENV GOROOT=/usr/local/go
+ENV PATH="/usr/local/go/bin:/home/developer/.cargo/bin:$PATH"
+
+# Claude Code configuration
 ENV DISABLE_AUTOUPDATER=1
 ENV DISABLE_ERROR_REPORTING=1
 ENV DISABLE_TELEMETRY=1
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-ENV GOPATH=/home/developer/go
-ENV GOROOT=/usr/local/go
-ENV PATH="/usr/local/go/bin:/home/developer/.cargo/bin:$PATH"
 
 # Set working directory
 WORKDIR /workspace
