@@ -112,14 +112,22 @@ async fn init_claude_configuration(
     log::info!("Initializing Claude configuration...");
     
     // Initialize .claude.json with required configuration in user's home directory
+    // First debug what user we're running as
+    let debug_result = exec_command_in_container(
+        docker,
+        container_id,
+        vec!["sh".to_string(), "-c".to_string(), "whoami && id && echo HOME=$HOME && ls -la /home/rootless || echo '/home/rootless not accessible'".to_string()]
+    ).await;
+    log::info!("Debug exec result: {:?}", debug_result);
+    
     exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "mkdir -p ~/.claude && echo '{ \"hasCompletedOnboarding\": true }' > ~/.claude.json".to_string()]
+        vec!["sh".to_string(), "-c".to_string(), "mkdir -p /home/rootless/.claude && echo '{ \"hasCompletedOnboarding\": true }' > /home/rootless/.claude.json".to_string()]
     ).await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
     
-    // Set Claude configuration for trust dialog (simplified without entrypoint script)
+    // Set Claude configuration for trust dialog (required for proper operation)
     exec_command_in_container(
         docker,
         container_id,
@@ -208,6 +216,13 @@ pub async fn exec_command_in_container(
         cmd: Some(command),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
+        user: Some("1000:1000".to_string()), // Use rootless user
+        working_dir: Some("/workspace".to_string()),
+        env: Some(vec![
+            "PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin".to_string(),
+            "HOME=/home/rootless".to_string(),
+            "USER=rootless".to_string(),
+        ]),
         ..Default::default()
     };
 
