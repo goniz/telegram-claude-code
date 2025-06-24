@@ -111,20 +111,13 @@ async fn init_claude_configuration(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     log::info!("Initializing Claude configuration...");
     
-    // Initialize .claude.json with required configuration in user's home directory
-    // First debug what user we're running as
-    let debug_result = exec_command_in_container(
-        docker,
-        container_id,
-        vec!["sh".to_string(), "-c".to_string(), "whoami && id && echo HOME=$HOME && ls -la /home/rootless || echo '/home/rootless not accessible'".to_string()]
-    ).await;
-    log::info!("Debug exec result: {:?}", debug_result);
+    // Initialize .claude.json with required configuration
     
     // Create .claude directory and config file
     exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "mkdir -p /workspace/.claude && echo '{ \"hasCompletedOnboarding\": true }' > /workspace/.claude.json".to_string()]
+        vec!["sh".to_string(), "-c".to_string(), "mkdir -p ~/.claude && echo '{ \"hasCompletedOnboarding\": true }' > ~/.claude.json".to_string()]
     ).await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
     
@@ -221,8 +214,7 @@ pub async fn exec_command_in_container(
         user: Some("1000:1000".to_string()), // Use rootless user
         working_dir: Some("/workspace".to_string()),
         env: Some(vec![
-            "PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin:/home/rootless/.cargo/bin".to_string(),
-            "HOME=/workspace".to_string(),  // Use workspace as home since it's guaranteed to exist
+            "PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin:/home/rootless/.cargo/bin:/home/rootless/node_modules/.bin".to_string(),
             "USER=rootless".to_string(),
         ]),
         ..Default::default()
