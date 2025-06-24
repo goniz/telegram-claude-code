@@ -6,6 +6,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.runtime
+      args:
+        RUST_VERSION: "1.87.0"  # Optional: override default
+        GO_VERSION: "1.23.4"    # Optional: override default
     container_name: claude-runtime-test
     privileged: true  # Required for Docker-in-Docker
     volumes:

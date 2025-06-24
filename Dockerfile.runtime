@@ -3,6 +3,10 @@
 
 FROM docker:25.0-dind-rootless
 
+# Build arguments for language versions with defaults
+ARG RUST_VERSION=1.87.0
+ARG GO_VERSION=1.23.4
+
 # Switch to root for package installation
 USER root
 
@@ -24,8 +28,8 @@ RUN apk add --no-cache \
     musl-dev \
     linux-headers
 
-# Install Go from official source
-RUN wget -O go.tar.gz https://go.dev/dl/go1.21.5.linux-amd64.tar.gz && \
+# Install Go from official source using build arg version
+RUN wget -O go.tar.gz https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
     tar -C /usr/local -xzf go.tar.gz && \
     rm go.tar.gz && \
     ln -s /usr/local/go/bin/go /usr/local/bin/go && \
@@ -39,8 +43,8 @@ RUN adduser -D -s /bin/bash -u 1000 developer
 USER developer
 WORKDIR /home/developer
 
-# Install Rust via rustup
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+# Install Rust via rustup using build arg version
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION} && \
     . ~/.cargo/env && \
     rustup component add clippy rustfmt
 
