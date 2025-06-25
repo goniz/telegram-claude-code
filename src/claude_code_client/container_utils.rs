@@ -24,6 +24,9 @@ impl Default for CodingContainerConfig {
 /// Container image used by the main application
 /// This is the Claude Code runtime image that provides multi-language development environment with Claude Code pre-installed
 pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/goniz/telegram-claude-code-runtime:main";
+pub const USER: &str = "rootless";
+pub const HOME_DIR: &str = "/home/rootless";
+pub const WORKING_DIR: &str = "/workspace";
 
 /// Generate a volume name for a user's persistent authentication data
 pub fn generate_volume_name(volume_key: &str) -> String {
