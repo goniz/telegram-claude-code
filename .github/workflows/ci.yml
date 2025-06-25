@@ -20,7 +20,7 @@ jobs:
         toolchain: stable
       
     - name: Test
-      run: cargo test --lib --bins --verbose -- --nocapture
+      run: cargo test --lib --bins -- --nocapture
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -37,6 +37,27 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build runtime image for testing
+      run: |
+        # Check if runtime image already exists locally
+        if docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "ghcr.io/goniz/telegram-claude-code-runtime:main"; then
+          echo "Runtime image already exists locally. Skipping build."
+        else
+          echo "Runtime image not found locally. Building from current branch..."
+          
+          docker buildx build \
+            -f Dockerfile.runtime \
+            -t "ghcr.io/goniz/telegram-claude-code-runtime:main" \
+            --cache-from type=registry,ref=ghcr.io/goniz/telegram-claude-code-runtime-cache:amd64 \
+            --load \
+            .
+            
+          echo "Runtime image built and tagged. Tests will use this local image."
+        fi
+      
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
@@ -45,7 +66,7 @@ jobs:
     - name: Run integration test - ${{ matrix.test }}
       env:
          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-      run: cargo test --test ${{ matrix.test }} --verbose -- --nocapture
+      run: cargo test --test ${{ matrix.test }} -- --nocapture
       
     - name: Upload claude output file on failure
       if: failure()

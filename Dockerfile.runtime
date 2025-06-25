@@ -1,28 +1,80 @@
-# Runtime Dockerfile for development session containers
-# This image pre-installs Claude Code and GitHub CLI for faster container startup
+# Runtime Dockerfile for development session containers with rootless Docker-in-Docker
+# This image provides a secure rootless environment with Claude Code and development tools
 
-FROM ghcr.io/openai/codex-universal:latest
+FROM docker:28-dind-rootless
 
-# Install GitHub CLI
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-    && apt-get update \
-    && apt-get install -y gh \
-    && rm -rf /var/lib/apt/lists/*
+# Build arguments for language versions with defaults
+ARG RUST_VERSION=1.87.0
+ARG GO_VERSION=1.24.4
 
-# Ensure the claude binary is in PATH
-ENV PATH="/usr/local/bin:$PATH"
+# Switch to root for package installation
+USER root
 
-ENV CODEX_ENV_PYTHON_VERSION="3.12"
-ENV CODEX_ENV_NODE_VERSION="22"
-ENV CODEX_ENV_RUST_VERSION="1.87.0"
-ENV CODEX_ENV_GO_VERSION="1.23.8"
+# Install essential development packages including build tools
+RUN apk update && apk add --no-cache \
+    bash \
+    curl \
+    wget \
+    git \
+    nodejs \
+    npm \
+    python3 \
+    py3-pip \
+    github-cli \
+    build-base \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    musl-dev \
+    linux-headers \
+    ca-certificates \
+    sudo \
+    coreutils \
+    && rm -rf /var/cache/apk/*
 
-# Install Claude Code via npm globally
-RUN /opt/entrypoint.sh -c \
-		"nvm use default && npm install -g @anthropic-ai/claude-code"
+# Make the rootless user a sudoer without password prompt
+RUN echo "rootless ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
+# Install common Python packages
+RUN pip3 install --break-system-packages \
+    requests \
+    virtualenv \
+    pip-tools
+
+# Install Go from official source using build arg version
+RUN wget -q -O go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" && \
+    tar -C /usr/local -xzf go.tar.gz && \
+    rm go.tar.gz
+
+# Create workspace directory and set permissions
+RUN mkdir -p /workspace && chown 1000:1000 /workspace
+
+# Create data_volume directory and set permissions
+RUN mkdir -p /data_volume && chown 1000:1000 /data_volume
+VOLUME /data_volume
+
+# The rootless image already has a user with UID 1000, just use that existing user
+# No need to create a new user - the base image provides a suitable user with UID 1000
+
+# Switch to rootless user to install Rust
+USER rootless
+WORKDIR /home/rootless
+
+# Install Rust via rustup using build arg version
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION} && \
+    . ~/.cargo/env && \
+    rustup component add clippy rustfmt
+
+# Install Claude Code locally for the rootless user
+RUN npm install @anthropic-ai/claude-code
+
+# Set environment variables for development tools
+ENV GOPATH=/home/rootless/go
+ENV GOROOT=/usr/local/go
+ENV PATH="/usr/local/go/bin:/home/rootless/.cargo/bin:/home/rootless/node_modules/.bin:$PATH"
+
+# Claude Code configuration
 ENV DISABLE_AUTOUPDATER=1
 ENV DISABLE_ERROR_REPORTING=1
 ENV DISABLE_TELEMETRY=1
@@ -30,4 +82,3 @@ ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # Set working directory
 WORKDIR /workspace
-

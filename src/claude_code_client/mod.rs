@@ -331,23 +331,17 @@ impl ClaudeCodeClient {
         // Create exec with TTY enabled for interactive mode
         log::debug!("Creating exec configuration for Claude CLI interactive mode");
         let exec_config = CreateExecOptions {
-            cmd: Some(vec!["claude".to_string(), "/login".to_string()]),
+            cmd: Some(vec!["sh".to_string(), "-c".to_string(), "claude /login".to_string()]),
             attach_stdin: Some(true),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             tty: Some(true),
-            privileged: Some(false),
             working_dir: self.config.working_directory.clone(),
-            env: Some(vec![
-                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:\
-                 /root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/\
-                 usr/bin:/sbin:/bin"
-                    .to_string(),
-                "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
-                "TERM=xterm-256color".to_string(),
-                "TERMINFO=/usr/share/terminfo".to_string(),
-                "DEBIAN_FRONTEND=noninteractive".to_string(),
-            ]),
+            // env: Some(vec![
+            //     "TERM=xterm-256color".to_string(),
+            //     "TERMINFO=/usr/share/terminfo".to_string(),
+            //     "DEBIAN_FRONTEND=noninteractive".to_string(),
+            // ]),
             ..Default::default()
         };
 
@@ -874,9 +868,8 @@ To authenticate with your Claude account, please follow these steps:
         &self,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            "/opt/entrypoint.sh -c \"nvm use default && claude update\"".to_string(),
+            "claude".to_string(),
+            "update".to_string(),
         ];
         self.exec_command(command).await
     }
@@ -893,15 +886,6 @@ To authenticate with your Claude account, please follow these steps:
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),
-            env: Some(vec![
-                // Set up PATH to include NVM Node.js installation and standard paths
-                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:\
-                 /root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/\
-                 usr/bin:/sbin:/bin"
-                    .to_string(),
-                // Ensure Node.js modules are available
-                "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
-            ]),
             ..Default::default()
         };
 

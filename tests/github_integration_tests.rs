@@ -1,52 +1,26 @@
-use bollard::Docker;
-use rstest::*;
-use telegram_bot::{ClaudeCodeClient, GithubClient, GithubClientConfig, container_utils};
+use telegram_bot::{ClaudeCodeClient, GithubClient, GithubClientConfig};
 use telegram_bot::claude_code_client::{ClaudeCodeConfig};
-use futures_util;
-use uuid;
+
+mod test_utils;
 
 // =============================================================================
-// COMMON FIXTURES AND HELPER FUNCTIONS
+// All tests now use TestContainerGuard for safe, parallel container management
 // =============================================================================
-
-/// Test fixture that provides a Docker client
-#[fixture]
-pub fn docker() -> Docker {
-    Docker::connect_with_socket_defaults().expect("Failed to connect to Docker")
-}
-
-/// Test fixture that creates a test container and cleans it up
-#[fixture]
-pub async fn test_container(docker: Docker) -> (Docker, String, String) {
-    let container_name = format!("test-github-integration-{}", uuid::Uuid::new_v4());
-    let container_id = container_utils::create_test_container(&docker, &container_name)
-        .await
-        .expect("Failed to create test container");
-
-    (docker, container_id, container_name)
-}
-
-/// Cleanup fixture that ensures test containers are removed
-pub async fn cleanup_container(docker: &Docker, container_name: &str) {
-    let _ = container_utils::clear_coding_session(docker, container_name).await;
-}
 
 // =============================================================================
 // GITHUB AUTHENTICATION TESTS
 // =============================================================================
 
-#[rstest]
 #[tokio::test]
-async fn test_github_auth_command_workflow(
-    #[future] test_container: (Docker, String, String)
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (docker, _container_id, container_name) = test_container.await;
+async fn test_github_auth_command_workflow() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_socket().await?;
     
     println!("=== STEP 1: Creating Claude Code client session ===");
     
     // Step 1: Get ClaudeCodeClient session (simulating the session lookup in the command)
-    let claude_client = ClaudeCodeClient::for_session(docker.clone(), &container_name).await;
+    let claude_client = ClaudeCodeClient::for_session(guard.docker().clone(), guard.container_name()).await;
     if claude_client.is_err() {
+        guard.cleanup().await;
         return Err(format!("Failed to find session: {:?}", claude_client.unwrap_err()).into());
     }
     let claude_client = claude_client.unwrap();
@@ -55,7 +29,7 @@ async fn test_github_auth_command_workflow(
     
     // Step 2: Create GitHub client using same pattern as the new command
     let github_client = GithubClient::new(
-        docker.clone(), 
+        guard.docker().clone(), 
         claude_client.container_id().to_string(), 
         GithubClientConfig::default()
     );
@@ -67,12 +41,13 @@ async fn test_github_auth_command_workflow(
     match availability_result {
         Ok(version_output) => {
             println!("✅ gh CLI availability check successful: {}", version_output);
-            assert!(
-                version_output.contains("gh version"), 
-                "gh CLI must be installed and working. Got: {}", version_output
-            );
+            if !version_output.contains("gh version") {
+                guard.cleanup().await;
+                return Err(format!("gh CLI must be installed and working. Got: {}", version_output).into());
+            }
         }
         Err(e) => {
+            guard.cleanup().await;
             return Err(format!("gh CLI availability check failed: {}", e).into());
         }
     }
@@ -88,14 +63,19 @@ async fn test_github_auth_command_workflow(
                      auth_result.authenticated, auth_result.username, auth_result.message);
             
             // Should have a valid response structure
-            assert!(!auth_result.message.is_empty(), "Auth status message should not be empty");
+            if auth_result.message.is_empty() {
+                guard.cleanup().await;
+                return Err("Auth status message should not be empty".into());
+            }
             
             // gh CLI must be working for this test to be valid
-            assert!(!auth_result.message.contains("not found") && 
-                   !auth_result.message.contains("executable file not found"), 
-                   "gh CLI must be installed. Auth status failed with: {}", auth_result.message);
+            if auth_result.message.contains("not found") || auth_result.message.contains("executable file not found") {
+                guard.cleanup().await;
+                return Err(format!("gh CLI must be installed. Auth status failed with: {}", auth_result.message).into());
+            }
         }
         Err(e) => {
+            guard.cleanup().await;
             return Err(format!("GitHub auth status check failed: {}", e).into());
         }
     }
@@ -112,7 +92,10 @@ async fn test_github_auth_command_workflow(
                      auth_result.authenticated, auth_result.oauth_url, auth_result.device_code);
             
             // Should return a valid response
-            assert!(!auth_result.message.is_empty(), "Login result message should not be empty");
+            if auth_result.message.is_empty() {
+                guard.cleanup().await;
+                return Err("Login result message should not be empty".into());
+            }
             
             // In test environment, either:
             // 1. Already authenticated (authenticated=true)
@@ -122,8 +105,16 @@ async fn test_github_auth_command_workflow(
                 println!("Already authenticated with GitHub");
             } else if auth_result.oauth_url.is_some() && auth_result.device_code.is_some() {
                 println!("OAuth flow initiated successfully");
-                assert!(auth_result.oauth_url.unwrap().starts_with("https://"), "OAuth URL should be valid HTTPS URL");
-                assert!(!auth_result.device_code.unwrap().is_empty(), "Device code should not be empty");
+                let oauth_url = auth_result.oauth_url.unwrap();
+                let device_code = auth_result.device_code.unwrap();
+                if !oauth_url.starts_with("https://") {
+                    guard.cleanup().await;
+                    return Err("OAuth URL should be valid HTTPS URL".into());
+                }
+                if device_code.is_empty() {
+                    guard.cleanup().await;
+                    return Err("Device code should not be empty".into());
+                }
             } else {
                 println!("Login returned status: {}", auth_result.message);
             }
@@ -135,38 +126,50 @@ async fn test_github_auth_command_workflow(
             let error_msg = e.to_string();
             
             // Verify it's not a structural error (wrong command, missing gh CLI, etc.)
-            assert!(!error_msg.contains("command not found"), 
-                   "gh CLI command should exist: {}", error_msg);
-            assert!(!error_msg.contains("executable file not found"), 
-                   "gh CLI executable should exist: {}", error_msg);
+            if error_msg.contains("command not found") {
+                guard.cleanup().await;
+                return Err(format!("gh CLI command should exist: {}", error_msg).into());
+            }
+            if error_msg.contains("executable file not found") {
+                guard.cleanup().await;
+                return Err(format!("gh CLI executable should exist: {}", error_msg).into());
+            }
         }
     }
     
     // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
     
     println!("✅ GitHub authentication command workflow test completed successfully");
     
     Ok(())
 }
 
-#[rstest]
 #[tokio::test]
-async fn test_github_auth_without_session() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let docker = Docker::connect_with_socket_defaults()?;
+async fn test_github_auth_without_session() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_socket().await?;
     let non_existent_container = "non-existent-session";
     
     // Test the error handling when no session exists (simulating command behavior)
-    let session_result = ClaudeCodeClient::for_session(docker, non_existent_container).await;
+    let session_result = ClaudeCodeClient::for_session(guard.docker().clone(), non_existent_container).await;
     
     // Should fail gracefully
-    assert!(session_result.is_err(), "Should fail when session doesn't exist");
+    if session_result.is_ok() {
+        guard.cleanup().await;
+        return Err("Should fail when session doesn't exist".into());
+    }
     
     let error = session_result.unwrap_err();
     println!("Expected error when no session exists: {}", error);
     
     // Error should be descriptive
-    assert!(!error.to_string().is_empty(), "Error message should not be empty");
+    if error.to_string().is_empty() {
+        guard.cleanup().await;
+        return Err("Error message should not be empty".into());
+    }
+    
+    // Cleanup
+    guard.cleanup().await;
     
     Ok(())
 }
@@ -1322,6 +1325,49 @@ async fn test_github_clone_with_different_working_directories(
     cleanup_container(&docker, &container_name).await;
 }
 
+/// Test GitHub clone with guaranteed cleanup (demonstrating safe pattern)
+#[tokio::test]
+async fn test_github_clone_with_guaranteed_cleanup() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new().await?;
+    let claude_client = guard.start_coding_session().await?;
+    
+    let github_client = GithubClient::new(
+        guard.docker().clone(),
+        claude_client.container_id().to_string(),
+        GithubClientConfig::default(),
+    );
+
+    // Test basic GitHub CLI availability first
+    let availability_result = github_client.check_availability().await;
+    if let Err(e) = availability_result {
+        // Early return here would normally skip cleanup, but guard handles it
+        return Err(format!("GitHub CLI not available: {}", e).into());
+    }
+
+    // Test clone operation that might fail
+    let clone_result = github_client
+        .repo_clone("octocat/Hello-World", Some("test-safe-clone"))
+        .await;
+
+    // Handle result without risking container leak
+    if let Err(e) = clone_result {
+        // Even if this fails, cleanup will still happen
+        println!("Clone failed (may be expected): {}", e);
+    } else {
+        let clone_response = clone_result.unwrap();
+        println!("Clone result: {:?}", clone_response);
+        
+        // Assertions that could panic are now safe
+        assert_eq!(clone_response.repository, "octocat/Hello-World");
+        assert_eq!(clone_response.target_directory, "test-safe-clone");
+    }
+
+    // Explicit cleanup
+    guard.cleanup().await;
+    
+    Ok(())
+}
+
 /// Test GitHub clone with different timeout configurations
 #[rstest]
 #[tokio::test]
@@ -1951,7 +1997,7 @@ async fn test_exec_command_allow_failure_environment_variables(#[future] test_co
     let (output, success) = result.unwrap();
     
     assert!(success, "Command should be marked as successful");
-    assert!(output.contains("HOME=/root"), "HOME should be set to /root: '{}'", output);
+    assert!(output.contains(&format!("HOME={}", container_utils::HOME_DIR)), "HOME should be set to {}: '{}'", container_utils::HOME_DIR, output);
     assert!(output.contains("PATH=") && output.contains("/usr/local/bin"), "PATH should contain standard paths: '{}'", output);
 }
 

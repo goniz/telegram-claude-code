@@ -1,14 +1,22 @@
+use crate::{
+    claude_code_client::{
+        container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig,
+    },
+    escape_markdown_v2, BotState,
+};
 use teloxide::{
     prelude::*,
-    types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode}
-};
-use crate::{
-    escape_markdown_v2, BotState,
-    claude_code_client::{container_utils, ClaudeCodeConfig, ClaudeCodeClient, GithubClient, GithubClientConfig}
+    types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
 };
 
 /// Handle the /start command with enhanced workflow
-pub async fn handle_start(bot: Bot, msg: Message, bot_state: BotState, chat_id: i64, user_id: i64) -> ResponseResult<()> {
+pub async fn handle_start(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    chat_id: i64,
+    user_id: i64,
+) -> ResponseResult<()> {
     let container_name = format!("coding-session-{}", chat_id);
 
     // Send initial welcome message
@@ -26,6 +34,8 @@ pub async fn handle_start(bot: Bot, msg: Message, bot_state: BotState, chat_id: 
         ClaudeCodeConfig::default(),
         container_utils::CodingContainerConfig {
             persistent_volume_key: Some(user_id.to_string()),
+            // Ensure we always pull the latest image
+            force_pull: true,
         },
     )
     .await
@@ -36,14 +46,14 @@ pub async fn handle_start(bot: Bot, msg: Message, bot_state: BotState, chat_id: 
                 .chars()
                 .take(12)
                 .collect::<String>();
-            
+
             // Send container started message
             bot.send_message(
                 msg.chat.id,
                 format!(
                     "✅ Coding session started successfully\\!\n\n*Container ID:* \
-                     `{}`\n*Container Name:* `{}`\n\n🎯 Claude Code is pre\\-installed and \
-                     ready to use\\!",
+                     `{}`\n*Container Name:* `{}`\n\n🎯 Claude Code is pre\\-installed and ready \
+                     to use\\!",
                     escape_markdown_v2(&container_id_short),
                     escape_markdown_v2(&container_name)
                 ),
@@ -58,9 +68,8 @@ pub async fn handle_start(bot: Bot, msg: Message, bot_state: BotState, chat_id: 
             bot.send_message(
                 msg.chat.id,
                 format!(
-                    "❌ Failed to start coding session: {}\n\nThis could be due to:\n• \
-                     Container creation failure\n• Runtime image pull failure\n• Network \
-                     connectivity issues",
+                    "❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container \
+                     creation failure\n• Runtime image pull failure\n• Network connectivity issues",
                     escape_markdown_v2(&e.to_string())
                 ),
             )
@@ -68,7 +77,7 @@ pub async fn handle_start(bot: Bot, msg: Message, bot_state: BotState, chat_id: 
             .await?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -80,12 +89,9 @@ async fn check_and_guide_authentication(
     claude_client: &ClaudeCodeClient,
 ) -> ResponseResult<()> {
     // Send status checking message
-    bot.send_message(
-        chat_id,
-        "🔍 Checking authentication status\\.\\.\\.",
-    )
-    .parse_mode(ParseMode::MarkdownV2)
-    .await?;
+    bot.send_message(chat_id, "🔍 Checking authentication status\\.\\.\\.")
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
 
     // Create GitHub client
     let github_client = GithubClient::new(
@@ -104,7 +110,8 @@ async fn check_and_guide_authentication(
         prompt_for_repository_setup(bot, chat_id).await?;
     } else {
         // Show authentication guidance
-        show_authentication_guidance(bot, chat_id, github_authenticated, claude_authenticated).await?;
+        show_authentication_guidance(bot, chat_id, github_authenticated, claude_authenticated)
+            .await?;
     }
 
     Ok(())
@@ -127,18 +134,15 @@ async fn check_github_auth_status(
                 } else {
                     "✅ *GitHub Status:* Authenticated".to_string()
                 };
-                
+
                 bot.send_message(chat_id, message)
                     .parse_mode(ParseMode::MarkdownV2)
                     .await?;
                 Ok(true)
             } else {
-                bot.send_message(
-                    chat_id,
-                    "❌ *GitHub Status:* Not authenticated",
-                )
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
+                bot.send_message(chat_id, "❌ *GitHub Status:* Not authenticated")
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
                 Ok(false)
             }
         }
@@ -170,7 +174,7 @@ async fn check_claude_auth_status(
             } else {
                 "❌ *Claude Status:* Not authenticated"
             };
-            
+
             bot.send_message(chat_id, message)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
@@ -203,18 +207,22 @@ async fn show_authentication_guidance(
 
     if !github_authenticated {
         auth_steps.push("🐙 *Authenticate with GitHub* to access repositories");
-        keyboard_buttons.push(vec![InlineKeyboardButton::switch_inline_query_current_chat(
-            "🔐 Authenticate GitHub",
-            "/githubauth",
-        )]);
+        keyboard_buttons.push(vec![
+            InlineKeyboardButton::switch_inline_query_current_chat(
+                "🔐 Authenticate GitHub",
+                "/githubauth",
+            ),
+        ]);
     }
 
     if !claude_authenticated {
         auth_steps.push("🤖 *Authenticate with Claude* to use AI coding features");
-        keyboard_buttons.push(vec![InlineKeyboardButton::switch_inline_query_current_chat(
-            "🔐 Authenticate Claude",
-            "/authenticateclaude",
-        )]);
+        keyboard_buttons.push(vec![
+            InlineKeyboardButton::switch_inline_query_current_chat(
+                "🔐 Authenticate Claude",
+                "/authenticateclaude",
+            ),
+        ]);
     }
 
     let message = if auth_steps.is_empty() {
@@ -227,10 +235,9 @@ async fn show_authentication_guidance(
     };
 
     // Add status check button
-    keyboard_buttons.push(vec![InlineKeyboardButton::switch_inline_query_current_chat(
-        "🔄 Check Status Again",
-        "/start",
-    )]);
+    keyboard_buttons.push(vec![
+        InlineKeyboardButton::switch_inline_query_current_chat("🔄 Check Status Again", "/start"),
+    ]);
 
     let keyboard = InlineKeyboardMarkup::new(keyboard_buttons);
 
@@ -245,12 +252,10 @@ async fn show_authentication_guidance(
 /// Prompt user for repository setup after successful authentication
 async fn prompt_for_repository_setup(bot: Bot, chat_id: ChatId) -> ResponseResult<()> {
     let message = "🎯 *Ready to Start Coding\\!*\n\nBoth GitHub and Claude are authenticated\\. \
-                   Now let's set up your development environment:\n\n\
-                   📂 *Repository Setup*\n\
-                   Please provide the following information:\n\n\
-                   1️⃣ **GitHub Repository** to clone\n\
-                   2️⃣ **Branch** to work on \\(optional\\)\n\
-                   3️⃣ **Task Description** for this session";
+                   Now let's set up your development environment:\n\n📂 *Repository \
+                   Setup*\nPlease provide the following information:\n\n1️⃣ **GitHub Repository** \
+                   to clone\n2️⃣ **Branch** to work on \\(optional\\)\n3️⃣ **Task Description** for \
+                   this session";
 
     let keyboard = InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::switch_inline_query_current_chat(
@@ -290,7 +295,7 @@ mod tests {
             "🐙 *Authenticate with GitHub* to access repositories",
             "🤖 *Authenticate with Claude* to use AI coding features",
         ];
-        
+
         assert_eq!(auth_steps.len(), 2);
         assert!(auth_steps[0].contains("GitHub"));
         assert!(auth_steps[1].contains("Claude"));
@@ -301,7 +306,7 @@ mod tests {
         // This test verifies the logic for showing guidance when only GitHub is unauthenticated
         let github_authenticated = false;
         let claude_authenticated = true;
-        
+
         let mut auth_steps = Vec::new();
         if !github_authenticated {
             auth_steps.push("🐙 *Authenticate with GitHub* to access repositories");
@@ -309,7 +314,7 @@ mod tests {
         if !claude_authenticated {
             auth_steps.push("🤖 *Authenticate with Claude* to use AI coding features");
         }
-        
+
         assert_eq!(auth_steps.len(), 1);
         assert!(auth_steps[0].contains("GitHub"));
     }
@@ -319,7 +324,7 @@ mod tests {
         // This test verifies the logic for showing guidance when only Claude is unauthenticated
         let github_authenticated = true;
         let claude_authenticated = false;
-        
+
         let mut auth_steps = Vec::new();
         if !github_authenticated {
             auth_steps.push("🐙 *Authenticate with GitHub* to access repositories");
@@ -327,7 +332,7 @@ mod tests {
         if !claude_authenticated {
             auth_steps.push("🤖 *Authenticate with Claude* to use AI coding features");
         }
-        
+
         assert_eq!(auth_steps.len(), 1);
         assert!(auth_steps[0].contains("Claude"));
     }

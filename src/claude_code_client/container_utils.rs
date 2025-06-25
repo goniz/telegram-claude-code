@@ -1,8 +1,11 @@
-use bollard::container::{Config, CreateContainerOptions, RemoveContainerOptions, ListContainersOptions};
+use bollard::container::{
+    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+    StopContainerOptions,
+};
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::image::CreateImageOptions;
+use bollard::models::{HostConfig, Mount, MountTypeEnum};
 use bollard::volume::CreateVolumeOptions;
-use bollard::models::{Mount, MountTypeEnum, HostConfig};
 use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -11,12 +14,15 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct CodingContainerConfig {
     pub persistent_volume_key: Option<String>,
+    pub force_pull: bool,
 }
 
 impl Default for CodingContainerConfig {
     fn default() -> Self {
         Self {
             persistent_volume_key: None,
+            // Default to pulling the image if it doesn't exist
+            force_pull: true,
         }
     }
 }
@@ -24,6 +30,9 @@ impl Default for CodingContainerConfig {
 /// Container image used by the main application
 /// This is the Claude Code runtime image that provides multi-language development environment with Claude Code pre-installed
 pub const MAIN_CONTAINER_IMAGE: &str = "ghcr.io/goniz/telegram-claude-code-runtime:main";
+pub const USER: &str = "rootless";
+pub const HOME_DIR: &str = "/home/rootless";
+pub const WORKING_DIR: &str = "/workspace";
 
 /// Generate a volume name for a user's persistent authentication data
 pub fn generate_volume_name(volume_key: &str) -> String {
@@ -33,17 +42,12 @@ pub fn generate_volume_name(volume_key: &str) -> String {
 /// Prepare environment variables for container creation with dynamic GH_TOKEN support
 /// Includes common development environment variables and optionally GH_TOKEN
 fn prepare_container_env_vars_dynamic() -> Vec<String> {
-    let mut env_vars = vec![
-        "CODEX_ENV_PYTHON_VERSION=3.12".to_string(),
-        "CODEX_ENV_NODE_VERSION=22".to_string(),
-        "CODEX_ENV_RUST_VERSION=1.87.0".to_string(),
-        "CODEX_ENV_GO_VERSION=1.23.8".to_string(),
-    ];
-    
+    let mut env_vars = vec![];
+
     if let Ok(gh_token) = std::env::var("GH_TOKEN") {
         env_vars.push(format!("GH_TOKEN={}", gh_token));
     }
-    
+
     env_vars
 }
 
@@ -54,7 +58,7 @@ pub async fn ensure_user_volume(
     volume_key: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let volume_name = generate_volume_name(volume_key);
-    
+
     // Create the volume - Docker will return an error if it already exists
     let create_options = CreateVolumeOptions {
         name: volume_name.clone(),
@@ -64,14 +68,21 @@ pub async fn ensure_user_volume(
             let mut labels = HashMap::new();
             labels.insert("created_by".to_string(), "telegram-claude-code".to_string());
             labels.insert("volume_key".to_string(), volume_key.to_string());
-            labels.insert("purpose".to_string(), "authentication_persistence".to_string());
+            labels.insert(
+                "purpose".to_string(),
+                "authentication_persistence".to_string(),
+            );
             labels
         },
     };
-    
+
     match docker.create_volume(create_options).await {
         Ok(_) => {
-            log::info!("Created new volume '{}' for key {}", volume_name, volume_key);
+            log::info!(
+                "Created new volume '{}' for key {}",
+                volume_name,
+                volume_key
+            );
             Ok(volume_name)
         }
         Err(e) => {
@@ -93,7 +104,7 @@ pub fn create_auth_mounts(volume_name: &str) -> Vec<Mount> {
         // Mount volume to a base directory, then use symbolic links or init commands
         // to set up the proper structure
         Mount {
-            target: Some("/volume_data".to_string()),
+            target: Some("/data_volume".to_string()),
             source: Some(volume_name.to_string()),
             typ: Some(MountTypeEnum::VOLUME),
             read_only: Some(false),
@@ -110,23 +121,38 @@ async fn init_claude_configuration(
     container_id: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     log::info!("Initializing Claude configuration...");
-    
+
     // Initialize .claude.json with required configuration
+
+    // Create .claude directory and config file using ~ which works for the current user
     exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "echo '{ \"hasCompletedOnboarding\": true }' > /root/.claude.json".to_string()]
-    ).await
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "mkdir -p ~/.claude && echo '{ \"hasCompletedOnboarding\": true }' > ~/.claude.json"
+                .to_string(),
+        ],
+    )
+    .await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
-    
-    // Set Claude configuration for trust dialog
-    exec_command_in_container(
+
+    // Set Claude configuration for trust dialog (required for proper operation)
+    let _ = exec_command_in_container(
         docker,
         container_id,
-        vec!["sh".to_string(), "-c".to_string(), "/opt/entrypoint.sh -c \"nvm use default && claude config set hasTrustDialogAccepted true\"".to_string()]
-    ).await
+        vec![
+            "claude".to_string(),
+            "config".to_string(),
+            "set".to_string(),
+            "hasTrustDialogAccepted".to_string(),
+            "true".to_string(),
+        ],
+    )
+    .await
     .map_err(|e| format!("Failed to set Claude trust dialog configuration: {}", e))?;
-    
+
     log::info!("Claude configuration initialization completed");
     Ok(())
 }
@@ -140,59 +166,106 @@ async fn init_volume_structure(
     // Create the persistent directories in the volume if they don't exist
     let basic_commands = vec![
         // Create volume directories
-        vec!["mkdir".to_string(), "-p".to_string(), "/volume_data/claude".to_string()],
-        vec!["mkdir".to_string(), "-p".to_string(), "/volume_data/gh".to_string()],
-        
-        // Create parent directories for symlinks
-        vec!["mkdir".to_string(), "-p".to_string(), "/root/.config".to_string()],
-        
+        vec![
+            "mkdir".to_string(),
+            "-p".to_string(),
+            "/data_volume/claude".to_string(),
+        ],
+        vec![
+            "mkdir".to_string(),
+            "-p".to_string(),
+            "/data_volume/gh".to_string(),
+        ],
+        // Create parent directories for symlinks using shell expansion
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "mkdir -p ~/.config".to_string(),
+        ],
         // Remove existing directories/files if they exist (they might be empty from container creation)
-        vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()],
-        vec!["rm".to_string(), "-rf".to_string(), "/root/.config/gh".to_string()],
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "rm -rf ~/.claude".to_string(),
+        ],
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "rm -rf ~/.config/gh".to_string(),
+        ],
     ];
-    
+
     for command in basic_commands {
-        exec_command_in_container(docker, container_id, command.clone()).await
+        exec_command_in_container(docker, container_id, command.clone())
+            .await
             .map_err(|e| format!("Failed to initialize volume directory structure: {}", e))?;
     }
-    
+
     // Handle .claude.json file for volume persistence
     // First check if it already exists in the volume (from previous sessions)
     let volume_claude_json_check = exec_command_in_container(
-        docker, 
-        container_id, 
-        vec!["test".to_string(), "-f".to_string(), "/volume_data/claude.json".to_string()]
-    ).await;
-    
+        docker,
+        container_id,
+        vec![
+            "test".to_string(),
+            "-f".to_string(),
+            "/data_volume/claude.json".to_string(),
+        ],
+    )
+    .await;
+
     if volume_claude_json_check.is_err() {
         // File doesn't exist in volume, copy the one we just created to volume
         exec_command_in_container(
             docker,
             container_id,
-            vec!["cp".to_string(), "/root/.claude.json".to_string(), "/volume_data/claude.json".to_string()]
-        ).await
+            vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "cp ~/.claude.json /data_volume/claude.json".to_string(),
+            ],
+        )
+        .await
         .map_err(|e| format!("Failed to copy .claude.json to volume: {}", e))?;
     }
-    
+
     // Remove existing .claude.json if it exists
     let _ = exec_command_in_container(
         docker,
         container_id,
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
-    ).await;
-    
-    // Create symbolic links to volume storage
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "rm -f ~/.claude.json".to_string(),
+        ],
+    )
+    .await;
+
+    // Create symbolic links to volume storage using shell expansion
     let symlink_commands = vec![
-        vec!["ln".to_string(), "-sf".to_string(), "/volume_data/claude".to_string(), "/root/.claude".to_string()],
-        vec!["ln".to_string(), "-sf".to_string(), "/volume_data/gh".to_string(), "/root/.config/gh".to_string()],
-        vec!["ln".to_string(), "-sf".to_string(), "/volume_data/claude.json".to_string(), "/root/.claude.json".to_string()],
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "ln -sf /data_volume/claude ~/.claude".to_string(),
+        ],
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "ln -sf /data_volume/gh ~/.config/gh".to_string(),
+        ],
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "ln -sf /data_volume/claude.json ~/.claude.json".to_string(),
+        ],
     ];
-    
+
     for command in symlink_commands {
-        exec_command_in_container(docker, container_id, command.clone()).await
+        exec_command_in_container(docker, container_id, command.clone())
+            .await
             .map_err(|e| format!("Failed to create authentication symlink: {}", e))?;
     }
-    
+
     log::info!("Volume structure initialization completed");
     Ok(())
 }
@@ -208,6 +281,17 @@ pub async fn exec_command_in_container(
         cmd: Some(command),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
+        user: Some("1000:1000".to_string()), // Use rootless user
+        working_dir: Some(WORKING_DIR.to_string()),
+        env: Some(vec![
+            format!(
+                "PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin:{}/.cargo/bin:{}/node_modules/.\
+                 bin",
+                HOME_DIR, HOME_DIR
+            ),
+            format!("USER={}", USER),
+            format!("HOME={}", HOME_DIR),
+        ]),
         ..Default::default()
     };
 
@@ -258,6 +342,51 @@ pub async fn exec_command_in_container(
     Ok(output.trim().to_string())
 }
 
+/// Pull container image if it doesn't exist locally
+async fn pull_container_image(
+    docker: &Docker,
+    image: &str,
+    force_pull: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Pull Contianer Image: {} force_pull: {}", image, force_pull);
+    if force_pull {
+        panic!("Force pull is not supported in this version of the code");
+    }
+
+    // Check if the image exists locally unless force_pull is true
+    if !force_pull {
+        match docker.inspect_image(image).await {
+            Ok(_) => {
+                log::info!("Image '{}' already exists locally, skipping pull", image);
+                return Ok(());
+            }
+            Err(_) => {
+                log::info!("Image '{}' not found locally, pulling from registry", image);
+            }
+        }
+    } else {
+        log::info!("Force pulling image '{}' from registry", image);
+    }
+
+    let create_image_options = CreateImageOptions {
+        from_image: image,
+        ..Default::default()
+    };
+
+    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
+    while let Some(result) = pull_stream.next().await {
+        match result {
+            Ok(_) => {} // Image pull progress, continue
+            Err(e) => {
+                log::warn!("Image pull warning (might already exist): {}", e);
+                break; // Continue even if pull fails (image might already exist)
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Helper function to wait for container readiness
 pub async fn wait_for_container_ready(
     docker: &Docker,
@@ -305,27 +434,13 @@ pub async fn start_coding_session(
     let _ = clear_coding_session(docker, container_name).await;
 
     // Pull the image if it doesn't exist
-    let create_image_options = CreateImageOptions {
-        from_image: MAIN_CONTAINER_IMAGE,
-        ..Default::default()
-    };
-
-    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
-    while let Some(result) = pull_stream.next().await {
-        match result {
-            Ok(_) => {} // Image pull progress, continue
-            Err(e) => {
-                log::warn!("Image pull warning (might already exist): {}", e);
-                break; // Continue even if pull fails (image might already exist)
-            }
-        }
-    }
+    pull_container_image(docker, MAIN_CONTAINER_IMAGE, container_config.force_pull).await?;
 
     // Conditionally handle persistent volumes based on configuration
     let auth_mounts = if let Some(volume_key) = &container_config.persistent_volume_key {
         // Ensure user volume exists for authentication persistence
         let volume_name = ensure_user_volume(docker, volume_key).await?;
-        
+
         // Create volume mounts for authentication persistence
         create_auth_mounts(&volume_name)
     } else {
@@ -343,7 +458,7 @@ pub async fn start_coding_session(
 
     let config = Config {
         image: Some(MAIN_CONTAINER_IMAGE),
-        working_dir: Some("/workspace"),
+        working_dir: Some(WORKING_DIR),
         tty: Some(true),
         attach_stdin: Some(true),
         attach_stdout: Some(true),
@@ -353,7 +468,11 @@ pub async fn start_coding_session(
         // Run setup script then keep container alive with sleep
         cmd: Some(vec!["-c", "sleep infinity"]),
         host_config: Some(HostConfig {
-            mounts: if auth_mounts.is_empty() { None } else { Some(auth_mounts) },
+            mounts: if auth_mounts.is_empty() {
+                None
+            } else {
+                Some(auth_mounts)
+            },
             ..Default::default()
         }),
         // Set stop timeout to ensure graceful shutdown
@@ -368,12 +487,12 @@ pub async fn start_coding_session(
 
     // Wait for container to be ready
     wait_for_container_ready(docker, &container.id).await?;
-    
+
     // Initialize Claude configuration (always needed regardless of volume usage)
     // This must come BEFORE init_volume_structure because init_volume_structure
     // tries to copy /root/.claude.json which is created by this function
     init_claude_configuration(docker, &container.id).await?;
-    
+
     // Initialize volume structure for authentication persistence only if using persistent volumes
     if container_config.persistent_volume_key.is_some() {
         init_volume_structure(docker, &container.id).await?;
@@ -391,7 +510,16 @@ pub async fn clear_coding_session(
     container_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Try to stop the container first (ignore errors if it's not running)
-    let _ = docker.stop_container(container_name, None).await;
+    let _ = docker
+        .stop_container(
+            container_name,
+            Some(StopContainerOptions {
+                // 3 seconds grace period
+                t: 3,
+                ..Default::default()
+            }),
+        )
+        .await;
 
     // Remove the container
     let remove_options = RemoveContainerOptions {
@@ -415,84 +543,25 @@ pub async fn clear_coding_session(
     }
 }
 
-/// Create a test container using the same configuration as the main application
-/// This is a lightweight version for tests that need a container but not Claude Code installation
-#[allow(dead_code)]
-pub async fn create_test_container(
-    docker: &Docker,
-    container_name: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Remove any existing container with the same name
-    let _ = clear_coding_session(docker, container_name).await;
-
-    // Pull the image if it doesn't exist
-    let create_image_options = CreateImageOptions {
-        from_image: MAIN_CONTAINER_IMAGE,
-        ..Default::default()
-    };
-
-    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
-    while let Some(result) = pull_stream.next().await {
-        match result {
-            Ok(_) => {} // Image pull progress, continue
-            Err(e) => {
-                log::warn!("Image pull warning (might already exist): {}", e);
-                break; // Continue even if pull fails (image might already exist)
-            }
-        }
-    }
-
-    let options = CreateContainerOptions {
-        name: container_name,
-        ..Default::default()
-    };
-
-    // Prepare environment variables for the container
-    let env_vars_owned = prepare_container_env_vars_dynamic();
-    let env_vars: Vec<&str> = env_vars_owned.iter().map(|s| s.as_str()).collect();
-
-    let config = Config {
-        image: Some(MAIN_CONTAINER_IMAGE),
-        working_dir: Some("/workspace"),
-        tty: Some(true),
-        attach_stdin: Some(true),
-        attach_stdout: Some(true),
-        attach_stderr: Some(true),
-        env: Some(env_vars),
-        cmd: Some(vec!["/bin/bash"]),
-        ..Default::default()
-    };
-
-    let container = docker.create_container(Some(options), config).await?;
-    docker
-        .start_container::<String>(&container.id, None)
-        .await?;
-
-    // Wait for container to be ready
-    wait_for_container_ready(docker, &container.id).await?;
-
-    Ok(container.id)
-}
-
 /// Clear all existing session containers on startup
 /// This function finds and removes all containers with names matching the pattern "coding-session-*"
 pub async fn clear_all_session_containers(
     docker: &Docker,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     log::info!("Clearing all existing session containers...");
-    
+
     let mut filters = HashMap::new();
     filters.insert("name".to_string(), vec!["coding-session-".to_string()]);
-    
+
     let list_options = ListContainersOptions {
         all: true,
         filters,
         ..Default::default()
     };
-    
+
     let containers = docker.list_containers(Some(list_options)).await?;
     let mut cleared_count = 0;
-    
+
     for container in containers {
         if let Some(names) = &container.names {
             for name in names {
@@ -514,7 +583,7 @@ pub async fn clear_all_session_containers(
             }
         }
     }
-    
+
     log::info!("Cleared {} existing session containers", cleared_count);
     Ok(cleared_count)
 }

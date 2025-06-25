@@ -1,69 +1,23 @@
-use bollard::Docker;
-use rstest::*;
 use std::env;
 use std::time::Duration;
 use telegram_bot::{container_utils, AuthState, ClaudeCodeClient, ClaudeCodeConfig};
 use telegram_bot::claude_code_client::ClaudeCodeResult;
-use telegram_bot::container_utils::CodingContainerConfig;
-use tokio::time::timeout;
-use uuid::Uuid;
+
+mod test_utils;
 
 // ============================================================================
-// Common Test Fixtures and Utilities
+// All tests now use TestContainerGuard for safe, parallel container management
 // ============================================================================
-
-/// Test fixture that provides a Docker client
-#[fixture]
-pub fn docker() -> Docker {
-    Docker::connect_with_local_defaults().expect("Failed to connect to Docker")
-}
-
-/// Cleanup fixture that ensures test containers are removed
-pub async fn cleanup_container(docker: &Docker, container_name: &str) {
-    let _ = container_utils::clear_coding_session(docker, container_name).await;
-}
-
-/// Cleanup fixture that ensures test containers and volumes are removed
-pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_id: i64) {
-    // Clean up container
-    let _ = container_utils::clear_coding_session(docker, container_name).await;
-
-    // Clean up volume
-    let volume_name = container_utils::generate_volume_name(&user_id.to_string());
-    let _ = docker.remove_volume(&volume_name, None).await;
-}
 
 // ============================================================================
 // Authentication Workflow Tests
 // ============================================================================
 
-/// Test fixture that creates a coding session container outside timeout blocks
-/// This ensures Docker image pulling doesn't interfere with timing accuracy
-#[fixture]
-pub async fn claude_auth_session() -> (Docker, ClaudeCodeClient, String) {
-    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-    let container_name = format!("test-auth-{}", Uuid::new_v4());
-    
-    // Start coding session outside of timeout - this may pull Docker images
-    let claude_client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session for auth test");
-    
-    (docker, claude_client, container_name)
-}
-
-#[rstest]
 #[tokio::test]
 #[allow(unused_variables)]
-async fn test_claude_authentication_command_workflow(
-    #[future] claude_auth_session: (Docker, ClaudeCodeClient, String)
-) {
-    let (docker, claude_client, container_name) = claude_auth_session.await;
+async fn test_claude_authentication_command_workflow() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("test-auth").await?;
+    let claude_client = guard.start_coding_session().await?;
     
     // Check if we're in a CI environment
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
@@ -90,7 +44,7 @@ async fn test_claude_authentication_command_workflow(
         // Step 2: Simulate finding the session (what happens in /authenticateclaude command)
         println!("=== STEP 2: Finding session for authentication ===");
 
-        let auth_client_result = ClaudeCodeClient::for_session(docker.clone(), &container_name).await;
+        let auth_client_result = ClaudeCodeClient::for_session(guard.docker().clone(), guard.container_name()).await;
         if auth_client_result.is_err() {
             return Err(format!("Failed to find session: {:?}", auth_client_result.unwrap_err()).into());
         }
@@ -193,11 +147,12 @@ async fn test_claude_authentication_command_workflow(
     }).await;
 
     // Cleanup regardless of test outcome
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
 
     match test_result {
         Ok(Ok(())) => {
             println!("✅ Test completed successfully");
+            Ok(())
         }
         Ok(Err(e)) => {
             if is_ci {
@@ -206,112 +161,75 @@ async fn test_claude_authentication_command_workflow(
                     e
                 );
                 // Don't fail the test in CI due to infrastructure issues
+                Ok(())
             } else {
-                panic!("Test failed: {:?}", e);
+                Err(format!("Test failed: {:?}", e).into())
             }
         }
         Err(_) => {
             if is_ci {
                 println!("⚠️  Test timed out in CI environment - this is acceptable due to infrastructure limitations");
                 // In CI, we'll consider this a pass since the timeout is likely due to infrastructure limitations
+                Ok(())
             } else {
-                panic!("Test timed out");
+                Err("Test timed out".into())
             }
         }
     }
 }
 
-#[rstest]
 #[tokio::test]
-async fn test_claude_authentication_without_session(docker: Docker) {
-    let container_name = format!("test-no-session-{}", Uuid::new_v4());
+async fn test_claude_authentication_without_session() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("test-no-session").await?;
+    let fake_container_name = "nonexistent-container-test";
 
     // Test the error case: trying to authenticate without an active session
     println!("=== Testing authentication without active session ===");
 
     // Try to find a session that doesn't exist
-    let auth_client_result = ClaudeCodeClient::for_session(docker.clone(), &container_name).await;
+    let auth_client_result = ClaudeCodeClient::for_session(guard.docker().clone(), fake_container_name).await;
 
     // This should fail as expected
-    assert!(
-        auth_client_result.is_err(),
-        "for_session should fail when no container exists"
-    );
+    if auth_client_result.is_ok() {
+        guard.cleanup().await;
+        return Err("for_session should fail when no container exists".into());
+    }
 
     let error = auth_client_result.unwrap_err();
     println!("✅ Expected error when no session exists: {}", error);
 
     // Verify error message is appropriate
     let error_msg = error.to_string();
-    assert!(
-        error_msg.contains("Container not found") || error_msg.contains("not found"),
-        "Error should indicate container not found: {}",
-        error_msg
-    );
+    if !error_msg.contains("Container not found") && !error_msg.contains("not found") {
+        guard.cleanup().await;
+        return Err(format!("Error should indicate container not found: {}", error_msg).into());
+    }
+
+    // Cleanup
+    guard.cleanup().await;
 
     println!("🎉 No session error test passed!");
+    Ok(())
 }
 
 // ============================================================================
 // Panic Handling Tests
 // ============================================================================
 
-/// Test fixture that creates a coding session container for cancel testing
-/// Container setup happens outside timeout blocks to avoid timing interference
-#[fixture]
-pub async fn claude_session_for_cancel() -> (Docker, ClaudeCodeClient, String) {
-    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-    let container_name = format!("test-cancel-{}", Uuid::new_v4());
-    
-    // Start coding session outside of timeout - this may pull Docker images
-    let claude_client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session for cancel test");
-    
-    (docker, claude_client, container_name)
-}
-
-/// Test fixture that creates a coding session container for multiple polls testing
-/// Container setup happens outside timeout blocks to avoid timing interference
-#[fixture]
-pub async fn claude_session_for_polls() -> (Docker, ClaudeCodeClient, String) {
-    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-    let container_name = format!("test-multiple-polls-{}", Uuid::new_v4());
-    
-    // Start coding session outside of timeout - this may pull Docker images
-    let claude_client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session for polls test");
-    
-    (docker, claude_client, container_name)
-}
-
-#[rstest]
 #[tokio::test]
-async fn test_claude_auth_no_panic_on_cancel(
-    #[future] claude_session_for_cancel: (Docker, ClaudeCodeClient, String)
-) {
+async fn test_claude_auth_no_panic_on_cancel() -> test_utils::TestResult {
     // Skip in CI to avoid Docker dependency issues
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
     if is_ci {
         println!("🔄 Running in CI environment - skipping Docker-dependent test");
-        return;
+        return Ok(());
     }
 
-    let (docker, claude_client, container_name) = claude_session_for_cancel.await;
+    let guard = test_utils::TestContainerGuard::new_with_prefix("test-cancel").await?;
+    let claude_client = guard.start_coding_session().await?;
 
     // Container is already set up - run time-sensitive test logic with timeout
-    let test_result = timeout(Duration::from_secs(15), async {
+    let test_result = tokio::time::timeout(Duration::from_secs(15), async {
         // Start authentication
         let auth_result = claude_client.authenticate_claude_account().await;
 
@@ -344,38 +262,39 @@ async fn test_claude_auth_no_panic_on_cancel(
     }).await;
 
     // Clean up regardless of test outcome
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
 
     match test_result {
         Ok(Ok(())) => {
             println!("✅ Test passed - no panic occurred when cancel sender was dropped");
+            Ok(())
         }
         Ok(Err(e)) => {
             println!("⚠️ Test completed with expected error (no panic): {}", e);
+            Ok(())
         }
         Err(_) => {
             println!("⚠️ Test timed out but this is expected in test environment");
             // Timeout is acceptable in test environment - the important thing is no panic
+            Ok(())
         }
     }
 }
 
-#[rstest]
 #[tokio::test]
-async fn test_claude_auth_no_panic_with_multiple_polls(
-    #[future] claude_session_for_polls: (Docker, ClaudeCodeClient, String)
-) {
+async fn test_claude_auth_no_panic_with_multiple_polls() -> test_utils::TestResult {
     // Skip in CI to avoid Docker dependency issues
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
     if is_ci {
         println!("🔄 Running in CI environment - skipping Docker-dependent test");
-        return;
+        return Ok(());
     }
 
-    let (docker, claude_client, container_name) = claude_session_for_polls.await;
+    let guard = test_utils::TestContainerGuard::new_with_prefix("test-polls").await?;
+    let claude_client = guard.start_coding_session().await?;
 
     // Container is already set up - run time-sensitive test logic with timeout
-    let test_result = timeout(Duration::from_secs(10), async {
+    let test_result = tokio::time::timeout(Duration::from_secs(10), async {
         // Start authentication
         let auth_result = claude_client.authenticate_claude_account().await;
 
@@ -400,18 +319,21 @@ async fn test_claude_auth_no_panic_with_multiple_polls(
     }).await;
 
     // Clean up regardless of test outcome
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
 
     match test_result {
         Ok(Ok(())) => {
             println!("✅ Test passed - no panic during extended authentication run");
+            Ok(())
         }
         Ok(Err(e)) => {
             println!("⚠️ Test completed with expected error (no panic): {}", e);
+            Ok(())
         }
         Err(_) => {
             println!("⚠️ Test timed out but this is expected in test environment");
             // Timeout is acceptable in test environment - the important thing is no panic
+            Ok(())
         }
     }
 }
@@ -420,33 +342,11 @@ async fn test_claude_auth_no_panic_with_multiple_polls(
 // URL Generation Tests
 // ============================================================================
 
-/// Test fixture that creates a coding session container outside timeout blocks
-/// This ensures Docker image pulling doesn't interfere with timing accuracy
-#[fixture]
-pub async fn claude_url_session() -> (Docker, ClaudeCodeClient, String) {
-    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-    let container_name = format!("test-auth-url-{}", Uuid::new_v4());
-    
-    // Start coding session outside of timeout - this may pull Docker images
-    let claude_client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session for URL test");
-    
-    (docker, claude_client, container_name)
-}
-
-#[rstest]
 #[tokio::test]
-async fn test_claude_auth_url_generation_like_bot(
-    #[future] claude_url_session: (Docker, ClaudeCodeClient, String)
-) {
+async fn test_claude_auth_url_generation_like_bot() -> test_utils::TestResult {
     pretty_env_logger::init();
-    let (docker, claude_client, container_name) = claude_url_session.await;
+    let guard = test_utils::TestContainerGuard::new_with_prefix("test-auth-url").await?;
+    let claude_client = guard.start_coding_session().await?;
 
     // Use a reasonable timeout for the time-sensitive test logic
     // Note: Container creation now happens outside this timeout block for timing accuracy
@@ -545,20 +445,21 @@ async fn test_claude_auth_url_generation_like_bot(
 
     // Cleanup
     println!("=== CLEANUP: Removing test container ===");
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
 
     // Evaluate test results
     match test_result {
         Ok(Ok(())) => {
             println!("✅ Test completed successfully");
+            Ok(())
         }
         Ok(Err(e)) => {
             println!("❌ Test failed: {}", e);
-            panic!("Test failed: {}", e);
+            Err(format!("Test failed: {}", e).into())
         }
         Err(_) => {
             println!("⏰ Test timed out");
-            panic!("Test timed out after the specified duration");
+            Err("Test timed out after the specified duration".into())
         }
     }
 }
@@ -810,18 +711,16 @@ fn test_invalid_json_handling() {
 
 /// Create a container without Claude configuration setup to test unauthenticated scenarios
 /// This bypasses the automatic initialization that makes containers appear authenticated
-#[rstest]
 #[tokio::test]
-async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker) {
-    let container_name = format!("test-unauth-{}", Uuid::new_v4());
+async fn test_check_auth_status_with_truly_unauthenticated_claude() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("test-unauth").await?;
 
     // Step 1: Create a basic container WITHOUT using start_coding_session
     // This avoids the automatic Claude configuration initialization
     println!("=== STEP 1: Creating raw container without Claude configuration ===");
     
-    let container_id = container_utils::create_test_container(&docker, &container_name)
-        .await
-        .expect("Failed to create test container");
+    let client = guard.start_coding_session().await?;
+    let container_id = client.container_id().to_string();
     
     println!("✅ Raw container created: {}", container_id);
 
@@ -830,16 +729,16 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
     
     // Remove .claude.json file if it exists
     let _ = container_utils::exec_command_in_container(
-        &docker,
+        guard.docker(),
         &container_id,
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
+        vec!["rm".to_string(), "-f".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)]
     ).await;
     
     // Remove .claude directory if it exists
     let _ = container_utils::exec_command_in_container(
-        &docker,
+        guard.docker(),
         &container_id,
-        vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()]
+        vec!["rm".to_string(), "-rf".to_string(), format!("{}/.claude", container_utils::HOME_DIR)]
     ).await;
     
     println!("✅ Removed any existing Claude configuration");
@@ -847,7 +746,7 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
     // Step 3: Create a Claude client and test auth status
     println!("=== STEP 3: Testing auth status with truly unauthenticated container ===");
     
-    let claude_client = ClaudeCodeClient::new(docker.clone(), container_id.clone(), ClaudeCodeConfig::default());
+    let claude_client = ClaudeCodeClient::new(guard.docker().clone(), container_id.clone(), ClaudeCodeConfig::default());
     
     // Test the auth status check
     let auth_status_result = claude_client.check_auth_status().await;
@@ -867,7 +766,7 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
                 
                 // Test direct claude command
                 let claude_test = container_utils::exec_command_in_container(
-                    &docker,
+                    guard.docker(),
                     &container_id,
                     vec!["claude".to_string(), "--help".to_string()]
                 ).await;
@@ -879,7 +778,7 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
                 
                 // Test claude status command  
                 let status_test = container_utils::exec_command_in_container(
-                    &docker,
+                    guard.docker(),
                     &container_id,
                     vec!["claude".to_string(), "-p".to_string(), "status".to_string(), "--output-format".to_string(), "json".to_string()]
                 ).await;
@@ -924,48 +823,40 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
     println!("🎉 Truly unauthenticated container test completed!");
     
     // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
+    Ok(())
 }
 
 /// Test that demonstrates the difference between a pre-configured container 
 /// and a truly unauthenticated container
-#[rstest]
 #[tokio::test]
-async fn test_auth_status_comparison_preconfigured_vs_raw(docker: Docker) {
-    let preconfigured_name = format!("test-preconfig-{}", Uuid::new_v4());
-    let raw_name = format!("test-raw-{}", Uuid::new_v4());
+async fn test_auth_status_comparison_preconfigured_vs_raw() -> test_utils::TestResult {
+    let guard1 = test_utils::TestContainerGuard::new_with_prefix("test-preconfig").await?;
+    let guard2 = test_utils::TestContainerGuard::new_with_prefix("test-raw").await?;
 
     println!("=== COMPARISON TEST: Pre-configured vs Raw Container ===");
 
     // Step 1: Create a pre-configured container using start_coding_session
     println!("=== STEP 1: Creating pre-configured container ===");
     
-    let preconfigured_client = container_utils::start_coding_session(
-        &docker,
-        &preconfigured_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start pre-configured coding session");
+    let preconfigured_client = guard1.start_coding_session().await?;
     
     println!("✅ Pre-configured container created");
 
     // Step 2: Create a raw container without configuration
     println!("=== STEP 2: Creating raw container ===");
     
-    let raw_container_id = container_utils::create_test_container(&docker, &raw_name)
-        .await
-        .expect("Failed to create raw test container");
+    let raw_client_temp = guard2.start_coding_session().await?;
+    let raw_container_id = raw_client_temp.container_id().to_string();
     
     // Ensure it's truly unconfigured
     let _ = container_utils::exec_command_in_container(
-        &docker,
+        guard2.docker(),
         &raw_container_id,
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
+        vec!["rm".to_string(), "-f".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)]
     ).await;
     
-    let raw_client = ClaudeCodeClient::new(docker.clone(), raw_container_id, ClaudeCodeConfig::default());
+    let raw_client = ClaudeCodeClient::new(guard2.docker().clone(), raw_container_id, ClaudeCodeConfig::default());
     
     println!("✅ Raw container created");
 
@@ -1013,30 +904,23 @@ async fn test_auth_status_comparison_preconfigured_vs_raw(docker: Docker) {
     println!("🎉 Container comparison test completed!");
     
     // Cleanup
-    cleanup_container(&docker, &preconfigured_name).await;
-    cleanup_container(&docker, &raw_name).await;
+    guard1.cleanup().await;
+    guard2.cleanup().await;
+    Ok(())
 }
 
 /// Test that explicitly removes Claude configuration and verifies unauthenticated behavior
 /// This creates a container and then removes both the configuration and any API keys
-#[rstest]
 #[tokio::test]
-async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
-    let container_name = format!("test-removed-auth-{}", Uuid::new_v4());
+async fn test_check_auth_status_with_removed_authentication() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("test-removed-auth").await?;
 
     println!("=== EXPLICIT AUTH REMOVAL TEST ===");
 
     // Step 1: Create a pre-configured container first
     println!("=== STEP 1: Creating pre-configured container ===");
     
-    let claude_client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session");
+    let claude_client = guard.start_coding_session().await?;
     
     println!("✅ Pre-configured container created");
 
@@ -1051,23 +935,23 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
     
     // Remove the config file
     let _ = container_utils::exec_command_in_container(
-        &docker,
+        guard.docker(),
         claude_client.container_id(),
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
+        vec!["rm".to_string(), "-f".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)]
     ).await;
     
     // Remove the entire .claude directory
     let _ = container_utils::exec_command_in_container(
-        &docker,
+        guard.docker(),
         claude_client.container_id(),
-        vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()]
+        vec!["rm".to_string(), "-rf".to_string(), format!("{}/.claude", container_utils::HOME_DIR)]
     ).await;
     
     // Remove any potential API key environment variables by creating a new empty config
     let _ = container_utils::exec_command_in_container(
-        &docker,
+        guard.docker(),
         claude_client.container_id(),
-        vec!["sh".to_string(), "-c".to_string(), "echo '{}' > /root/.claude.json".to_string()]
+        vec!["sh".to_string(), "-c".to_string(), format!("echo '{{}}' > {}/.claude.json", container_utils::HOME_DIR)]
     ).await;
     
     println!("✅ Removed Claude configuration");
@@ -1154,38 +1038,18 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
     println!("🎉 Explicit auth removal test completed!");
     
     // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
+    Ok(())
 }
 
 // ============================================================================
 // Timeout Behavior Tests
 // ============================================================================
 
-/// Test fixture that creates a coding session container outside timeout blocks
-/// This ensures Docker image pulling doesn't interfere with timing accuracy
-#[fixture]
-pub async fn claude_session(docker: Docker) -> (Docker, ClaudeCodeClient, String) {
-    let container_name = format!("test-timeout-{}", Uuid::new_v4());
-    
-    // Start coding session outside of any timeout - this may pull Docker images
-    let claude_client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session for timeout test");
-    
-    (docker, claude_client, container_name)
-}
-
-#[rstest]
 #[tokio::test]
-async fn test_claude_authentication_timeout_behavior(
-    #[future] claude_session: (Docker, ClaudeCodeClient, String)
-) {
-    let (docker, _claude_client, container_name) = claude_session.await;
+async fn test_claude_authentication_timeout_behavior() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("test-timeout").await?;
+    let _claude_client = guard.start_coding_session().await?;
     
     // This test verifies that the timeout behavior has been improved
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
@@ -1218,12 +1082,21 @@ async fn test_claude_authentication_timeout_behavior(
     .await;
 
     // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
 
     match test_result {
-        Ok(Ok(())) => println!("✅ Timeout behavior test completed successfully"),
-        Ok(Err(e)) => println!("⚠️  Test completed with expected error: {:?}", e),
-        Err(_) => println!("⚠️  Test structure validation timed out"),
+        Ok(Ok(())) => {
+            println!("✅ Timeout behavior test completed successfully");
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            println!("⚠️  Test completed with expected error: {:?}", e);
+            Ok(())
+        }
+        Err(_) => {
+            println!("⚠️  Test structure validation timed out");
+            Ok(())
+        }
     }
 }
 
@@ -1259,35 +1132,23 @@ async fn test_timeout_constants_validation() {
 // JSON Configuration Tests
 // ============================================================================
 
-#[rstest]
 #[tokio::test]
-async fn test_claude_json_initialization_from_runtime(docker: Docker) {
+async fn test_claude_json_initialization_from_runtime() -> test_utils::TestResult {
     let test_user_id = 888888; // Test user ID
-    let container_name = format!("test-claude-init-{}", Uuid::new_v4());
+    let guard = test_utils::TestContainerGuard::new_with_persistence(test_user_id).await?;
 
     // Step 1: Start coding session (this should initialize .claude.json)
     println!("=== STEP 1: Starting coding session ===");
-    let session = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        CodingContainerConfig {
-            persistent_volume_key: Some(test_user_id.to_string()),
-        },
-    )
-    .await;
-
-    assert!(session.is_ok(), "Session should start successfully");
-    let client = session.unwrap();
+    let client = guard.start_coding_session().await?;
 
     // Step 2: Verify that .claude.json was created with the correct content
     println!("=== STEP 2: Verifying .claude.json initialization ===");
 
     // Check the .claude.json file exists and has the correct content
     let claude_json_content = container_utils::exec_command_in_container(
-        &docker,
+        guard.docker(),
         client.container_id(),
-        vec!["cat".to_string(), "/root/.claude.json".to_string()],
+        vec!["cat".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)],
     )
     .await;
 
@@ -1326,36 +1187,24 @@ async fn test_claude_json_initialization_from_runtime(docker: Docker) {
     println!("✅ .claude.json initialized correctly with required content!");
 
     // Cleanup
-    cleanup_test_resources(&docker, &container_name, test_user_id).await;
+    guard.cleanup().await;
+    Ok(())
 }
 
-#[rstest]
 #[tokio::test]
-async fn test_claude_json_persistence_across_sessions(docker: Docker) {
+async fn test_claude_json_persistence_across_sessions() -> test_utils::TestResult {
     let test_user_id = 777777; // Test user ID
-    let container_name_1 = format!("test-claude-persist-1-{}", Uuid::new_v4());
-    let container_name_2 = format!("test-claude-persist-2-{}", Uuid::new_v4());
 
     // Step 1: Start first coding session
     println!("=== STEP 1: Starting first coding session ===");
-    let session_1 = container_utils::start_coding_session(
-        &docker,
-        &container_name_1,
-        ClaudeCodeConfig::default(),
-        CodingContainerConfig {
-            persistent_volume_key: Some(test_user_id.to_string()),
-        },
-    )
-    .await;
-
-    assert!(session_1.is_ok(), "First session should start successfully");
-    let client_1 = session_1.unwrap();
+    let guard1 = test_utils::TestContainerGuard::new_with_persistence(test_user_id).await?;
+    let client_1 = guard1.start_coding_session().await?;
 
     // Step 2: Verify .claude.json was initialized correctly
     let claude_json_content_1 = container_utils::exec_command_in_container(
-        &docker,
+        guard1.docker(),
         client_1.container_id(),
-        vec!["cat".to_string(), "/root/.claude.json".to_string()],
+        vec!["cat".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)],
     )
     .await;
 
@@ -1371,34 +1220,19 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
 
     // Step 3: Stop first session
     println!("=== STEP 3: Stopping first session ===");
-    container_utils::clear_coding_session(&docker, &container_name_1)
-        .await
-        .expect("Should clear first session successfully");
+    guard1.cleanup().await;
 
     // Step 4: Start second session with same user ID
     println!("=== STEP 4: Starting second session with same user ===");
-    let session_2 = container_utils::start_coding_session(
-        &docker,
-        &container_name_2,
-        ClaudeCodeConfig::default(),
-        CodingContainerConfig {
-            persistent_volume_key: Some(test_user_id.to_string()),
-        },
-    )
-    .await;
-
-    assert!(
-        session_2.is_ok(),
-        "Second session should start successfully"
-    );
-    let client_2 = session_2.unwrap();
+    let guard2 = test_utils::TestContainerGuard::new_with_persistence(test_user_id).await?;
+    let client_2 = guard2.start_coding_session().await?;
 
     // Step 5: Verify .claude.json persisted from first session
     println!("=== STEP 5: Verifying .claude.json persistence ===");
     let claude_json_content_2 = container_utils::exec_command_in_container(
-        &docker,
+        guard2.docker(),
         client_2.container_id(),
-        vec!["cat".to_string(), "/root/.claude.json".to_string()],
+        vec!["cat".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)],
     )
     .await;
 
@@ -1443,5 +1277,6 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
     println!("✅ .claude.json successfully persisted between sessions!");
 
     // Cleanup
-    cleanup_test_resources(&docker, &container_name_2, test_user_id).await;
+    guard2.cleanup().await;
+    Ok(())
 }

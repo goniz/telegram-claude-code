@@ -1,13 +1,66 @@
-# GitHub Repository Clone Functionality Tests
+# Test Suite Documentation
 
-This document describes the comprehensive test suite for GitHub repository clone functionality implemented in the `tests` directory.
+This document describes the comprehensive test suite for the Telegram Claude Code bot, including parallel execution safety and guaranteed cleanup patterns.
 
-## Test Coverage Overview
+## Overview
+
+The test suite is designed to ensure:
+1. **Parallel execution safety** - Tests can run concurrently without interference
+2. **Guaranteed cleanup** - Containers are always cleaned up, even on test failures or panics
+3. **Resource isolation** - Each test gets its own unique container environment
 
 ### Core Test Files
 
-1. **`tests/github_client_tests.rs`** - Main test suite with comprehensive clone functionality testing
-2. **`tests/github_clone_integration_test.rs`** - Integration tests for complex real-world scenarios
+1. **`claude_core_tests.rs`** - Core Claude functionality testing with new safe patterns
+2. **`claude_authentication_tests.rs`** - Authentication workflow testing  
+3. **`github_integration_tests.rs`** - GitHub integration testing with comprehensive clone functionality
+4. **`infrastructure_tests.rs`** - Infrastructure and persistence testing
+5. **`test_utils.rs`** - **NEW**: RAII-based test utilities for guaranteed cleanup
+
+## Test Utilities (NEW)
+
+### TestContainerGuard Pattern
+
+The `TestContainerGuard` provides RAII-based container management with automatic cleanup:
+
+```rust
+use test_utils::TestContainerGuard;
+
+#[tokio::test]
+async fn test_with_auto_cleanup() -> test_utils::TestResult {
+    let guard = TestContainerGuard::new().await?;
+    let client = guard.start_coding_session().await?;
+    
+    // Test logic here - even if assertions fail or early returns happen,
+    // the container will be cleaned up when guard goes out of scope
+    
+    // Optional explicit cleanup (recommended for critical tests)
+    guard.cleanup().await;
+    
+    Ok(())
+}
+```
+
+### Key Benefits
+
+1. **Automatic Cleanup**: Containers are cleaned up even if tests panic or return early
+2. **Unique Naming**: Each container gets a unique name with timestamp + UUID  
+3. **Volume Management**: Persistent volumes are also cleaned up automatically
+4. **Error Safety**: No more container leaks due to assertion failures
+
+### Container Naming Strategy
+
+Container names are generated using:
+```
+{prefix}-{timestamp_ms}-{uuid_simple}
+```
+
+This ensures:
+- Parallel test execution without name conflicts
+- Easy identification of test containers  
+- Automatic uniqueness even with rapid test execution
+
+Example: `test-1704123456789-a1b2c3d4e5f6g7h8`
 
 ## Test Categories
 
