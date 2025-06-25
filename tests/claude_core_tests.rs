@@ -14,6 +14,8 @@ use rstest::*;
 use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig};
 use uuid::Uuid;
 
+mod test_utils;
+
 // =============================================================================
 // SHARED TEST FIXTURES
 // =============================================================================
@@ -35,9 +37,15 @@ pub fn docker_socket() -> Docker {
 #[fixture]
 pub async fn status_test_container(docker: Docker) -> (Docker, String, String) {
     let container_name = format!("test-claude-status-{}", Uuid::new_v4());
-    let container_id = container_utils::create_test_container(&docker, &container_name)
-        .await
-        .expect("Failed to create test container");
+    let client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    .expect("Failed to start coding session");
+    let container_id = client.container_id().to_string();
 
     (docker, container_id, container_name)
 }
@@ -46,9 +54,15 @@ pub async fn status_test_container(docker: Docker) -> (Docker, String, String) {
 #[fixture]
 pub async fn update_test_container(docker: Docker) -> (Docker, String, String) {
     let container_name = format!("test-claude-update-{}", Uuid::new_v4());
-    let container_id = container_utils::create_test_container(&docker, &container_name)
-        .await
-        .expect("Failed to create test container");
+    let client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    .expect("Failed to start coding session");
+    let container_id = client.container_id().to_string();
 
     (docker, container_id, container_name)
 }
@@ -57,9 +71,15 @@ pub async fn update_test_container(docker: Docker) -> (Docker, String, String) {
 #[fixture]
 pub async fn integration_test_container(docker: Docker) -> (Docker, String, String) {
     let container_name = format!("test-claude-integration-{}", Uuid::new_v4());
-    let container_id = container_utils::create_test_container(&docker, &container_name)
-        .await
-        .expect("Failed to create test container");
+    let client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    .expect("Failed to start coding session");
+    let container_id = client.container_id().to_string();
 
     (docker, container_id, container_name)
 }

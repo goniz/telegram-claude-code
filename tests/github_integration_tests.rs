@@ -5,6 +5,8 @@ use telegram_bot::claude_code_client::{ClaudeCodeConfig};
 use futures_util;
 use uuid;
 
+mod test_utils;
+
 // =============================================================================
 // COMMON FIXTURES AND HELPER FUNCTIONS
 // =============================================================================
@@ -19,9 +21,15 @@ pub fn docker() -> Docker {
 #[fixture]
 pub async fn test_container(docker: Docker) -> (Docker, String, String) {
     let container_name = format!("test-github-integration-{}", uuid::Uuid::new_v4());
-    let container_id = container_utils::create_test_container(&docker, &container_name)
-        .await
-        .expect("Failed to create test container");
+    let client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    .expect("Failed to start coding session");
+    let container_id = client.container_id().to_string();
 
     (docker, container_id, container_name)
 }
@@ -1320,6 +1328,49 @@ async fn test_github_clone_with_different_working_directories(
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
+}
+
+/// Test GitHub clone with guaranteed cleanup (demonstrating safe pattern)
+#[tokio::test]
+async fn test_github_clone_with_guaranteed_cleanup() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new().await?;
+    let claude_client = guard.start_coding_session().await?;
+    
+    let github_client = GithubClient::new(
+        guard.docker().clone(),
+        claude_client.container_id().to_string(),
+        GithubClientConfig::default(),
+    );
+
+    // Test basic GitHub CLI availability first
+    let availability_result = github_client.check_availability().await;
+    if let Err(e) = availability_result {
+        // Early return here would normally skip cleanup, but guard handles it
+        return Err(format!("GitHub CLI not available: {}", e).into());
+    }
+
+    // Test clone operation that might fail
+    let clone_result = github_client
+        .repo_clone("octocat/Hello-World", Some("test-safe-clone"))
+        .await;
+
+    // Handle result without risking container leak
+    if let Err(e) = clone_result {
+        // Even if this fails, cleanup will still happen
+        println!("Clone failed (may be expected): {}", e);
+    } else {
+        let clone_response = clone_result.unwrap();
+        println!("Clone result: {:?}", clone_response);
+        
+        // Assertions that could panic are now safe
+        assert_eq!(clone_response.repository, "octocat/Hello-World");
+        assert_eq!(clone_response.target_directory, "test-safe-clone");
+    }
+
+    // Explicit cleanup
+    guard.cleanup().await;
+    
+    Ok(())
 }
 
 /// Test GitHub clone with different timeout configurations

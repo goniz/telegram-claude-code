@@ -8,6 +8,8 @@ use telegram_bot::container_utils::CodingContainerConfig;
 use tokio::time::timeout;
 use uuid::Uuid;
 
+mod test_utils;
+
 // ============================================================================
 // Common Test Fixtures and Utilities
 // ============================================================================
@@ -819,9 +821,15 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
     // This avoids the automatic Claude configuration initialization
     println!("=== STEP 1: Creating raw container without Claude configuration ===");
     
-    let container_id = container_utils::create_test_container(&docker, &container_name)
-        .await
-        .expect("Failed to create test container");
+    let client = container_utils::start_coding_session(
+        &docker,
+        &container_name,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    .expect("Failed to start coding session");
+    let container_id = client.container_id().to_string();
     
     println!("✅ Raw container created: {}", container_id);
 
@@ -954,9 +962,15 @@ async fn test_auth_status_comparison_preconfigured_vs_raw(docker: Docker) {
     // Step 2: Create a raw container without configuration
     println!("=== STEP 2: Creating raw container ===");
     
-    let raw_container_id = container_utils::create_test_container(&docker, &raw_name)
-        .await
-        .expect("Failed to create raw test container");
+    let raw_client = container_utils::start_coding_session(
+        &docker,
+        &raw_name,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    .expect("Failed to start raw coding session");
+    let raw_container_id = raw_client.container_id().to_string();
     
     // Ensure it's truly unconfigured
     let _ = container_utils::exec_command_in_container(

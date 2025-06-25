@@ -499,64 +499,6 @@ pub async fn clear_coding_session(
     }
 }
 
-/// Create a test container using the same configuration as the main application
-/// This is a lightweight version for tests that need a container but not Claude Code installation
-#[allow(dead_code)]
-pub async fn create_test_container(
-    docker: &Docker,
-    container_name: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Remove any existing container with the same name
-    let _ = clear_coding_session(docker, container_name).await;
-
-    // Pull the image if it doesn't exist
-    let create_image_options = CreateImageOptions {
-        from_image: MAIN_CONTAINER_IMAGE,
-        ..Default::default()
-    };
-
-    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
-    while let Some(result) = pull_stream.next().await {
-        match result {
-            Ok(_) => {} // Image pull progress, continue
-            Err(e) => {
-                log::warn!("Image pull warning (might already exist): {}", e);
-                break; // Continue even if pull fails (image might already exist)
-            }
-        }
-    }
-
-    let options = CreateContainerOptions {
-        name: container_name,
-        ..Default::default()
-    };
-
-    // Prepare environment variables for the container
-    let env_vars_owned = prepare_container_env_vars_dynamic();
-    let env_vars: Vec<&str> = env_vars_owned.iter().map(|s| s.as_str()).collect();
-
-    let config = Config {
-        image: Some(MAIN_CONTAINER_IMAGE),
-        working_dir: Some(WORKING_DIR),
-        tty: Some(true),
-        attach_stdin: Some(true),
-        attach_stdout: Some(true),
-        attach_stderr: Some(true),
-        env: Some(env_vars),
-        cmd: Some(vec!["/bin/bash"]),
-        ..Default::default()
-    };
-
-    let container = docker.create_container(Some(options), config).await?;
-    docker
-        .start_container::<String>(&container.id, None)
-        .await?;
-
-    // Wait for container to be ready
-    wait_for_container_ready(docker, &container.id).await?;
-
-    Ok(container.id)
-}
 
 /// Clear all existing session containers on startup
 /// This function finds and removes all containers with names matching the pattern "coding-session-*"
