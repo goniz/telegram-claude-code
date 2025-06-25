@@ -43,14 +43,14 @@ pub state_expiry_seconds: u64,
 impl Default for Config {
 fn default() -> Self {
 Self {
-authorize_url: “https://claude.ai/oauth/authorize”.to_string(),
-token_url: “https://console.anthropic.com/v1/oauth/token”.to_string(),
-client_id: “9d1c250a-e61b-44d9-88ed-5944d1962f5e”.to_string(),
-redirect_uri: “https://console.anthropic.com/oauth/code/callback”.to_string(),
+authorize_url: "https://claude.ai/oauth/authorize”.to_string(),
+token_url: "https://console.anthropic.com/v1/oauth/token”.to_string(),
+client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e”.to_string(),
+redirect_uri: "https://console.anthropic.com/oauth/code/callback”.to_string(),
 scopes: vec![
-“org:create_api_key”.to_string(),
-“user:profile”.to_string(),
-“user:inference”.to_string(),
+"org:create_api_key”.to_string(),
+"user:profile”.to_string(),
+"user:inference”.to_string(),
 ],
 storage_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(”.”)),
 state_expiry_seconds: 600,
@@ -82,19 +82,19 @@ scope: Option<String>,
 /// `json /// { ///   "accessToken": "...", ///   "refreshToken": "...",  ///   "expiresAt": 1234567890000, ///   "scopes": ["user:inference", "user:profile"], ///   "isMax": true /// } /// `
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Credentials {
-/// OAuth access token - serialized as “accessToken” in JSON
-#[serde(rename = “accessToken”)]
+/// OAuth access token - serialized as "accessToken” in JSON
+#[serde(rename = "accessToken”)]
 pub access_token: String,
-/// OAuth refresh token - serialized as “refreshToken” in JSON
-#[serde(rename = “refreshToken”)]  
+/// OAuth refresh token - serialized as "refreshToken” in JSON
+#[serde(rename = "refreshToken”)]  
 pub refresh_token: String,
-/// Token expiration timestamp in milliseconds - serialized as “expiresAt” in JSON
-#[serde(rename = “expiresAt”)]
+/// Token expiration timestamp in milliseconds - serialized as "expiresAt” in JSON
+#[serde(rename = "expiresAt”)]
 pub expires_at: u64,
-/// Granted OAuth scopes - serialized as “scopes” in JSON
+/// Granted OAuth scopes - serialized as "scopes” in JSON
 pub scopes: Vec<String>,
-/// Maximum scope flag - serialized as “isMax” in JSON
-#[serde(rename = “isMax”)]
+/// Maximum scope flag - serialized as "isMax” in JSON
+#[serde(rename = "isMax”)]
 pub is_max: bool,
 }
 
@@ -132,8 +132,8 @@ pub fn expires_in_seconds(&self) -> Option<u64> {
 /// `json /// { ///   "claudeAiOauth": { ///     "accessToken": "...", ///     "refreshToken": "...", ///     "expiresAt": 1234567890000, ///     "scopes": ["user:inference", "user:profile"], ///     "isMax": true ///   } /// } /// `
 #[derive(Debug, Serialize, Deserialize)]
 struct CredentialsFile {
-/// OAuth credentials - serialized as “claudeAiOauth” in JSON to match TypeScript implementation
-#[serde(rename = “claudeAiOauth”)]
+/// OAuth credentials - serialized as "claudeAiOauth” in JSON to match TypeScript implementation
+#[serde(rename = "claudeAiOauth”)]
 claude_ai_oauth: Credentials,
 }
 
@@ -151,21 +151,21 @@ state: String,
 /// Errors that can occur during OAuth flow
 #[derive(Debug, thiserror::Error)]
 pub enum OAuthError {
-#[error(“Invalid or expired OAuth state”)]
+#[error("Invalid or expired OAuth state”)]
 InvalidState,
-#[error(“OAuth state file not found”)]
+#[error("OAuth state file not found”)]
 StateNotFound,
-#[error(“Failed to exchange authorization code: {0}”)]
+#[error("Failed to exchange authorization code: {0}”)]
 TokenExchangeFailed(String),
-#[error(“Invalid authorization code format”)]
+#[error("Invalid authorization code format”)]
 InvalidAuthCode,
-#[error(“HTTP request failed: {0}”)]
+#[error("HTTP request failed: {0}”)]
 HttpError(#[from] reqwest::Error),
-#[error(“JSON serialization error: {0}”)]
+#[error("JSON serialization error: {0}”)]
 JsonError(#[from] serde_json::Error),
-#[error(“File I/O error: {0}”)]
+#[error("File I/O error: {0}”)]
 IoError(#[from] std::io::Error),
-#[error(“System time error: {0}”)]
+#[error("System time error: {0}”)]
 SystemTimeError(#[from] std::time::SystemTimeError),
 }
 
@@ -179,9 +179,9 @@ impl ClaudeAuth {
 /// Create a new OAuth client with the given configuration
 pub fn new(config: Config) -> Self {
 let http_client = Client::builder()
-.user_agent(“Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36”)
+.user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36”)
 .build()
-.expect(“Failed to create HTTP client”);
+.expect("Failed to create HTTP client”);
 
 ```
     Self { config, http_client }
@@ -382,7 +382,7 @@ async fn create_credentials(&self, token_response: TokenResponse) -> Result<Cred
 }
 
 // CLI Implementation
-#[cfg(feature = “cli”)]
+#[cfg(feature = "cli”)]
 mod cli {
 use super::*;
 
@@ -470,7 +470,7 @@ fn print_help(program_name: &str) {
 
 }
 
-#[cfg(feature = “cli”)]
+#[cfg(feature = "cli”)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 cli::run_cli().await
