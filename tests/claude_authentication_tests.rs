@@ -2,7 +2,6 @@ use std::env;
 use std::time::Duration;
 use telegram_bot::{container_utils, AuthState, ClaudeCodeClient, ClaudeCodeConfig};
 use telegram_bot::claude_code_client::ClaudeCodeResult;
-use telegram_bot::container_utils::CodingContainerConfig;
 
 mod test_utils;
 

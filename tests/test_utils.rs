@@ -1,10 +1,13 @@
 //! Test utilities for container management and cleanup
-//! 
+//!
 //! This module provides RAII-based container management that ensures proper cleanup
 //! even when tests panic or return early.
 
 use bollard::Docker;
-use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
+use telegram_bot::{
+    container_utils::{self, CodingContainerConfig},
+    ClaudeCodeClient, ClaudeCodeConfig,
+};
 use uuid::Uuid;
 
 /// Test container guard that automatically cleans up containers when dropped
@@ -15,12 +18,13 @@ pub struct TestContainerGuard {
     user_id: Option<i64>,
 }
 
+#[allow(dead_code)]
 impl TestContainerGuard {
     /// Create a new test container with automatic cleanup
     pub async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let docker = Docker::connect_with_local_defaults()?;
         let container_name = Self::generate_unique_container_name("test");
-        
+
         Ok(Self {
             docker,
             container_name,
@@ -32,7 +36,7 @@ impl TestContainerGuard {
     pub async fn new_with_socket() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let docker = Docker::connect_with_socket_defaults()?;
         let container_name = Self::generate_unique_container_name("test");
-        
+
         Ok(Self {
             docker,
             container_name,
@@ -41,10 +45,12 @@ impl TestContainerGuard {
     }
 
     /// Create a test container with persistence (user ID for volume)
-    pub async fn new_with_persistence(user_id: i64) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn new_with_persistence(
+        user_id: i64,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let docker = Docker::connect_with_local_defaults()?;
         let container_name = Self::generate_unique_container_name("test-persist");
-        
+
         Ok(Self {
             docker,
             container_name,
@@ -53,10 +59,12 @@ impl TestContainerGuard {
     }
 
     /// Create a test container with custom name prefix
-    pub async fn new_with_prefix(prefix: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn new_with_prefix(
+        prefix: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let docker = Docker::connect_with_local_defaults()?;
         let container_name = Self::generate_unique_container_name(prefix);
-        
+
         Ok(Self {
             docker,
             container_name,
@@ -65,13 +73,13 @@ impl TestContainerGuard {
     }
 
     /// Start a coding session in this container
-    pub async fn start_coding_session(&self) -> Result<ClaudeCodeClient, Box<dyn std::error::Error + Send + Sync>> {
-        let config = if let Some(user_id) = self.user_id {
-            container_utils::CodingContainerConfig {
-                persistent_volume_key: Some(user_id.to_string()),
-            }
-        } else {
-            container_utils::CodingContainerConfig::default()
+    pub async fn start_coding_session(
+        &self,
+    ) -> Result<ClaudeCodeClient, Box<dyn std::error::Error + Send + Sync>> {
+        let config = CodingContainerConfig {
+            persistent_volume_key: self.user_id.map(|id| id.to_string()),
+            force_pull: false,
+            ..Default::default()
         };
 
         container_utils::start_coding_session(
@@ -111,8 +119,13 @@ impl TestContainerGuard {
     /// Manual cleanup (called automatically by Drop, but can be called explicitly)
     pub async fn cleanup(&self) {
         // Clean up container
-        if let Err(e) = container_utils::clear_coding_session(&self.docker, &self.container_name).await {
-            eprintln!("Warning: Failed to cleanup container {}: {}", self.container_name, e);
+        if let Err(e) =
+            container_utils::clear_coding_session(&self.docker, &self.container_name).await
+        {
+            eprintln!(
+                "Warning: Failed to cleanup container {}: {}",
+                self.container_name, e
+            );
         }
 
         // Clean up volume if persistent
@@ -145,15 +158,23 @@ impl Drop for TestContainerGuard {
 
             rt.block_on(async {
                 // Clean up container
-                if let Err(e) = container_utils::clear_coding_session(&docker, &container_name).await {
-                    eprintln!("Warning: Failed to cleanup container {} in Drop: {}", container_name, e);
+                if let Err(e) =
+                    container_utils::clear_coding_session(&docker, &container_name).await
+                {
+                    eprintln!(
+                        "Warning: Failed to cleanup container {} in Drop: {}",
+                        container_name, e
+                    );
                 }
 
                 // Clean up volume if persistent
                 if let Some(user_id) = user_id {
                     let volume_name = container_utils::generate_volume_name(&user_id.to_string());
                     if let Err(e) = docker.remove_volume(&volume_name, None).await {
-                        eprintln!("Warning: Failed to cleanup volume {} in Drop: {}", volume_name, e);
+                        eprintln!(
+                            "Warning: Failed to cleanup volume {} in Drop: {}",
+                            volume_name, e
+                        );
                     }
                 }
             });
@@ -181,43 +202,15 @@ macro_rules! test_container {
 /// Result type for test operations
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-/// Helper function to run a test with automatic cleanup
-pub async fn with_test_container<F, Fut, T>(test_fn: F) -> TestResult<T>
-where
-    F: FnOnce(TestContainerGuard) -> Fut,
-    Fut: std::future::Future<Output = TestResult<T>>,
-{
-    let guard = TestContainerGuard::new().await?;
-    let result = test_fn(guard).await;
-    
-    // Explicit cleanup before returning
-    // Note: Drop will also run as backup, but explicit is better
-    // guard.cleanup().await; // Commented out since guard is moved into test_fn
-    
-    result
-}
-
-/// Helper function to run a test with automatic cleanup and custom container setup
-pub async fn with_test_container_custom<F, Fut, T>(
-    setup: impl FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult<TestContainerGuard>>>>,
-    test_fn: F,
-) -> TestResult<T>
-where
-    F: FnOnce(TestContainerGuard) -> Fut,
-    Fut: std::future::Future<Output = TestResult<T>>,
-{
-    let guard = setup().await?;
-    let result = test_fn(guard).await;
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
     async fn test_container_guard_creation() {
-        let guard = TestContainerGuard::new().await.expect("Should create guard");
+        let guard = TestContainerGuard::new()
+            .await
+            .expect("Should create guard");
         assert!(!guard.container_name().is_empty());
         assert!(guard.container_name().starts_with("test-"));
         // Guard will auto-cleanup on drop
@@ -225,9 +218,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_unique_container_names() {
-        let guard1 = TestContainerGuard::new().await.expect("Should create guard1");
-        let guard2 = TestContainerGuard::new().await.expect("Should create guard2");
-        
+        let guard1 = TestContainerGuard::new()
+            .await
+            .expect("Should create guard1");
+        let guard2 = TestContainerGuard::new()
+            .await
+            .expect("Should create guard2");
+
         assert_ne!(guard1.container_name(), guard2.container_name());
         // Guards will auto-cleanup on drop
     }

@@ -67,6 +67,7 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
         ClaudeCodeConfig::default(),
         container_utils::CodingContainerConfig {
             persistent_volume_key: Some(test_user_id.to_string()),
+            force_pull: false,
         },
     )
     .await;
@@ -139,6 +140,7 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
         ClaudeCodeConfig::default(),
         container_utils::CodingContainerConfig {
             persistent_volume_key: Some(test_user_id.to_string()),
+            force_pull: false,
         },
     )
     .await;
@@ -249,6 +251,7 @@ async fn test_volume_isolation_between_users(docker: Docker) {
         ClaudeCodeConfig::default(),
         container_utils::CodingContainerConfig {
             persistent_volume_key: Some(user_id_1.to_string()),
+            force_pull: false,
         },
     )
     .await;
@@ -259,6 +262,7 @@ async fn test_volume_isolation_between_users(docker: Docker) {
         ClaudeCodeConfig::default(),
         container_utils::CodingContainerConfig {
             persistent_volume_key: Some(user_id_2.to_string()),
+            force_pull: false,
         },
     )
     .await;
@@ -409,6 +413,7 @@ async fn test_use_persistant_volume_setting(docker: Docker) {
         ClaudeCodeConfig::default(),
         container_utils::CodingContainerConfig {
             persistent_volume_key: Some(test_user_id.to_string()),
+            force_pull: false,
         },
     )
     .await;
@@ -450,6 +455,7 @@ async fn test_use_persistant_volume_setting(docker: Docker) {
         ClaudeCodeConfig::default(),
         container_utils::CodingContainerConfig {
             persistent_volume_key: None,
+            force_pull: false,
         },
     )
     .await;
