@@ -1,5 +1,6 @@
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+    StopContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::image::CreateImageOptions;
@@ -13,12 +14,15 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct CodingContainerConfig {
     pub persistent_volume_key: Option<String>,
+    pub force_pull: bool,
 }
 
 impl Default for CodingContainerConfig {
     fn default() -> Self {
         Self {
             persistent_volume_key: None,
+            // Default to pulling the image if it doesn't exist
+            force_pull: true,
         }
     }
 }
@@ -338,6 +342,51 @@ pub async fn exec_command_in_container(
     Ok(output.trim().to_string())
 }
 
+/// Pull container image if it doesn't exist locally
+async fn pull_container_image(
+    docker: &Docker,
+    image: &str,
+    force_pull: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Pull Contianer Image: {} force_pull: {}", image, force_pull);
+    if force_pull {
+        panic!("Force pull is not supported in this version of the code");
+    }
+
+    // Check if the image exists locally unless force_pull is true
+    if !force_pull {
+        match docker.inspect_image(image).await {
+            Ok(_) => {
+                log::info!("Image '{}' already exists locally, skipping pull", image);
+                return Ok(());
+            }
+            Err(_) => {
+                log::info!("Image '{}' not found locally, pulling from registry", image);
+            }
+        }
+    } else {
+        log::info!("Force pulling image '{}' from registry", image);
+    }
+
+    let create_image_options = CreateImageOptions {
+        from_image: image,
+        ..Default::default()
+    };
+
+    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
+    while let Some(result) = pull_stream.next().await {
+        match result {
+            Ok(_) => {} // Image pull progress, continue
+            Err(e) => {
+                log::warn!("Image pull warning (might already exist): {}", e);
+                break; // Continue even if pull fails (image might already exist)
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Helper function to wait for container readiness
 pub async fn wait_for_container_ready(
     docker: &Docker,
@@ -385,21 +434,7 @@ pub async fn start_coding_session(
     let _ = clear_coding_session(docker, container_name).await;
 
     // Pull the image if it doesn't exist
-    let create_image_options = CreateImageOptions {
-        from_image: MAIN_CONTAINER_IMAGE,
-        ..Default::default()
-    };
-
-    let mut pull_stream = docker.create_image(Some(create_image_options), None, None);
-    while let Some(result) = pull_stream.next().await {
-        match result {
-            Ok(_) => {} // Image pull progress, continue
-            Err(e) => {
-                log::warn!("Image pull warning (might already exist): {}", e);
-                break; // Continue even if pull fails (image might already exist)
-            }
-        }
-    }
+    pull_container_image(docker, MAIN_CONTAINER_IMAGE, container_config.force_pull).await?;
 
     // Conditionally handle persistent volumes based on configuration
     let auth_mounts = if let Some(volume_key) = &container_config.persistent_volume_key {
@@ -475,7 +510,16 @@ pub async fn clear_coding_session(
     container_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Try to stop the container first (ignore errors if it's not running)
-    let _ = docker.stop_container(container_name, None).await;
+    let _ = docker
+        .stop_container(
+            container_name,
+            Some(StopContainerOptions {
+                // 3 seconds grace period
+                t: 3,
+                ..Default::default()
+            }),
+        )
+        .await;
 
     // Remove the container
     let remove_options = RemoveContainerOptions {
@@ -498,7 +542,6 @@ pub async fn clear_coding_session(
         }
     }
 }
-
 
 /// Clear all existing session containers on startup
 /// This function finds and removes all containers with names matching the pattern "coding-session-*"
