@@ -33,12 +33,7 @@ pub fn generate_volume_name(volume_key: &str) -> String {
 /// Prepare environment variables for container creation with dynamic GH_TOKEN support
 /// Includes common development environment variables and optionally GH_TOKEN
 fn prepare_container_env_vars_dynamic() -> Vec<String> {
-    let mut env_vars = vec![
-        "CODEX_ENV_PYTHON_VERSION=3.12".to_string(),
-        "CODEX_ENV_NODE_VERSION=22".to_string(),
-        "CODEX_ENV_RUST_VERSION=1.87.0".to_string(),
-        "CODEX_ENV_GO_VERSION=1.23.8".to_string(),
-    ];
+    let mut env_vars = vec![];
     
     if let Ok(gh_token) = std::env::var("GH_TOKEN") {
         env_vars.push(format!("GH_TOKEN={}", gh_token));
