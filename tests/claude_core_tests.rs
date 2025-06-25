@@ -9,155 +9,49 @@
 //!
 //! All tests are organized by functionality and use shared fixtures for consistency.
 
-use bollard::Docker;
-use rstest::*;
-use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig};
-use uuid::Uuid;
+use telegram_bot::{ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig};
 
 mod test_utils;
 
 // =============================================================================
-// SHARED TEST FIXTURES
+// All tests now use TestContainerGuard for safe, parallel container management
 // =============================================================================
-
-/// Test fixture that provides a Docker client using local defaults
-#[fixture]
-pub fn docker() -> Docker {
-    Docker::connect_with_local_defaults().expect("Failed to connect to Docker")
-}
-
-/// Test fixture that provides a Docker client using socket defaults
-/// Used for tests that require socket-based connection
-#[fixture]
-pub fn docker_socket() -> Docker {
-    Docker::connect_with_socket_defaults().expect("Failed to connect to Docker")
-}
-
-/// Test fixture that creates a test container for status tests
-#[fixture]
-pub async fn status_test_container(docker: Docker) -> (Docker, String, String) {
-    let container_name = format!("test-claude-status-{}", Uuid::new_v4());
-    let client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session");
-    let container_id = client.container_id().to_string();
-
-    (docker, container_id, container_name)
-}
-
-/// Test fixture that creates a test container for update tests
-#[fixture]
-pub async fn update_test_container(docker: Docker) -> (Docker, String, String) {
-    let container_name = format!("test-claude-update-{}", Uuid::new_v4());
-    let client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session");
-    let container_id = client.container_id().to_string();
-
-    (docker, container_id, container_name)
-}
-
-/// Test fixture that creates a test container for integration tests
-#[fixture]
-pub async fn integration_test_container(docker: Docker) -> (Docker, String, String) {
-    let container_name = format!("test-claude-integration-{}", Uuid::new_v4());
-    let client = container_utils::start_coding_session(
-        &docker,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session");
-    let container_id = client.container_id().to_string();
-
-    (docker, container_id, container_name)
-}
-
-/// Test fixture that creates a coding session container using socket connection
-#[fixture]
-pub async fn socket_test_container(docker_socket: Docker) -> (Docker, String, String) {
-    let container_name = format!("test-claude-update-{}", Uuid::new_v4());
-    let client = container_utils::start_coding_session(
-        &docker_socket,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await
-    .expect("Failed to start coding session");
-
-    (docker_socket, client.container_id().to_string(), container_name)
-}
-
-/// Cleanup fixture that ensures test containers are removed
-pub async fn cleanup_container(docker: &Docker, container_name: &str) {
-    let _ = container_utils::clear_coding_session(docker, container_name).await;
-}
-
-/// Cleanup fixture that ensures test containers and volumes are removed
-pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_id: i64) {
-    // Clean up container
-    let _ = container_utils::clear_coding_session(docker, container_name).await;
-    
-    // Clean up volume
-    let volume_name = container_utils::generate_volume_name(&user_id.to_string());
-    let _ = docker.remove_volume(&volume_name, None).await;
-}
 
 // =============================================================================
 // CLAUDE STATUS TESTS
 // =============================================================================
 
 /// Tests that Claude Code is available and responds correctly to status checks
-#[rstest]
 #[tokio::test]
-async fn test_claude_status_command_with_preinstalled_claude(
-    #[future] status_test_container: (Docker, String, String),
-) {
-    let (docker, container_id, container_name) = status_test_container.await;
-
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_claude_status_command_with_preinstalled_claude() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("claude-status").await?;
+    let client = guard.start_coding_session().await?;
 
     // Claude Code should be pre-installed in the runtime image
     // Simulate the /claudestatus workflow - check availability
     println!("Checking Claude availability...");
     let availability_result = client.check_availability().await;
-    assert!(
-        availability_result.is_ok(),
-        "Claude availability check should succeed: {:?}",
-        availability_result
-    );
+    if let Err(e) = availability_result {
+        return Err(format!("Claude availability check should succeed: {}", e).into());
+    }
 
     let version_output = availability_result.unwrap();
     println!("Claude version output: {}", version_output);
 
     // The output should contain version information or some success indicator
-    assert!(
-        !version_output.is_empty(),
-        "Claude version output should not be empty"
-    );
-    assert!(
-        !version_output.contains("not found"),
-        "Should not contain 'not found' error"
-    );
-    assert!(
-        !version_output.contains("OCI runtime exec failed"),
-        "Should not contain Docker exec error"
-    );
+    if version_output.is_empty() {
+        return Err("Claude version output should not be empty".into());
+    }
+    if version_output.contains("not found") {
+        return Err("Should not contain 'not found' error".into());
+    }
+    if version_output.contains("OCI runtime exec failed") {
+        return Err("Should not contain Docker exec error".into());
+    }
 
     // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
+    Ok(())
 }
 
 // =============================================================================
@@ -165,14 +59,10 @@ async fn test_claude_status_command_with_preinstalled_claude(
 // =============================================================================
 
 /// Tests that the Claude update command executes without panicking
-#[rstest]
 #[tokio::test]
-async fn test_claude_update_command_execution(
-    #[future] update_test_container: (Docker, String, String),
-) {
-    let (docker, container_id, container_name) = update_test_container.await;
-
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_claude_update_command_execution() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("claude-update").await?;
+    let client = guard.start_coding_session().await?;
 
     // Simulate the /update-claude workflow
     println!("Testing Claude update command...");
@@ -185,35 +75,30 @@ async fn test_claude_update_command_execution(
         Ok(output) => {
             println!("Update succeeded with output: {}", output);
             // If successful, output should not be empty
-            assert!(
-                !output.is_empty(),
-                "Update output should not be empty when successful"
-            );
+            if output.is_empty() {
+                return Err("Update output should not be empty when successful".into());
+            }
         }
         Err(e) => {
             println!("Update failed (expected in test environment): {}", e);
             // Error should be a proper error message, not a panic
             let error_msg = e.to_string();
-            assert!(
-                !error_msg.is_empty(),
-                "Error message should not be empty"
-            );
+            if error_msg.is_empty() {
+                return Err("Error message should not be empty".into());
+            }
         }
     }
 
     // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
+    Ok(())
 }
 
 /// Tests that the update_claude method exists and is callable
-#[rstest]
 #[tokio::test]
-async fn test_claude_update_command_method_exists(
-    #[future] update_test_container: (Docker, String, String),
-) {
-    let (docker, container_id, container_name) = update_test_container.await;
-
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_claude_update_command_method_exists() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("claude-method").await?;
+    let client = guard.start_coding_session().await?;
 
     // Test that the method exists and can be called
     // This is a compilation test - if this compiles, the method exists
@@ -224,7 +109,8 @@ async fn test_claude_update_command_method_exists(
     println!("update_claude method exists and is callable");
 
     // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
+    Ok(())
 }
 
 // =============================================================================
@@ -232,14 +118,10 @@ async fn test_claude_update_command_method_exists(
 // =============================================================================
 
 /// Tests that the Claude update command uses the entrypoint script properly
-#[rstest]
 #[tokio::test]
-async fn test_claude_update_uses_entrypoint_script(
-    #[future] socket_test_container: (Docker, String, String),
-) {
-    let (docker, container_id, container_name) = socket_test_container.await;
-
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_claude_update_uses_entrypoint_script() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_socket().await?;
+    let client = guard.start_coding_session().await?;
 
     // Test that the update command uses the proper entrypoint script structure
     // We'll test by executing a command that verifies the entrypoint is being used
@@ -251,45 +133,38 @@ async fn test_claude_update_uses_entrypoint_script(
         ])
         .await;
 
-    // Cleanup
-    cleanup_container(&docker, &container_name).await;
-
-    assert!(
-        test_result.is_ok(),
-        "Entrypoint script test failed: {:?}",
-        test_result
-    );
+    if let Err(e) = test_result {
+        guard.cleanup().await;
+        return Err(format!("Entrypoint script test failed: {}", e).into());
+    }
 
     let output = test_result.unwrap();
-    assert!(
-        output.contains("entrypoint works") || output.contains("Now using node"),
-        "Entrypoint script should work properly: {}",
-        output
-    );
+    if !output.contains("entrypoint works") && !output.contains("Now using node") {
+        guard.cleanup().await;
+        return Err(format!("Entrypoint script should work properly: {}", output).into());
+    }
+
+    // Cleanup
+    guard.cleanup().await;
+    Ok(())
 }
 
 /// Tests that the Claude update command has correct structure and handles errors gracefully
-#[rstest]
 #[tokio::test]
-async fn test_claude_update_command_structure(
-    #[future] socket_test_container: (Docker, String, String)
-) {
-    let (docker, container_id, container_name) = socket_test_container.await;
-
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_claude_update_command_structure() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_socket().await?;
+    let client = guard.start_coding_session().await?;
 
     // Test that we can at least attempt the update command without errors in command structure
     // Note: The actual update might fail due to authentication, but the command structure should be valid
     let update_result = client.update_claude().await;
 
-    // Cleanup
-    cleanup_container(&docker, &container_name).await;
-
     // We expect either success or a controlled failure (not a command structure error)
-    match update_result {
+    let result = match update_result {
         Ok(_) => {
             // Update succeeded
             println!("✅ Claude update command succeeded");
+            Ok(())
         }
         Err(e) => {
             let error_msg = e.to_string().to_lowercase();
@@ -303,15 +178,18 @@ async fn test_claude_update_command_structure(
             
             let is_expected_error = acceptable_errors.iter().any(|pattern| error_msg.contains(pattern));
             
-            assert!(
-                is_expected_error,
-                "Update command failed with unexpected error (suggests command structure issue): {}",
-                e
-            );
+            if !is_expected_error {
+                return Err(format!("Update command failed with unexpected error (suggests command structure issue): {}", e).into());
+            }
             
             println!("✅ Claude update command has correct structure (failed with expected error: {})", e);
+            Ok(())
         }
-    }
+    };
+
+    // Cleanup
+    guard.cleanup().await;
+    result
 }
 
 // =============================================================================
@@ -319,94 +197,83 @@ async fn test_claude_update_command_structure(
 // =============================================================================
 
 /// Tests basic container launch and connectivity
-#[rstest]
 #[tokio::test]
-async fn test_container_launch_and_connectivity(
-    #[future] integration_test_container: (Docker, String, String),
-) {
-    let (docker, container_id, container_name) = integration_test_container.await;
-
-    // Test basic connectivity
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_container_launch_and_connectivity() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("connectivity").await?;
+    let client = guard.start_coding_session().await?;
 
     // Try to execute a simple command to verify container is working
     let result = client
         .exec_basic_command(vec!["echo".to_string(), "Hello World".to_string()])
         .await;
 
-    // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    if let Err(e) = result {
+        guard.cleanup().await;
+        return Err(format!("Container connectivity test failed: {}", e).into());
+    }
 
-    assert!(
-        result.is_ok(),
-        "Container connectivity test failed: {:?}",
-        result
-    );
-    assert_eq!(result.unwrap().trim(), "Hello World");
+    let output = result.unwrap();
+    if output.trim() != "Hello World" {
+        guard.cleanup().await;
+        return Err(format!("Expected 'Hello World', got '{}'", output.trim()).into());
+    }
+
+    // Cleanup
+    guard.cleanup().await;
+    Ok(())
 }
 
 /// Tests that Claude Code is pre-installed and available
-#[rstest]
 #[tokio::test]
-async fn test_claude_code_preinstalled(
-    #[future] integration_test_container: (Docker, String, String)
-) {
-    let (docker, container_id, container_name) = integration_test_container.await;
-
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_claude_code_preinstalled() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("preinstalled").await?;
+    let client = guard.start_coding_session().await?;
 
     // Test that Claude Code is pre-installed and available
     let availability_result = client.check_availability().await;
 
-    // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    if let Err(e) = availability_result {
+        guard.cleanup().await;
+        return Err(format!("Claude Code should be pre-installed and available: {}", e).into());
+    }
 
-    assert!(
-        availability_result.is_ok(),
-        "Claude Code should be pre-installed and available: {:?}",
-        availability_result
-    );
+    // Cleanup
+    guard.cleanup().await;
+    Ok(())
 }
 
 /// Tests Claude availability check functionality
-#[rstest]
 #[tokio::test]
-async fn test_claude_availability_check(
-    #[future] integration_test_container: (Docker, String, String)
-) {
-    let (docker, container_id, container_name) = integration_test_container.await;
-
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_claude_availability_check() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("availability").await?;
+    let client = guard.start_coding_session().await?;
 
     // Claude Code should be pre-installed in the runtime image
     // Test Claude availability check
     let availability_result = client.check_availability().await;
 
-    // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    if let Err(e) = availability_result {
+        guard.cleanup().await;
+        return Err(format!("Claude availability check failed: {}", e).into());
+    }
 
-    assert!(
-        availability_result.is_ok(),
-        "Claude availability check failed: {:?}",
-        availability_result
-    );
     let version_output = availability_result.unwrap();
     // Should contain version information or help text
-    assert!(
-        !version_output.is_empty(),
-        "Version output should not be empty"
-    );
+    if version_output.is_empty() {
+        guard.cleanup().await;
+        return Err("Version output should not be empty".into());
+    }
+
+    // Cleanup
+    guard.cleanup().await;
+    Ok(())
 }
 
 /// Tests Claude CLI basic invocation and binary presence
-#[rstest]
 #[tokio::test]
-async fn test_claude_cli_basic_invocation_and_binary_presence(
-    #[future] integration_test_container: (Docker, String, String),
-) {
-    let (docker, container_id, container_name) = integration_test_container.await;
-
-    let client = ClaudeCodeClient::new(docker.clone(), container_id, ClaudeCodeConfig::default());
+async fn test_claude_cli_basic_invocation_and_binary_presence() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_prefix("cli-binary").await?;
+    let client = guard.start_coding_session().await?;
 
     // Claude Code should be pre-installed in the runtime image
     // Debug: Check what's in the PATH and npm global bin
@@ -469,15 +336,15 @@ async fn test_claude_cli_basic_invocation_and_binary_presence(
         }
     };
 
-    assert!(
-        !claude_path.is_empty(),
-        "claude binary path should not be empty"
-    );
-    assert!(
-        claude_path.contains("claude"),
-        "Path should contain 'claude': {}",
-        claude_path
-    );
+    if claude_path.is_empty() {
+        guard.cleanup().await;
+        return Err("claude binary path should not be empty".into());
+    }
+    
+    if !claude_path.contains("claude") {
+        guard.cleanup().await;
+        return Err(format!("Path should contain 'claude': {}", claude_path).into());
+    }
 
     // Test that the claude binary is executable (only if we found a path)
     if !claude_path.is_empty() {
@@ -488,11 +355,10 @@ async fn test_claude_cli_basic_invocation_and_binary_presence(
                 claude_path.trim().to_string(),
             ])
             .await;
-        assert!(
-            test_exec_result.is_ok(),
-            "claude binary is not executable: {:?}",
-            test_exec_result
-        );
+        if test_exec_result.is_err() {
+            guard.cleanup().await;
+            return Err(format!("claude binary is not executable: {:?}", test_exec_result).into());
+        }
 
         // Test basic Claude CLI invocation (help command)
         let help_result = client
@@ -505,27 +371,29 @@ async fn test_claude_cli_basic_invocation_and_binary_presence(
 
         // The help command might fail if Claude requires authentication, so we just verify it produces some output
         // or fails with an expected authentication error
-        assert!(
-            help_result.is_ok()
-                || help_result
-                    .as_ref()
-                    .err()
-                    .unwrap()
-                    .to_string()
-                    .contains("auth")
-                || help_result
-                    .as_ref()
-                    .err()
-                    .unwrap()
-                    .to_string()
-                    .contains("login"),
-            "Claude CLI basic invocation failed unexpectedly: {:?}",
-            help_result
-        );
+        let is_valid_result = help_result.is_ok()
+            || help_result
+                .as_ref()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("auth")
+            || help_result
+                .as_ref()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("login");
+        
+        if !is_valid_result {
+            guard.cleanup().await;
+            return Err(format!("Claude CLI basic invocation failed unexpectedly: {:?}", help_result).into());
+        }
     }
 
     // Cleanup
-    cleanup_container(&docker, &container_name).await;
+    guard.cleanup().await;
+    Ok(())
 }
 
 // =============================================================================
@@ -533,31 +401,14 @@ async fn test_claude_cli_basic_invocation_and_binary_presence(
 // =============================================================================
 
 /// Tests that Claude configuration persists between container sessions
-#[rstest]
 #[tokio::test]
-async fn test_claude_config_persistence_between_sessions(docker_socket: Docker) {
+async fn test_claude_config_persistence_between_sessions() -> test_utils::TestResult {
     let test_user_id = 888888; // Test user ID for config persistence
-    let container_name_1 = format!("test-config-persistence-1-{}", Uuid::new_v4());
-    let container_name_2 = format!("test-config-persistence-2-{}", Uuid::new_v4());
-    
-    // Clean up any existing volume before starting test
-    let volume_name = container_utils::generate_volume_name(&test_user_id.to_string());
-    let _ = docker_socket.remove_volume(&volume_name, None).await;
     
     // Step 1: Start first coding session with persistent volume
     println!("=== STEP 1: Starting first coding session ===");
-    let first_session = container_utils::start_coding_session(
-        &docker_socket,
-        &container_name_1,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig { 
-            persistent_volume_key: Some(test_user_id.to_string()) 
-        },
-    )
-    .await;
-    
-    assert!(first_session.is_ok(), "First session should start successfully");
-    let first_client = first_session.unwrap();
+    let guard1 = test_utils::TestContainerGuard::new_with_persistence(test_user_id).await?;
+    let first_client = guard1.start_coding_session().await?;
     
     // Step 2: Check initial Claude config value and set a custom value
     println!("=== STEP 2: Setting Claude config for persistence test ===");
@@ -570,7 +421,10 @@ async fn test_claude_config_persistence_between_sessions(docker_socket: Docker) 
         format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
     ]).await;
     
-    assert!(initial_config_result.is_ok(), "Getting initial config should succeed: {:?}", initial_config_result);
+    if let Err(e) = initial_config_result {
+        guard1.cleanup().await;
+        return Err(format!("Getting initial config should succeed: {}", e).into());
+    }
     let initial_value = initial_config_result.unwrap();
     println!("Initial config value: {}", initial_value.trim());
     
@@ -581,7 +435,10 @@ async fn test_claude_config_persistence_between_sessions(docker_socket: Docker) 
         format!("/opt/entrypoint.sh -c \"nvm use default && claude config set {} true\"", config_key),
     ]).await;
     
-    assert!(set_config_result.is_ok(), "Setting config should succeed: {:?}", set_config_result);
+    if let Err(e) = set_config_result {
+        guard1.cleanup().await;
+        return Err(format!("Setting config should succeed: {}", e).into());
+    }
     println!("Config set successfully");
     
     // Step 3: Verify the configuration was set
@@ -592,35 +449,26 @@ async fn test_claude_config_persistence_between_sessions(docker_socket: Docker) 
         format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
     ]).await;
     
-    assert!(verify_config_result.is_ok(), "Getting config should succeed: {:?}", verify_config_result);
+    if let Err(e) = verify_config_result {
+        guard1.cleanup().await;
+        return Err(format!("Getting config should succeed: {}", e).into());
+    }
     let config_output = verify_config_result.unwrap();
     // Extract the last line which contains the actual config value
     let config_value = config_output.lines().last().unwrap_or("").trim();
-    assert!(
-        config_value == "true", 
-        "Config should be set to true. Expected: true, Got: {}", 
-        config_value
-    );
+    if config_value != "true" {
+        guard1.cleanup().await;
+        return Err(format!("Config should be set to true. Expected: true, Got: {}", config_value).into());
+    }
     
     // Step 4: Stop the first session
     println!("=== STEP 4: Stopping first session ===");
-    container_utils::clear_coding_session(&docker_socket, &container_name_1).await
-        .expect("Should clear session successfully");
+    guard1.cleanup().await;
     
     // Step 5: Start second coding session with same user ID (should reuse volume)
     println!("=== STEP 5: Starting second coding session with same user ===");
-    let second_session = container_utils::start_coding_session(
-        &docker_socket,
-        &container_name_2,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig { 
-            persistent_volume_key: Some(test_user_id.to_string()) 
-        },
-    )
-    .await;
-    
-    assert!(second_session.is_ok(), "Second session should start successfully");
-    let second_client = second_session.unwrap();
+    let guard2 = test_utils::TestContainerGuard::new_with_persistence(test_user_id).await?;
+    let second_client = guard2.start_coding_session().await?;
     
     // Step 6: Verify the Claude config persisted in the new session
     println!("=== STEP 6: Verifying Claude config persisted in new session ===");
@@ -630,66 +478,40 @@ async fn test_claude_config_persistence_between_sessions(docker_socket: Docker) 
         format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
     ]).await;
     
-    // Cleanup
-    cleanup_test_resources(&docker_socket, &container_name_2, test_user_id).await;
-    
-    assert!(persisted_config_result.is_ok(), "Getting config in second session should succeed: {:?}", persisted_config_result);
+    if let Err(e) = persisted_config_result {
+        guard2.cleanup().await;
+        return Err(format!("Getting config in second session should succeed: {}", e).into());
+    }
     let persisted_output = persisted_config_result.unwrap();
     // Extract the last line which contains the actual config value
     let persisted_value = persisted_output.lines().last().unwrap_or("").trim();
-    assert!(
-        persisted_value == "true", 
-        "Claude config should persist between sessions. Expected: true, Got: {}", 
-        persisted_value
-    );
+    if persisted_value != "true" {
+        guard2.cleanup().await;
+        return Err(format!("Claude config should persist between sessions. Expected: true, Got: {}", persisted_value).into());
+    }
+    
+    // Cleanup
+    guard2.cleanup().await;
     
     println!("✅ Claude configuration successfully persisted between sessions!");
+    Ok(())
 }
 
 /// Tests that Claude configuration is properly isolated between different users
-#[rstest]
 #[tokio::test]
-async fn test_claude_config_isolation_between_users(docker_socket: Docker) {
+async fn test_claude_config_isolation_between_users() -> test_utils::TestResult {
     let test_user_id_1 = 777777;
     let test_user_id_2 = 777778;
-    let container_name_1 = format!("test-config-isolation-1-{}", Uuid::new_v4());
-    let container_name_2 = format!("test-config-isolation-2-{}", Uuid::new_v4());
-    
-    // Clean up any existing volumes
-    let volume_name_1 = container_utils::generate_volume_name(&test_user_id_1.to_string());
-    let volume_name_2 = container_utils::generate_volume_name(&test_user_id_2.to_string());
-    let _ = docker_socket.remove_volume(&volume_name_1, None).await;
-    let _ = docker_socket.remove_volume(&volume_name_2, None).await;
     
     // Step 1: Start session for user 1
     println!("=== STEP 1: Starting session for user 1 ===");
-    let session_1 = container_utils::start_coding_session(
-        &docker_socket,
-        &container_name_1,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig { 
-            persistent_volume_key: Some(test_user_id_1.to_string()) 
-        },
-    )
-    .await;
-    
-    assert!(session_1.is_ok(), "User 1 session should start successfully");
-    let client_1 = session_1.unwrap();
+    let guard1 = test_utils::TestContainerGuard::new_with_persistence(test_user_id_1).await?;
+    let client_1 = guard1.start_coding_session().await?;
     
     // Step 2: Start session for user 2
     println!("=== STEP 2: Starting session for user 2 ===");
-    let session_2 = container_utils::start_coding_session(
-        &docker_socket,
-        &container_name_2,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig { 
-            persistent_volume_key: Some(test_user_id_2.to_string()) 
-        },
-    )
-    .await;
-    
-    assert!(session_2.is_ok(), "User 2 session should start successfully");
-    let client_2 = session_2.unwrap();
+    let guard2 = test_utils::TestContainerGuard::new_with_persistence(test_user_id_2).await?;
+    let client_2 = guard2.start_coding_session().await?;
     
     // Step 3: Set different Claude config for each user
     println!("=== STEP 3: Setting different Claude config for each user ===");
@@ -707,8 +529,11 @@ async fn test_claude_config_isolation_between_users(docker_socket: Docker) {
         format!("/opt/entrypoint.sh -c \"nvm use default && claude config set {} false\"", config_key),
     ]).await;
     
-    assert!(set_config_1.is_ok(), "Setting config for user 1 should succeed");
-    assert!(set_config_2.is_ok(), "Setting config for user 2 should succeed");
+    if set_config_1.is_err() || set_config_2.is_err() {
+        guard1.cleanup().await;
+        guard2.cleanup().await;
+        return Err("Setting config for both users should succeed".into());
+    }
     
     // Step 4: Verify each user has their own isolated Claude config
     println!("=== STEP 4: Verifying Claude config isolation ===");
@@ -724,12 +549,11 @@ async fn test_claude_config_isolation_between_users(docker_socket: Docker) {
         format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
     ]).await;
     
-    // Cleanup
-    cleanup_test_resources(&docker_socket, &container_name_1, test_user_id_1).await;
-    cleanup_test_resources(&docker_socket, &container_name_2, test_user_id_2).await;
-    
-    assert!(get_config_1.is_ok(), "Getting config for user 1 should succeed");
-    assert!(get_config_2.is_ok(), "Getting config for user 2 should succeed");
+    if get_config_1.is_err() || get_config_2.is_err() {
+        guard1.cleanup().await;
+        guard2.cleanup().await;
+        return Err("Getting config for both users should succeed".into());
+    }
     
     let config_output_1 = get_config_1.unwrap();
     let config_output_2 = get_config_2.unwrap();
@@ -738,18 +562,24 @@ async fn test_claude_config_isolation_between_users(docker_socket: Docker) {
     let config_1 = config_output_1.lines().last().unwrap_or("").trim();
     let config_2 = config_output_2.lines().last().unwrap_or("").trim();
     
-    assert!(
-        config_1 == "true",
-        "User 1 should have config set to true. Expected: true, Got: {}", 
-        config_1
-    );
-    assert!(
-        config_2 == "false",
-        "User 2 should have config set to false. Expected: false, Got: {}", 
-        config_2
-    );
+    if config_1 != "true" {
+        guard1.cleanup().await;
+        guard2.cleanup().await;
+        return Err(format!("User 1 should have config set to true. Expected: true, Got: {}", config_1).into());
+    }
+    
+    if config_2 != "false" {
+        guard1.cleanup().await;
+        guard2.cleanup().await;
+        return Err(format!("User 2 should have config set to false. Expected: false, Got: {}", config_2).into());
+    }
+    
+    // Cleanup
+    guard1.cleanup().await;
+    guard2.cleanup().await;
     
     println!("✅ Claude configuration properly isolated between users!");
+    Ok(())
 }
 
 // =============================================================================
@@ -757,29 +587,10 @@ async fn test_claude_config_isolation_between_users(docker_socket: Docker) {
 // =============================================================================
 
 /// Tests the enhanced start workflow that includes authentication checking
-#[rstest]
 #[tokio::test]
-async fn test_enhanced_start_workflow_with_auth_checks(docker_socket: Docker) {
-    let container_name = format!("test-enhanced-workflow-{}", Uuid::new_v4());
-
-    // Test the enhanced start workflow that includes authentication checking
-
-    // Step 1: Simulate /start command (container creation)
-    println!("=== STEP 1: Starting coding session (enhanced /start workflow) ===");
-    let claude_client_result = container_utils::start_coding_session(
-        &docker_socket,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await;
-
-    assert!(
-        claude_client_result.is_ok(),
-        "start_coding_session should succeed: {:?}",
-        claude_client_result
-    );
-    let claude_client = claude_client_result.unwrap();
+async fn test_enhanced_start_workflow_with_auth_checks() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_socket().await?;
+    let claude_client = guard.start_coding_session().await?;
 
     println!(
         "✅ Coding session started successfully! Container ID: {}",
@@ -795,7 +606,7 @@ async fn test_enhanced_start_workflow_with_auth_checks(docker_socket: Docker) {
 
     // Test GitHub authentication check
     let github_client = GithubClient::new(
-        docker_socket.clone(),
+        guard.docker().clone(),
         claude_client.container_id().to_string(),
         GithubClientConfig::default(),
     );
@@ -814,66 +625,52 @@ async fn test_enhanced_start_workflow_with_auth_checks(docker_socket: Docker) {
     println!("=== STEP 3: Verifying Claude Code availability ===");
     let availability_result = claude_client.check_availability().await;
 
-    assert!(
-        availability_result.is_ok(),
-        "check_availability should succeed after session start: {:?}",
-        availability_result
-    );
+    if let Err(e) = availability_result {
+        guard.cleanup().await;
+        return Err(format!("check_availability should succeed after session start: {}", e).into());
+    }
 
     let version_output = availability_result.unwrap();
     println!("✅ Claude Code is available! Version: {}", version_output);
 
     // Verify the output looks correct
-    assert!(
-        !version_output.is_empty(),
-        "Version output should not be empty"
-    );
-    assert!(
-        !version_output.contains("not found"),
-        "Should not contain 'not found' error"
-    );
-    assert!(
-        !version_output.contains("OCI runtime exec failed"),
-        "Should not contain Docker exec error"
-    );
+    if version_output.is_empty() {
+        guard.cleanup().await;
+        return Err("Version output should not be empty".into());
+    }
+    if version_output.contains("not found") {
+        guard.cleanup().await;
+        return Err("Should not contain 'not found' error".into());
+    }
+    if version_output.contains("OCI runtime exec failed") {
+        guard.cleanup().await;
+        return Err("Should not contain Docker exec error".into());
+    }
 
     // The version should contain some version information
-    assert!(
-        version_output.contains("Claude Code")
-            || version_output.chars().any(|c| c.is_ascii_digit()),
-        "Version output should contain 'Claude Code' or version numbers: {}",
-        version_output
-    );
+    if !version_output.contains("Claude Code") && !version_output.chars().any(|c| c.is_ascii_digit()) {
+        guard.cleanup().await;
+        return Err(format!("Version output should contain 'Claude Code' or version numbers: {}", version_output).into());
+    }
 
     // Cleanup
-    cleanup_container(&docker_socket, &container_name).await;
+    guard.cleanup().await;
 
     println!("🎉 Enhanced workflow test passed!");
+    Ok(())
 }
 
 /// Tests that authentication checks handle errors gracefully
-#[rstest]
 #[tokio::test]
-async fn test_authentication_check_resilience(docker_socket: Docker) {
-    let container_name = format!("test-auth-resilience-{}", Uuid::new_v4());
-
-    // Test that authentication checks handle errors gracefully
+async fn test_authentication_check_resilience() -> test_utils::TestResult {
+    let guard = test_utils::TestContainerGuard::new_with_socket().await?;
+    let claude_client = guard.start_coding_session().await?;
 
     println!("=== Testing authentication check error handling ===");
-    let claude_client_result = container_utils::start_coding_session(
-        &docker_socket,
-        &container_name,
-        ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig::default(),
-    )
-    .await;
-
-    assert!(claude_client_result.is_ok());
-    let claude_client = claude_client_result.unwrap();
 
     // Test GitHub authentication check resilience
     let github_client = GithubClient::new(
-        docker_socket.clone(),
+        guard.docker().clone(),
         claude_client.container_id().to_string(),
         GithubClientConfig::default(),
     );
@@ -890,10 +687,14 @@ async fn test_authentication_check_resilience(docker_socket: Docker) {
     println!("Claude auth result: {:?}", claude_auth_result);
     
     // Claude check should succeed (returning true or false)
-    assert!(claude_auth_result.is_ok(), "Claude auth check should not error");
+    if claude_auth_result.is_err() {
+        guard.cleanup().await;
+        return Err("Claude auth check should not error".into());
+    }
 
     // Cleanup
-    cleanup_container(&docker_socket, &container_name).await;
+    guard.cleanup().await;
 
     println!("✅ Authentication resilience test passed!");
+    Ok(())
 }
