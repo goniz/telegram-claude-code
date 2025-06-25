@@ -20,7 +20,7 @@ jobs:
         toolchain: stable
       
     - name: Test
-      run: cargo test --lib --bins --verbose -- --nocapture
+      run: cargo test --lib --bins -- --nocapture
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -66,7 +66,7 @@ jobs:
     - name: Run integration test - ${{ matrix.test }}
       env:
          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-      run: cargo test --test ${{ matrix.test }} --verbose -- --nocapture
+      run: cargo test --test ${{ matrix.test }} -- --nocapture
       
     - name: Upload claude output file on failure
       if: failure()
