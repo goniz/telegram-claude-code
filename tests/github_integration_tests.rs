@@ -1951,7 +1951,7 @@ async fn test_exec_command_allow_failure_environment_variables(#[future] test_co
     let (output, success) = result.unwrap();
     
     assert!(success, "Command should be marked as successful");
-    assert!(output.contains("HOME=/root"), "HOME should be set to /root: '{}'", output);
+    assert!(output.contains(&format!("HOME={}", container_utils::HOME_DIR)), "HOME should be set to {}: '{}'", container_utils::HOME_DIR, output);
     assert!(output.contains("PATH=") && output.contains("/usr/local/bin"), "PATH should contain standard paths: '{}'", output);
 }
 

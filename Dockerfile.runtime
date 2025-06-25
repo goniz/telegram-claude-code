@@ -1,7 +1,7 @@
 # Runtime Dockerfile for development session containers with rootless Docker-in-Docker
 # This image provides a secure rootless environment with Claude Code and development tools
 
-FROM docker:25.0.3-dind-rootless
+FROM docker:28-dind-rootless
 
 # Build arguments for language versions with defaults
 ARG RUST_VERSION=1.87.0
@@ -29,7 +29,12 @@ RUN apk update && apk add --no-cache \
     musl-dev \
     linux-headers \
     ca-certificates \
+    sudo \
+    coreutils \
     && rm -rf /var/cache/apk/*
+
+# Make the rootless user a sudoer without password prompt
+RUN echo "rootless ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 # Install common Python packages
 RUN pip3 install --break-system-packages \
@@ -44,6 +49,10 @@ RUN wget -q -O go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" 
 
 # Create workspace directory and set permissions
 RUN mkdir -p /workspace && chown 1000:1000 /workspace
+
+# Create data_volume directory and set permissions
+RUN mkdir -p /data_volume && chown 1000:1000 /data_volume
+VOLUME /data_volume
 
 # The rootless image already has a user with UID 1000, just use that existing user
 # No need to create a new user - the base image provides a suitable user with UID 1000

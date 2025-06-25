@@ -832,14 +832,14 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
     let _ = container_utils::exec_command_in_container(
         &docker,
         &container_id,
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
+        vec!["rm".to_string(), "-f".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)]
     ).await;
     
     // Remove .claude directory if it exists
     let _ = container_utils::exec_command_in_container(
         &docker,
         &container_id,
-        vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()]
+        vec!["rm".to_string(), "-rf".to_string(), format!("{}/.claude", container_utils::HOME_DIR)]
     ).await;
     
     println!("✅ Removed any existing Claude configuration");
@@ -962,7 +962,7 @@ async fn test_auth_status_comparison_preconfigured_vs_raw(docker: Docker) {
     let _ = container_utils::exec_command_in_container(
         &docker,
         &raw_container_id,
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
+        vec!["rm".to_string(), "-f".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)]
     ).await;
     
     let raw_client = ClaudeCodeClient::new(docker.clone(), raw_container_id, ClaudeCodeConfig::default());
@@ -1053,21 +1053,21 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
     let _ = container_utils::exec_command_in_container(
         &docker,
         claude_client.container_id(),
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
+        vec!["rm".to_string(), "-f".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)]
     ).await;
     
     // Remove the entire .claude directory
     let _ = container_utils::exec_command_in_container(
         &docker,
         claude_client.container_id(),
-        vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()]
+        vec!["rm".to_string(), "-rf".to_string(), format!("{}/.claude", container_utils::HOME_DIR)]
     ).await;
     
     // Remove any potential API key environment variables by creating a new empty config
     let _ = container_utils::exec_command_in_container(
         &docker,
         claude_client.container_id(),
-        vec!["sh".to_string(), "-c".to_string(), "echo '{}' > /root/.claude.json".to_string()]
+        vec!["sh".to_string(), "-c".to_string(), format!("echo '{{}}' > {}/.claude.json", container_utils::HOME_DIR)]
     ).await;
     
     println!("✅ Removed Claude configuration");
@@ -1277,7 +1277,7 @@ async fn test_claude_json_initialization_from_runtime(docker: Docker) {
     )
     .await;
 
-    assert!(session.is_ok(), "Session should start successfully");
+    assert!(session.is_ok(), "Session should start successfully: {:?}", session.as_ref().err());
     let client = session.unwrap();
 
     // Step 2: Verify that .claude.json was created with the correct content
@@ -1287,7 +1287,7 @@ async fn test_claude_json_initialization_from_runtime(docker: Docker) {
     let claude_json_content = container_utils::exec_command_in_container(
         &docker,
         client.container_id(),
-        vec!["cat".to_string(), "/root/.claude.json".to_string()],
+        vec!["cat".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)],
     )
     .await;
 
@@ -1348,14 +1348,14 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
     )
     .await;
 
-    assert!(session_1.is_ok(), "First session should start successfully");
+    assert!(session_1.is_ok(), "First session should start successfully: {:?}", session_1.as_ref().err());
     let client_1 = session_1.unwrap();
 
     // Step 2: Verify .claude.json was initialized correctly
     let claude_json_content_1 = container_utils::exec_command_in_container(
         &docker,
         client_1.container_id(),
-        vec!["cat".to_string(), "/root/.claude.json".to_string()],
+        vec!["cat".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)],
     )
     .await;
 
@@ -1389,7 +1389,8 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
 
     assert!(
         session_2.is_ok(),
-        "Second session should start successfully"
+        "Second session should start successfully: {:?}",
+        session_2.as_ref().err()
     );
     let client_2 = session_2.unwrap();
 
@@ -1398,7 +1399,7 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
     let claude_json_content_2 = container_utils::exec_command_in_container(
         &docker,
         client_2.container_id(),
-        vec!["cat".to_string(), "/root/.claude.json".to_string()],
+        vec!["cat".to_string(), format!("{}/.claude.json", container_utils::HOME_DIR)],
     )
     .await;
 
