@@ -28,13 +28,9 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::RngCore;
 use reqwest::Client;
@@ -203,6 +199,10 @@ pub enum OAuthError {
     IoError(#[from] std::io::Error),
     #[error("System time error: {0}")]
     SystemTimeError(#[from] std::time::SystemTimeError),
+    #[error("URL parsing error: {0}")]
+    UrlError(#[from] url::ParseError),
+    #[error("General error: {0}")]
+    GeneralError(#[from] anyhow::Error),
 }
 
 /// Main OAuth authentication client
@@ -234,8 +234,7 @@ impl ClaudeAuth {
         
         self.save_oauth_state(&state, &code_verifier).await?;
         
-        let mut url = Url::parse(&self.config.authorize_url)
-            .context("Invalid authorize URL")?;
+        let mut url = Url::parse(&self.config.authorize_url)?;
             
         {
             let mut query = url.query_pairs_mut();
@@ -280,9 +279,10 @@ impl ClaudeAuth {
             .await?;
             
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(OAuthError::TokenExchangeFailed(format!(
-                "{} - {}", response.status(), error_text
+                "{} - {}", status, error_text
             )));
         }
         
