@@ -11,7 +11,7 @@ use teloxide::{
     types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
     utils::command::BotCommands,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot, mpsc};
 use url::Url;
 
 mod commands;
@@ -20,7 +20,6 @@ use telegram_bot::claude_code_client::{
     container_utils, AuthState, ClaudeCodeClient,
     GithubClient, GithubClientConfig,
 };
-use tokio::sync::mpsc;
 
 /// Escape reserved characters for Telegram MarkdownV2 formatting
 /// According to Telegram's MarkdownV2 spec, these characters must be escaped:
@@ -80,6 +79,7 @@ enum Command {
 struct AuthSession {
     container_name: String,
     code_sender: mpsc::UnboundedSender<String>,
+    cancel_sender: oneshot::Sender<()>,
 }
 
 // Global state for tracking authentication sessions

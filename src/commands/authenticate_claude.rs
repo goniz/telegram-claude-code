@@ -58,13 +58,14 @@ pub async fn handle_claude_authentication(
                     let AuthenticationHandle {
                         state_receiver,
                         code_sender,
-                        cancel_sender: _cancel_sender,
+                        cancel_sender, // No longer prefixed with _
                     } = auth_handle;
 
                     // Store authentication session
                     let session = AuthSession {
                         container_name: container_name.clone(),
                         code_sender: code_sender.clone(),
+                        cancel_sender, // Store the cancel_sender
                     };
 
                     {
