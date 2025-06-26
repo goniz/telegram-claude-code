@@ -214,14 +214,12 @@ async fn handle_auth_state_updates(
                     .await;
             }
             AuthState::UrlReady(url) => {
-                let message = format!(
-                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your \
+                let message = "🔐 *Claude Account Authentication*\n\nTo complete authentication with your \
                      Claude account:\n\n*1\\. Click the button below to visit the authentication \
                      URL*\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth \
                      flow in your browser*\n\n*4\\. If prompted for a code, simply paste it here* \
                      \\(no command needed\\)\n\n✨ This will enable full access to your Claude \
-                     subscription features\\!"
-                );
+                     subscription features\\!".to_string();
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
                     "🔗 Open Claude OAuth",
@@ -304,7 +302,7 @@ async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> Res
             // An auth session exists for this chat_id
             if commands::authenticate_claude::is_authentication_code(text) {
                 // Send the code to the authentication process
-                if let Err(_) = code_sender.send(text.to_string()) {
+                if code_sender.send(text.to_string()).is_err() {
                     bot.send_message(
                         msg.chat.id,
                         "❌ Failed to send authentication code\\. The authentication session may \
