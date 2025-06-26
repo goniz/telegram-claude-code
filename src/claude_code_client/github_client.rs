@@ -45,9 +45,12 @@ impl Default for GithubClientConfig {
 
 impl OAuthProcess {
     /// Wait for the OAuth process to complete with a timeout
-    pub async fn wait_for_completion(&self, timeout_secs: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn wait_for_completion(
+        &self,
+        timeout_secs: u64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let timeout_duration = Duration::from_secs(timeout_secs);
-        
+
         timeout(timeout_duration, async {
             // Wait for the exec process to complete
             loop {
@@ -59,7 +62,11 @@ impl OAuthProcess {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await.map_err(|_| -> Box<dyn std::error::Error + Send + Sync> { "OAuth process timed out".into() })?
+        })
+        .await
+        .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
+            "OAuth process timed out".into()
+        })?
     }
 
     /// Terminate the OAuth process gracefully
@@ -187,7 +194,7 @@ impl GithubClient {
             } => {
                 // Stream output and look for OAuth credentials
                 let timeout_duration = Duration::from_secs(30); // Short timeout for credential detection
-                
+
                 let stream_result = timeout(timeout_duration, async {
                     while let Some(Ok(msg)) = output_stream.next().await {
                         match msg {
@@ -214,7 +221,8 @@ impl GithubClient {
                         }
                     }
                     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-                }).await;
+                })
+                .await;
 
                 match stream_result {
                     Ok(_) => {
@@ -224,12 +232,12 @@ impl GithubClient {
                                 authenticated: false, // User needs to complete OAuth flow
                                 username: None,
                                 message: format!("Please visit {} and enter code: {}", url, code),
-                                oauth_url: oauth_url,
-                                device_code: device_code,
+                                oauth_url,
+                                device_code,
                             };
                             Ok((auth_result, oauth_process))
                         } else {
-                            // If we didn't find OAuth credentials in the initial output, 
+                            // If we didn't find OAuth credentials in the initial output,
                             // check if authentication was somehow completed
                             let auth_result = self.check_auth_status().await.unwrap_or_else(|e| {
                                 GithubAuthResult {
@@ -243,9 +251,7 @@ impl GithubClient {
                             Ok((auth_result, oauth_process))
                         }
                     }
-                    Err(_) => {
-                        Err("Timeout waiting for OAuth credentials in command output".into())
-                    }
+                    Err(_) => Err("Timeout waiting for OAuth credentials in command output".into()),
                 }
             }
             bollard::exec::StartExecResults::Detached => {
@@ -262,7 +268,7 @@ impl GithubClient {
     ) -> Result<GithubAuthResult, Box<dyn std::error::Error + Send + Sync>> {
         // Wait for the OAuth process to complete with 60-second timeout
         oauth_process.wait_for_completion(60).await?;
-        
+
         // Check final authentication status
         self.check_auth_status().await
     }
@@ -311,7 +317,10 @@ impl GithubClient {
                         })
                     } else {
                         // Exit code was 0 but output doesn't look like success
-                        log::warn!("Clone command succeeded but output is unexpected: {}", output);
+                        log::warn!(
+                            "Clone command succeeded but output is unexpected: {}",
+                            output
+                        );
                         Ok(GithubCloneResult {
                             success: true,
                             repository: repository.to_string(),
@@ -397,9 +406,7 @@ impl GithubClient {
     }
 
     /// List GitHub repositories for the authenticated user
-    pub async fn repo_list(
-        &self,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn repo_list(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         log::info!("Listing GitHub repositories for authenticated user...");
 
         let list_command = vec!["gh".to_string(), "repo".to_string(), "list".to_string()];
@@ -462,7 +469,7 @@ impl GithubClient {
 
         // Wrap the exec operation in a timeout
         let timeout_duration = Duration::from_secs(self.config.exec_timeout_secs);
-        
+
         let exec_result = timeout(timeout_duration, async {
             match self.docker.start_exec(&exec.id, Some(start_config)).await? {
                 bollard::exec::StartExecResults::Attached {
@@ -486,15 +493,17 @@ impl GithubClient {
                 }
             }
             Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output)
-        }).await;
+        })
+        .await;
 
         match exec_result {
             Ok(result) => result,
             Err(_) => Err(format!(
-                "Command timed out after {} seconds: {}", 
+                "Command timed out after {} seconds: {}",
                 self.config.exec_timeout_secs,
                 command.join(" ")
-            ).into()),
+            )
+            .into()),
         }
     }
 
@@ -519,7 +528,7 @@ impl GithubClient {
                     oauth_url = Some(url.to_string());
                 }
             } else if line.contains("https://github.com/login/oauth") {
-                // Handle other OAuth URLs  
+                // Handle other OAuth URLs
                 if let Some(url_start) = line.find("https://github.com/login/oauth") {
                     let url_part = &line[url_start..];
                     let url = url_part.split_whitespace().next().unwrap_or(url_part);
@@ -539,22 +548,30 @@ impl GithubClient {
     /// Analyze clone failure output to provide better error messages
     fn analyze_clone_failure(&self, output: &str) -> String {
         let output_lower = output.to_lowercase();
-        
+
         // Check for common error patterns and provide helpful messages
         if output_lower.contains("repository not found") || output_lower.contains("404") {
-            format!("Repository not found. Please check the repository name and ensure it exists.")
+            "Repository not found. Please check the repository name and ensure it exists."
+                .to_string()
         } else if output_lower.contains("permission denied") || output_lower.contains("403") {
-            format!("Permission denied. The repository may be private or require authentication.")
-        } else if output_lower.contains("authentication required") || output_lower.contains("auth") {
-            format!("Authentication required. Please authenticate with GitHub first using 'gh auth login'.")
+            "Permission denied. The repository may be private or require authentication."
+                .to_string()
+        } else if output_lower.contains("authentication required") || output_lower.contains("auth")
+        {
+            "Authentication required. Please authenticate with GitHub first using 'gh auth login'."
+                .to_string()
         } else if output_lower.contains("network") || output_lower.contains("connection") {
-            format!("Network error. Please check your internet connection and try again.")
+            "Network error. Please check your internet connection and try again.".to_string()
         } else if output_lower.contains("timeout") {
-            format!("Operation timed out. The repository may be very large or network is slow.")
+            "Operation timed out. The repository may be very large or network is slow.".to_string()
         } else if output_lower.contains("already exists") {
-            format!("Target directory already exists. Please choose a different directory or remove the existing one.")
+            "Target directory already exists. Please choose a different directory or remove the \
+             existing one."
+                .to_string()
         } else if output_lower.contains("not found") && output_lower.contains("gh") {
-            format!("GitHub CLI (gh) not found. Please ensure GitHub CLI is installed and available in PATH.")
+            "GitHub CLI (gh) not found. Please ensure GitHub CLI is installed and available in \
+             PATH."
+                .to_string()
         } else if output_lower.contains("fatal:") {
             // Extract the fatal error message
             if let Some(start) = output_lower.find("fatal:") {
@@ -568,7 +585,8 @@ impl GithubClient {
                 format!("Git fatal error occurred: {}", output.trim())
             }
         } else if output.trim().is_empty() {
-            format!("Clone failed with no error message. This may indicate a configuration issue.")
+            "Clone failed with no error message. This may indicate a configuration issue."
+                .to_string()
         } else {
             // Generic error message with the actual output
             format!("Clone failed: {}", output.trim())
@@ -610,7 +628,7 @@ impl GithubClient {
 
         // Wrap the exec operation in a timeout
         let timeout_duration = Duration::from_secs(self.config.exec_timeout_secs);
-        
+
         let exec_result = timeout(timeout_duration, async {
             match self.docker.start_exec(&exec.id, Some(start_config)).await? {
                 bollard::exec::StartExecResults::Attached {
@@ -642,16 +660,21 @@ impl GithubClient {
                 false // If we can't determine exit code, assume failure
             };
 
-            Ok::<(String, bool), Box<dyn std::error::Error + Send + Sync>>((output.trim().to_string(), success))
-        }).await;
+            Ok::<(String, bool), Box<dyn std::error::Error + Send + Sync>>((
+                output.trim().to_string(),
+                success,
+            ))
+        })
+        .await;
 
         match exec_result {
             Ok(result) => result,
             Err(_) => Err(format!(
-                "Command timed out after {} seconds: {}", 
+                "Command timed out after {} seconds: {}",
                 self.config.exec_timeout_secs,
                 command.join(" ")
-            ).into()),
+            )
+            .into()),
         }
     }
 
@@ -688,7 +711,7 @@ impl GithubClient {
 
         // Wrap the exec operation in a timeout
         let timeout_duration = Duration::from_secs(self.config.exec_timeout_secs);
-        
+
         let exec_result = timeout(timeout_duration, async {
             match self.docker.start_exec(&exec.id, Some(start_config)).await? {
                 bollard::exec::StartExecResults::Attached {
@@ -726,15 +749,17 @@ impl GithubClient {
             }
 
             Ok::<String, Box<dyn std::error::Error + Send + Sync>>(output.trim().to_string())
-        }).await;
+        })
+        .await;
 
         match exec_result {
             Ok(result) => result,
             Err(_) => Err(format!(
-                "Command timed out after {} seconds: {}", 
+                "Command timed out after {} seconds: {}",
                 self.config.exec_timeout_secs,
                 command.join(" ")
-            ).into()),
+            )
+            .into()),
         }
     }
 

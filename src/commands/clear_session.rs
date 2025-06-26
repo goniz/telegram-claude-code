@@ -1,6 +1,6 @@
-use teloxide::{prelude::*, types::ParseMode};
 use crate::{escape_markdown_v2, BotState};
 use telegram_bot::claude_code_client::container_utils;
+use teloxide::{prelude::*, types::ParseMode};
 
 /// Handle the /clearsession command
 pub async fn handle_clear_session(

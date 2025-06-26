@@ -11,14 +11,13 @@ use teloxide::{
     types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
     utils::command::BotCommands,
 };
-use tokio::sync::{Mutex, oneshot, mpsc};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use url::Url;
 
 mod commands;
 
 use telegram_bot::claude_code_client::{
-    container_utils, AuthState, ClaudeCodeClient,
-    GithubClient, GithubClientConfig,
+    container_utils, AuthState, ClaudeCodeClient, GithubClient, GithubClientConfig,
 };
 
 /// Escape reserved characters for Telegram MarkdownV2 formatting
@@ -38,7 +37,6 @@ fn escape_markdown_v2(text: &str) -> String {
 
 /// Format GitHub repository list as MarkdownV2 list with hyperlinks
 /// Parses the output from `gh repo list` and creates a formatted list with clickable links
-
 
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
@@ -187,12 +185,10 @@ async fn main() {
                 handle_text_message(bot, msg, bot_state)
             }),
         )
-        .branch(
-            Update::filter_callback_query().endpoint(move |bot, query| {
-                let bot_state = bot_state_clone3.clone();
-                handle_callback_query(bot, query, bot_state)
-            }),
-        );
+        .branch(Update::filter_callback_query().endpoint(move |bot, query| {
+            let bot_state = bot_state_clone3.clone();
+            handle_callback_query(bot, query, bot_state)
+        }));
 
     Dispatcher::builder(bot, handler)
         .enable_ctrlc_handler()
@@ -218,14 +214,14 @@ async fn handle_auth_state_updates(
                     .await;
             }
             AuthState::UrlReady(url) => {
-                let message = format!(
+                let message =
                     "🔐 *Claude Account Authentication*\n\nTo complete authentication with your \
                      Claude account:\n\n*1\\. Click the button below to visit the authentication \
                      URL*\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth \
                      flow in your browser*\n\n*4\\. If prompted for a code, simply paste it here* \
                      \\(no command needed\\)\n\n✨ This will enable full access to your Claude \
                      subscription features\\!"
-                );
+                        .to_string();
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
                     "🔗 Open Claude OAuth",
@@ -308,7 +304,7 @@ async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> Res
             // An auth session exists for this chat_id
             if commands::authenticate_claude::is_authentication_code(text) {
                 // Send the code to the authentication process
-                if let Err(_) = code_sender.send(text.to_string()) {
+                if code_sender.send(text.to_string()).is_err() {
                     bot.send_message(
                         msg.chat.id,
                         "❌ Failed to send authentication code\\. The authentication session may \
@@ -346,7 +342,6 @@ async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> Res
 }
 
 // Helper function to determine if a text looks like an authentication code
-
 
 // Handler function for bot commands
 async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> ResponseResult<()> {
@@ -413,7 +408,7 @@ async fn handle_callback_query(
         if data.starts_with("clone:") {
             // Extract repository name from callback data
             let repository = data.strip_prefix("clone:").unwrap_or("");
-            
+
             if let Some(message) = &query.message {
                 // Handle both accessible and inaccessible messages
                 let chat_id = message.chat().id;
@@ -422,7 +417,8 @@ async fn handle_callback_query(
                 // Answer the callback query to remove the loading state
                 bot.answer_callback_query(&query.id).await?;
 
-                match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await
+                {
                     Ok(client) => {
                         let github_client = GithubClient::new(
                             bot_state.docker.clone(),
@@ -431,7 +427,8 @@ async fn handle_callback_query(
                         );
 
                         // Perform the clone operation
-                        commands::perform_github_clone(&bot, chat_id, &github_client, repository).await?;
+                        commands::perform_github_clone(&bot, chat_id, &github_client, repository)
+                            .await?;
                     }
                     Err(e) => {
                         bot.send_message(
@@ -458,8 +455,6 @@ async fn handle_callback_query(
 
     Ok(())
 }
-
-
 
 #[cfg(test)]
 mod markdown_v2_tests {
@@ -541,9 +536,3 @@ mod markdown_v2_tests {
         assert_eq!(formatted, "```ABC\\-123```");
     }
 }
-
-
-
-
-
-

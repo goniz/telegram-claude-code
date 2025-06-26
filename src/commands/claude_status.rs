@@ -1,9 +1,14 @@
-use teloxide::{prelude::*, types::ParseMode};
 use crate::{escape_markdown_v2, BotState};
 use telegram_bot::claude_code_client::ClaudeCodeClient;
+use teloxide::{prelude::*, types::ParseMode};
 
 /// Handle the /claudestatus command
-pub async fn handle_claude_status(bot: Bot, msg: Message, bot_state: BotState, chat_id: i64) -> ResponseResult<()> {
+pub async fn handle_claude_status(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    chat_id: i64,
+) -> ResponseResult<()> {
     let container_name = format!("coding-session-{}", chat_id);
 
     match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
@@ -76,6 +81,6 @@ pub async fn handle_claude_status(bot: Bot, msg: Message, bot_state: BotState, c
             .await?;
         }
     }
-    
+
     Ok(())
 }

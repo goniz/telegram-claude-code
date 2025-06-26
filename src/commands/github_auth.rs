@@ -1,10 +1,10 @@
-use teloxide::{
-    prelude::*,
-    types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode}
-};
-use url::Url;
 use crate::{escape_markdown_v2, BotState};
 use telegram_bot::claude_code_client::{ClaudeCodeClient, GithubClient, GithubClientConfig};
+use teloxide::{
+    prelude::*,
+    types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
+};
+use url::Url;
 
 /// Handle the /githubauth command
 pub async fn handle_github_authentication(

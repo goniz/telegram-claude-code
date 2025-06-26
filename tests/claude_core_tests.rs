@@ -11,7 +11,9 @@
 
 use bollard::Docker;
 use rstest::*;
-use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig};
+use telegram_bot::{
+    container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig,
+};
 use uuid::Uuid;
 
 // =============================================================================
@@ -77,7 +79,11 @@ pub async fn socket_test_container(docker_socket: Docker) -> (Docker, String, St
     .await
     .expect("Failed to start coding session");
 
-    (docker_socket, client.container_id().to_string(), container_name)
+    (
+        docker_socket,
+        client.container_id().to_string(),
+        container_name,
+    )
 }
 
 /// Cleanup fixture that ensures test containers are removed
@@ -89,7 +95,7 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_id: i64) {
     // Clean up container
     let _ = container_utils::clear_coding_session(docker, container_name).await;
-    
+
     // Clean up volume
     let volume_name = container_utils::generate_volume_name(&user_id.to_string());
     let _ = docker.remove_volume(&volume_name, None).await;
@@ -157,7 +163,7 @@ async fn test_claude_update_command_execution(
     // Simulate the /update-claude workflow
     println!("Testing Claude update command...");
     let update_result = client.update_claude().await;
-    
+
     // The update command should either succeed or fail gracefully
     // We can't guarantee it will always succeed (network issues, etc.)
     // but we can test that the method exists and executes without panicking
@@ -174,10 +180,7 @@ async fn test_claude_update_command_execution(
             println!("Update failed (expected in test environment): {}", e);
             // Error should be a proper error message, not a panic
             let error_msg = e.to_string();
-            assert!(
-                !error_msg.is_empty(),
-                "Error message should not be empty"
-            );
+            assert!(!error_msg.is_empty(), "Error message should not be empty");
         }
     }
 
@@ -198,7 +201,7 @@ async fn test_claude_update_command_method_exists(
     // Test that the method exists and can be called
     // This is a compilation test - if this compiles, the method exists
     let _result = client.update_claude().await;
-    
+
     // We don't assert on the result because in a test environment
     // the update might fail due to network issues, but the method should exist
     println!("update_claude method exists and is callable");
@@ -252,7 +255,7 @@ async fn test_claude_update_uses_entrypoint_script(
 #[rstest]
 #[tokio::test]
 async fn test_claude_update_command_structure(
-    #[future] socket_test_container: (Docker, String, String)
+    #[future] socket_test_container: (Docker, String, String),
 ) {
     let (docker, container_id, container_name) = socket_test_container.await;
 
@@ -273,23 +276,38 @@ async fn test_claude_update_command_structure(
         }
         Err(e) => {
             let error_msg = e.to_string().to_lowercase();
-            
+
             // These are acceptable error conditions that indicate the command structure is correct
             let acceptable_errors = [
-                "authentication", "auth", "login", "token", "unauthorized",
-                "not authenticated", "api key", "permission denied", "forbidden",
-                "network", "connection", "timeout", "update"
+                "authentication",
+                "auth",
+                "login",
+                "token",
+                "unauthorized",
+                "not authenticated",
+                "api key",
+                "permission denied",
+                "forbidden",
+                "network",
+                "connection",
+                "timeout",
+                "update",
             ];
-            
-            let is_expected_error = acceptable_errors.iter().any(|pattern| error_msg.contains(pattern));
-            
+
+            let is_expected_error = acceptable_errors
+                .iter()
+                .any(|pattern| error_msg.contains(pattern));
+
             assert!(
                 is_expected_error,
                 "Update command failed with unexpected error (suggests command structure issue): {}",
                 e
             );
-            
-            println!("✅ Claude update command has correct structure (failed with expected error: {})", e);
+
+            println!(
+                "✅ Claude update command has correct structure (failed with expected error: {})",
+                e
+            );
         }
     }
 }
@@ -329,7 +347,7 @@ async fn test_container_launch_and_connectivity(
 #[rstest]
 #[tokio::test]
 async fn test_claude_code_preinstalled(
-    #[future] integration_test_container: (Docker, String, String)
+    #[future] integration_test_container: (Docker, String, String),
 ) {
     let (docker, container_id, container_name) = integration_test_container.await;
 
@@ -352,7 +370,7 @@ async fn test_claude_code_preinstalled(
 #[rstest]
 #[tokio::test]
 async fn test_claude_availability_check(
-    #[future] integration_test_container: (Docker, String, String)
+    #[future] integration_test_container: (Docker, String, String),
 ) {
     let (docker, container_id, container_name) = integration_test_container.await;
 
@@ -519,110 +537,153 @@ async fn test_claude_config_persistence_between_sessions(docker_socket: Docker) 
     let test_user_id = 888888; // Test user ID for config persistence
     let container_name_1 = format!("test-config-persistence-1-{}", Uuid::new_v4());
     let container_name_2 = format!("test-config-persistence-2-{}", Uuid::new_v4());
-    
+
     // Clean up any existing volume before starting test
     let volume_name = container_utils::generate_volume_name(&test_user_id.to_string());
     let _ = docker_socket.remove_volume(&volume_name, None).await;
-    
+
     // Step 1: Start first coding session with persistent volume
     println!("=== STEP 1: Starting first coding session ===");
     let first_session = container_utils::start_coding_session(
         &docker_socket,
         &container_name_1,
         ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig { 
-            persistent_volume_key: Some(test_user_id.to_string()) 
+        container_utils::CodingContainerConfig {
+            persistent_volume_key: Some(test_user_id.to_string()),
         },
     )
     .await;
-    
-    assert!(first_session.is_ok(), "First session should start successfully");
+
+    assert!(
+        first_session.is_ok(),
+        "First session should start successfully"
+    );
     let first_client = first_session.unwrap();
-    
+
     // Step 2: Check initial Claude config value and set a custom value
     println!("=== STEP 2: Setting Claude config for persistence test ===");
     let config_key = "hasCompletedProjectOnboarding";
-    
+
     // Check initial value (should be undefined)
-    let initial_config_result = first_client.exec_basic_command(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
-    ]).await;
-    
-    assert!(initial_config_result.is_ok(), "Getting initial config should succeed: {:?}", initial_config_result);
+    let initial_config_result = first_client
+        .exec_basic_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"",
+                config_key
+            ),
+        ])
+        .await;
+
+    assert!(
+        initial_config_result.is_ok(),
+        "Getting initial config should succeed: {:?}",
+        initial_config_result
+    );
     let initial_value = initial_config_result.unwrap();
     println!("Initial config value: {}", initial_value.trim());
-    
+
     // Set the config to true for testing
-    let set_config_result = first_client.exec_basic_command(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        format!("/opt/entrypoint.sh -c \"nvm use default && claude config set {} true\"", config_key),
-    ]).await;
-    
-    assert!(set_config_result.is_ok(), "Setting config should succeed: {:?}", set_config_result);
+    let set_config_result = first_client
+        .exec_basic_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "/opt/entrypoint.sh -c \"nvm use default && claude config set {} true\"",
+                config_key
+            ),
+        ])
+        .await;
+
+    assert!(
+        set_config_result.is_ok(),
+        "Setting config should succeed: {:?}",
+        set_config_result
+    );
     println!("Config set successfully");
-    
+
     // Step 3: Verify the configuration was set
     println!("=== STEP 3: Verifying config was set ===");
-    let verify_config_result = first_client.exec_basic_command(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
-    ]).await;
-    
-    assert!(verify_config_result.is_ok(), "Getting config should succeed: {:?}", verify_config_result);
+    let verify_config_result = first_client
+        .exec_basic_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"",
+                config_key
+            ),
+        ])
+        .await;
+
+    assert!(
+        verify_config_result.is_ok(),
+        "Getting config should succeed: {:?}",
+        verify_config_result
+    );
     let config_output = verify_config_result.unwrap();
     // Extract the last line which contains the actual config value
     let config_value = config_output.lines().last().unwrap_or("").trim();
     assert!(
-        config_value == "true", 
-        "Config should be set to true. Expected: true, Got: {}", 
+        config_value == "true",
+        "Config should be set to true. Expected: true, Got: {}",
         config_value
     );
-    
+
     // Step 4: Stop the first session
     println!("=== STEP 4: Stopping first session ===");
-    container_utils::clear_coding_session(&docker_socket, &container_name_1).await
+    container_utils::clear_coding_session(&docker_socket, &container_name_1)
+        .await
         .expect("Should clear session successfully");
-    
+
     // Step 5: Start second coding session with same user ID (should reuse volume)
     println!("=== STEP 5: Starting second coding session with same user ===");
     let second_session = container_utils::start_coding_session(
         &docker_socket,
         &container_name_2,
         ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig { 
-            persistent_volume_key: Some(test_user_id.to_string()) 
+        container_utils::CodingContainerConfig {
+            persistent_volume_key: Some(test_user_id.to_string()),
         },
     )
     .await;
-    
-    assert!(second_session.is_ok(), "Second session should start successfully");
+
+    assert!(
+        second_session.is_ok(),
+        "Second session should start successfully"
+    );
     let second_client = second_session.unwrap();
-    
+
     // Step 6: Verify the Claude config persisted in the new session
     println!("=== STEP 6: Verifying Claude config persisted in new session ===");
-    let persisted_config_result = second_client.exec_basic_command(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
-    ]).await;
-    
+    let persisted_config_result = second_client
+        .exec_basic_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"",
+                config_key
+            ),
+        ])
+        .await;
+
     // Cleanup
     cleanup_test_resources(&docker_socket, &container_name_2, test_user_id).await;
-    
-    assert!(persisted_config_result.is_ok(), "Getting config in second session should succeed: {:?}", persisted_config_result);
+
+    assert!(
+        persisted_config_result.is_ok(),
+        "Getting config in second session should succeed: {:?}",
+        persisted_config_result
+    );
     let persisted_output = persisted_config_result.unwrap();
     // Extract the last line which contains the actual config value
     let persisted_value = persisted_output.lines().last().unwrap_or("").trim();
     assert!(
-        persisted_value == "true", 
-        "Claude config should persist between sessions. Expected: true, Got: {}", 
+        persisted_value == "true",
+        "Claude config should persist between sessions. Expected: true, Got: {}",
         persisted_value
     );
-    
+
     println!("✅ Claude configuration successfully persisted between sessions!");
 }
 
@@ -634,101 +695,139 @@ async fn test_claude_config_isolation_between_users(docker_socket: Docker) {
     let test_user_id_2 = 777778;
     let container_name_1 = format!("test-config-isolation-1-{}", Uuid::new_v4());
     let container_name_2 = format!("test-config-isolation-2-{}", Uuid::new_v4());
-    
+
     // Clean up any existing volumes
     let volume_name_1 = container_utils::generate_volume_name(&test_user_id_1.to_string());
     let volume_name_2 = container_utils::generate_volume_name(&test_user_id_2.to_string());
     let _ = docker_socket.remove_volume(&volume_name_1, None).await;
     let _ = docker_socket.remove_volume(&volume_name_2, None).await;
-    
+
     // Step 1: Start session for user 1
     println!("=== STEP 1: Starting session for user 1 ===");
     let session_1 = container_utils::start_coding_session(
         &docker_socket,
         &container_name_1,
         ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig { 
-            persistent_volume_key: Some(test_user_id_1.to_string()) 
+        container_utils::CodingContainerConfig {
+            persistent_volume_key: Some(test_user_id_1.to_string()),
         },
     )
     .await;
-    
-    assert!(session_1.is_ok(), "User 1 session should start successfully");
+
+    assert!(
+        session_1.is_ok(),
+        "User 1 session should start successfully"
+    );
     let client_1 = session_1.unwrap();
-    
+
     // Step 2: Start session for user 2
     println!("=== STEP 2: Starting session for user 2 ===");
     let session_2 = container_utils::start_coding_session(
         &docker_socket,
         &container_name_2,
         ClaudeCodeConfig::default(),
-        container_utils::CodingContainerConfig { 
-            persistent_volume_key: Some(test_user_id_2.to_string()) 
+        container_utils::CodingContainerConfig {
+            persistent_volume_key: Some(test_user_id_2.to_string()),
         },
     )
     .await;
-    
-    assert!(session_2.is_ok(), "User 2 session should start successfully");
+
+    assert!(
+        session_2.is_ok(),
+        "User 2 session should start successfully"
+    );
     let client_2 = session_2.unwrap();
-    
+
     // Step 3: Set different Claude config for each user
     println!("=== STEP 3: Setting different Claude config for each user ===");
     let config_key = "hasCompletedProjectOnboarding";
-    
-    let set_config_1 = client_1.exec_basic_command(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        format!("/opt/entrypoint.sh -c \"nvm use default && claude config set {} true\"", config_key),
-    ]).await;
-    
-    let set_config_2 = client_2.exec_basic_command(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        format!("/opt/entrypoint.sh -c \"nvm use default && claude config set {} false\"", config_key),
-    ]).await;
-    
-    assert!(set_config_1.is_ok(), "Setting config for user 1 should succeed");
-    assert!(set_config_2.is_ok(), "Setting config for user 2 should succeed");
-    
+
+    let set_config_1 = client_1
+        .exec_basic_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "/opt/entrypoint.sh -c \"nvm use default && claude config set {} true\"",
+                config_key
+            ),
+        ])
+        .await;
+
+    let set_config_2 = client_2
+        .exec_basic_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "/opt/entrypoint.sh -c \"nvm use default && claude config set {} false\"",
+                config_key
+            ),
+        ])
+        .await;
+
+    assert!(
+        set_config_1.is_ok(),
+        "Setting config for user 1 should succeed"
+    );
+    assert!(
+        set_config_2.is_ok(),
+        "Setting config for user 2 should succeed"
+    );
+
     // Step 4: Verify each user has their own isolated Claude config
     println!("=== STEP 4: Verifying Claude config isolation ===");
-    let get_config_1 = client_1.exec_basic_command(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
-    ]).await;
-    
-    let get_config_2 = client_2.exec_basic_command(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        format!("/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"", config_key),
-    ]).await;
-    
+    let get_config_1 = client_1
+        .exec_basic_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"",
+                config_key
+            ),
+        ])
+        .await;
+
+    let get_config_2 = client_2
+        .exec_basic_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "/opt/entrypoint.sh -c \"nvm use default && claude config get {}\"",
+                config_key
+            ),
+        ])
+        .await;
+
     // Cleanup
     cleanup_test_resources(&docker_socket, &container_name_1, test_user_id_1).await;
     cleanup_test_resources(&docker_socket, &container_name_2, test_user_id_2).await;
-    
-    assert!(get_config_1.is_ok(), "Getting config for user 1 should succeed");
-    assert!(get_config_2.is_ok(), "Getting config for user 2 should succeed");
-    
+
+    assert!(
+        get_config_1.is_ok(),
+        "Getting config for user 1 should succeed"
+    );
+    assert!(
+        get_config_2.is_ok(),
+        "Getting config for user 2 should succeed"
+    );
+
     let config_output_1 = get_config_1.unwrap();
     let config_output_2 = get_config_2.unwrap();
-    
+
     // Extract the last line which contains the actual config value
     let config_1 = config_output_1.lines().last().unwrap_or("").trim();
     let config_2 = config_output_2.lines().last().unwrap_or("").trim();
-    
+
     assert!(
         config_1 == "true",
-        "User 1 should have config set to true. Expected: true, Got: {}", 
+        "User 1 should have config set to true. Expected: true, Got: {}",
         config_1
     );
     assert!(
         config_2 == "false",
-        "User 2 should have config set to false. Expected: false, Got: {}", 
+        "User 2 should have config set to false. Expected: false, Got: {}",
         config_2
     );
-    
+
     println!("✅ Claude configuration properly isolated between users!");
 }
 
@@ -860,17 +959,23 @@ async fn test_authentication_check_resilience(docker_socket: Docker) {
 
     // This should not panic even if GitHub CLI is not set up
     let github_auth_result = github_client.check_auth_status().await;
-    println!("GitHub auth result (expected to be error or not authenticated): {:?}", github_auth_result);
-    
+    println!(
+        "GitHub auth result (expected to be error or not authenticated): {:?}",
+        github_auth_result
+    );
+
     // We don't assert the result because in test environment it might fail,
     // but we verify it doesn't panic and returns a Result
 
     // Test Claude authentication check resilience
     let claude_auth_result = claude_client.check_auth_status().await;
     println!("Claude auth result: {:?}", claude_auth_result);
-    
+
     // Claude check should succeed (returning true or false)
-    assert!(claude_auth_result.is_ok(), "Claude auth check should not error");
+    assert!(
+        claude_auth_result.is_ok(),
+        "Claude auth check should not error"
+    );
 
     // Cleanup
     cleanup_container(&docker_socket, &container_name).await;
