@@ -1,16 +1,16 @@
-use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecOptions};
+use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
+pub mod container_cred_storage;
 pub mod container_utils;
 pub mod github_client;
-pub mod container_cred_storage;
 
+pub use container_cred_storage::ContainerCredStorage;
 #[allow(unused_imports)]
 pub use github_client::{GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult};
-pub use container_cred_storage::ContainerCredStorage;
 
 // Re-export OAuth types from claude_oauth module
 pub use crate::claude_oauth::{ClaudeAuth, Config as OAuthConfig, Credentials, OAuthError};
@@ -101,8 +101,11 @@ pub struct ClaudeCodeClient {
 impl ClaudeCodeClient {
     /// Create a new Claude Code client for the specified container
     pub fn new(docker: Docker, container_id: String, config: ClaudeCodeConfig) -> Self {
-        let storage_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let oauth_client = ClaudeAuth::with_file_storage(config.oauth_config.clone(), storage_dir);
+        let storage = Box::new(ContainerCredStorage::new(
+            docker.clone(),
+            container_id.clone(),
+        ));
+        let oauth_client = ClaudeAuth::with_custom_storage(config.oauth_config.clone(), storage);
 
         Self {
             docker,
@@ -191,9 +194,12 @@ impl ClaudeCodeClient {
         let (cancel_sender, cancel_receiver) = oneshot::channel();
 
         // Clone necessary data for the background task
-        let storage_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let storage = Box::new(ContainerCredStorage::new(
+            self.docker.clone(),
+            self.container_id.clone(),
+        ));
         let oauth_client =
-            ClaudeAuth::with_file_storage(self.config.oauth_config.clone(), storage_dir);
+            ClaudeAuth::with_custom_storage(self.config.oauth_config.clone(), storage);
         let docker = self.docker.clone();
         let container_id = self.container_id.clone();
 
@@ -265,29 +271,29 @@ impl ClaudeCodeClient {
                     let _ = state_sender.send(AuthState::Failed("Authentication cancelled".to_string()));
                     return Ok(());
                 }
-                
+
                 // Handle auth code input
                 code = code_receiver.recv() => {
                     if let Some(auth_code) = code {
                         log::info!("Received authorization code from user");
-                        
+
                         // Exchange authorization code for tokens
                         match oauth_client.exchange_code(&auth_code).await {
                             Ok(credentials) => {
                                 log::info!("Successfully obtained OAuth credentials");
-                                
+
                                 // Save credentials to file
                                 if let Err(e) = oauth_client.save_credentials(&credentials).await {
                                     log::warn!("Failed to save credentials: {}", e);
                                 }
-                                
+
                                 // Test credentials with Claude Code
                                 let client = ClaudeCodeClient::new(
                                     docker.clone(),
                                     container_id.clone(),
                                     ClaudeCodeConfig::default(),
                                 );
-                                
+
                                 match client.setup_oauth_credentials(&credentials).await {
                                     Ok(_) => {
                                         log::info!("Successfully configured Claude Code with OAuth credentials");
@@ -381,45 +387,10 @@ impl ClaudeCodeClient {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         log::debug!("Setting up OAuth credentials in container");
 
-        // Write credentials to file in the container
-        let credentials_json = serde_json::to_string_pretty(&serde_json::json!({
-            "claudeAiOauth": credentials
-        }))?;
+        // Save credentials using the OAuth client (which now uses container storage)
+        self.oauth_client.save_credentials(credentials).await?;
 
-        // Use a temporary file approach to write credentials
-        let temp_path = format!("/tmp/claude_credentials_{}.json", self.container_id);
-        std::fs::write(&temp_path, &credentials_json)?;
-
-        // Copy credentials file into container
-        let copy_command = format!(
-            "docker cp {} {}:/root/.claude/credentials.json",
-            temp_path, self.container_id
-        );
-
-        let copy_result = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&copy_command)
-            .output()
-            .await?;
-
-        // Clean up temporary file
-        let _ = std::fs::remove_file(&temp_path);
-
-        if !copy_result.status.success() {
-            let error = String::from_utf8_lossy(&copy_result.stderr);
-            return Err(format!("Failed to copy credentials to container: {}", error).into());
-        }
-
-        // Set proper permissions
-        let chmod_command = vec![
-            "chmod".to_string(),
-            "600".to_string(),
-            "/root/.claude/credentials.json".to_string(),
-        ];
-
-        self.exec_command(chmod_command).await?;
-
-        log::info!("Successfully setup OAuth credentials in container");
+        log::info!("Successfully setup OAuth credentials in container using container storage");
         Ok(())
     }
 
@@ -494,7 +465,7 @@ impl ClaudeCodeClient {
                         } else {
                             " (expired)".to_string()
                         };
-                        
+
                         Ok(format!(
                             "✅ Claude Code is authenticated and ready to use{}\nScopes: {}",
                             expires_info,
