@@ -102,7 +102,7 @@ pub async fn handle_auth_state_updates(
     }
 }
 
-/// Handle regular text messages (for authentication codes)
+/// Handle regular text messages (for authentication codes and Claude conversations)
 pub async fn handle_text_message(
     bot: Bot,
     msg: Message,
@@ -110,8 +110,8 @@ pub async fn handle_text_message(
 ) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
 
-    if let Some(text) = msg.text() {
-        // Check if there's an active authentication session and get the code_sender if it exists
+    if let Some(text) = msg.text().map(|t| t.to_string()) {
+        // Priority 1: Check if there's an active authentication session
         let code_sender_clone = {
             let sessions = bot_state.auth_sessions.lock().await;
             sessions.get(&chat_id).map(|s| s.code_sender.clone())
@@ -119,9 +119,9 @@ pub async fn handle_text_message(
 
         if let Some(code_sender) = code_sender_clone {
             // An auth session exists for this chat_id
-            if commands::authenticate_claude::is_authentication_code(text) {
+            if commands::authenticate_claude::is_authentication_code(&text) {
                 // Send the code to the authentication process
-                if code_sender.send(text.to_string()).is_err() {
+                if code_sender.send(text.clone()).is_err() {
                     bot.send_message(
                         msg.chat.id,
                         "❌ Failed to send authentication code\\. The authentication session may \
@@ -150,9 +150,59 @@ pub async fn handle_text_message(
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
             }
+            return Ok(());
         }
-        // If code_sender_clone was None, it means no auth session is active for this user.
-        // In this case, we don't respond to regular text messages, so no 'else' block needed here.
+
+        // Priority 2: Check if there's an active Claude conversation session
+        let claude_session_active = {
+            let sessions = bot_state.claude_sessions.lock().await;
+            sessions.get(&chat_id).map(|s| s.is_active).unwrap_or(false)
+        };
+
+        if claude_session_active {
+            // Forward message to Claude
+            handle_claude_message(bot, msg, bot_state, &text).await?;
+            return Ok(());
+        }
+
+        // Priority 3: No active sessions - do nothing (default behavior)
+    }
+
+    Ok(())
+}
+
+/// Handle messages sent to Claude conversations
+async fn handle_claude_message(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    text: &str,
+) -> ResponseResult<()> {
+    let chat_id = msg.chat.id.0;
+
+    // Get the current conversation ID if any
+    let conversation_id = {
+        let sessions = bot_state.claude_sessions.lock().await;
+        sessions.get(&chat_id).and_then(|s| s.conversation_id.clone())
+    };
+
+    // Execute Claude command
+    match commands::execute_claude_command(bot.clone(), msg.chat.id, bot_state.clone(), text, conversation_id).await {
+        Ok(()) => {
+            // Command executed successfully, output already processed and sent
+            // TODO: Extract conversation ID from output and update session state
+        }
+        Err(e) => {
+            bot.send_message(
+                msg.chat.id,
+                format!(
+                    "❌ Claude command failed: {}",
+                    escape_markdown_v2(&e.to_string())
+                ),
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
+        }
     }
 
     Ok(())

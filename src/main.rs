@@ -12,7 +12,7 @@ mod commands;
 
 use bot::{
     escape_markdown_v2, handle_auth_state_updates, handle_callback_query, handle_text_message,
-    AuthSession, AuthSessions, BotState,
+    AuthSession, AuthSessions, BotState, ClaudeSessions,
 };
 use telegram_bot::claude_code_client::container_utils;
 
@@ -47,6 +47,8 @@ enum Command {
     DebugClaudeLogin,
     #[command(description = "Update Claude CLI to latest version")]
     UpdateClaude,
+    #[command(description = "Start a new Claude conversation")]
+    Claude,
 }
 
 /// Find Claude authentication log file (fixed filename)
@@ -120,9 +122,11 @@ async fn main() {
 
     // Initialize bot state
     let auth_sessions: AuthSessions = Arc::new(Mutex::new(HashMap::new()));
+    let claude_sessions: ClaudeSessions = Arc::new(Mutex::new(HashMap::new()));
     let bot_state = BotState {
         docker: docker.clone(),
         auth_sessions: auth_sessions.clone(),
+        claude_sessions: claude_sessions.clone(),
     };
 
     // Set up message handler that handles both commands and regular text
@@ -206,6 +210,9 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         }
         Command::UpdateClaude => {
             commands::handle_update_claude(bot, msg, bot_state, chat_id).await?;
+        }
+        Command::Claude => {
+            commands::handle_claude(bot, msg, bot_state, chat_id).await?;
         }
     }
 
