@@ -99,6 +99,7 @@ pub fn build_claude_command_args(prompt: &str, conversation_id: Option<&str>) ->
     let mut cmd_args = vec![
         "claude".to_string(),
         "--print".to_string(),
+        "--verbose".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
     ];
@@ -124,6 +125,7 @@ mod tests {
         let expected = vec![
             "claude".to_string(),
             "--print".to_string(),
+            "--verbose".to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
             prompt.to_string(),
@@ -141,6 +143,7 @@ mod tests {
         let expected = vec![
             "claude".to_string(),
             "--print".to_string(),
+            "--verbose".to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
             "--resume".to_string(),
@@ -156,12 +159,13 @@ mod tests {
         let prompt = "";
         let args = build_claude_command_args(prompt, None);
         
-        assert_eq!(args.len(), 5);
+        assert_eq!(args.len(), 6);
         assert_eq!(args[0], "claude");
         assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--output-format");
-        assert_eq!(args[3], "stream-json");
-        assert_eq!(args[4], "");
+        assert_eq!(args[2], "--verbose");
+        assert_eq!(args[3], "--output-format");
+        assert_eq!(args[4], "stream-json");
+        assert_eq!(args[5], "");
     }
 
     #[test]
@@ -169,8 +173,8 @@ mod tests {
         let prompt = "Write a script with \"quotes\" and 'apostrophes' and $variables";
         let args = build_claude_command_args(prompt, None);
         
-        assert_eq!(args.len(), 5);
-        assert_eq!(args[4], prompt);
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[5], prompt);
     }
 
     #[test]
@@ -178,8 +182,8 @@ mod tests {
         let prompt = "Write a script that:\n1. Reads a file\n2. Processes the data\n3. Outputs results";
         let args = build_claude_command_args(prompt, None);
         
-        assert_eq!(args.len(), 5);
-        assert_eq!(args[4], prompt);
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[5], prompt);
     }
 
     #[test]
@@ -188,10 +192,10 @@ mod tests {
         let conversation_id = "very-long-conversation-id-with-many-characters-and-dashes-123456789";
         let args = build_claude_command_args(prompt, Some(conversation_id));
         
-        assert_eq!(args.len(), 7);
-        assert_eq!(args[4], "--resume");
-        assert_eq!(args[5], conversation_id);
-        assert_eq!(args[6], prompt);
+        assert_eq!(args.len(), 8);
+        assert_eq!(args[5], "--resume");
+        assert_eq!(args[6], conversation_id);
+        assert_eq!(args[7], prompt);
     }
 
     #[test]
@@ -199,7 +203,7 @@ mod tests {
         let prompt = "Write a program that displays 🤖 emojis and handles café, naïve, and résumé";
         let args = build_claude_command_args(prompt, None);
         
-        assert_eq!(args.len(), 5);
-        assert_eq!(args[4], prompt);
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[5], prompt);
     }
 }
