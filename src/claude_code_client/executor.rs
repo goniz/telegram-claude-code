@@ -1,6 +1,9 @@
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
+use std::pin::Pin;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::config::ClaudeCodeConfig;
 
@@ -142,5 +145,144 @@ impl CommandExecutor {
         command: Vec<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         self.exec_command(command).await
+    }
+
+    /// Execute a command in the container and return a stream of output lines
+    pub async fn exec_streaming_command(
+        &self,
+        command: Vec<String>,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<String, String>> + Send>>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        log::debug!(
+            "Executing streaming command in container {}: {:?}",
+            self.container_id,
+            command
+        );
+
+        let exec_config = CreateExecOptions {
+            cmd: Some(command.clone()),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            working_dir: self.config.working_directory.clone(),
+            env: Some(vec![
+                // Set up PATH to include NVM Node.js installation and standard paths
+                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:\
+                 /root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/\
+                 usr/bin:/sbin:/bin"
+                    .to_string(),
+                // Ensure Node.js modules are available
+                "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        log::debug!(
+            "Creating streaming exec for container {} with working_dir: {:?}",
+            self.container_id,
+            self.config.working_directory
+        );
+
+        let exec = match self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await
+        {
+            Ok(exec) => {
+                log::debug!("Successfully created streaming exec with ID: {}", exec.id);
+                exec
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to create streaming exec for container {}: {}",
+                    self.container_id,
+                    e
+                );
+                return Err(e.into());
+            }
+        };
+
+        let start_config = StartExecOptions {
+            detach: false,
+            ..Default::default()
+        };
+
+        // Create channel for streaming output
+        let (tx, rx) = mpsc::unbounded_channel();
+        let docker = self.docker.clone();
+        let exec_id = exec.id.clone();
+
+        // Spawn task to handle streaming output
+        tokio::spawn(async move {
+            match docker.start_exec(&exec_id, Some(start_config)).await {
+                Ok(bollard::exec::StartExecResults::Attached {
+                    output: mut output_stream,
+                    ..
+                }) => {
+                    log::debug!("Successfully attached to streaming exec {}", exec_id);
+                    let mut line_buffer = String::new();
+
+                    while let Some(result) = output_stream.next().await {
+                        match result {
+                            Ok(msg) => {
+                                let content = match msg {
+                                    bollard::container::LogOutput::StdOut { message } => {
+                                        String::from_utf8_lossy(&message).to_string()
+                                    }
+                                    bollard::container::LogOutput::StdErr { message } => {
+                                        String::from_utf8_lossy(&message).to_string()
+                                    }
+                                    _ => continue,
+                                };
+
+                                line_buffer.push_str(&content);
+
+                                // Process complete lines
+                                while let Some(newline_pos) = line_buffer.find('\n') {
+                                    let line = line_buffer[..newline_pos].to_string();
+                                    line_buffer = line_buffer[newline_pos + 1..].to_string();
+
+                                    if !line.trim().is_empty() {
+                                        log::debug!("Streaming output line: '{}'", line.trim());
+                                        if tx.send(Ok(line)).is_err() {
+                                            log::debug!("Receiver dropped, stopping stream");
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Error reading from streaming exec: {}", e);
+                                let _ = tx.send(Err(format!("Stream error: {}", e)));
+                                break;
+                            }
+                        }
+                    }
+
+                    // Send any remaining content in buffer
+                    if !line_buffer.trim().is_empty() {
+                        log::debug!("Streaming final line: '{}'", line_buffer.trim());
+                        let _ = tx.send(Ok(line_buffer));
+                    }
+
+                    log::debug!("Streaming exec {} completed", exec_id);
+                }
+                Ok(bollard::exec::StartExecResults::Detached) => {
+                    log::error!(
+                        "Unexpected detached execution for streaming exec {}",
+                        exec_id
+                    );
+                    let _ = tx.send(Err("Unexpected detached execution".to_string()));
+                }
+                Err(e) => {
+                    log::error!("Failed to start streaming exec {}: {}", exec_id, e);
+                    let _ = tx.send(Err(format!("Failed to start exec: {}", e)));
+                }
+            }
+        });
+
+        // Return the stream
+        Ok(Box::pin(UnboundedReceiverStream::new(rx)))
     }
 }

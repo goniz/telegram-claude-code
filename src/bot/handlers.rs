@@ -183,11 +183,31 @@ async fn handle_claude_message(
     // Get the current conversation ID if any
     let conversation_id = {
         let sessions = bot_state.claude_sessions.lock().await;
-        sessions.get(&chat_id).and_then(|s| s.conversation_id.clone())
+        let conv_id = sessions
+            .get(&chat_id)
+            .and_then(|s| s.conversation_id.clone());
+        if let Some(ref id) = conv_id {
+            log::info!(
+                "Retrieved existing conversation ID for chat {}: {}",
+                chat_id,
+                id
+            );
+        } else {
+            log::info!("No existing conversation ID found for chat {}", chat_id);
+        }
+        conv_id
     };
 
     // Execute Claude command
-    match commands::execute_claude_command(bot.clone(), msg.chat.id, bot_state.clone(), text, conversation_id).await {
+    match commands::execute_claude_command(
+        bot.clone(),
+        msg.chat.id,
+        bot_state.clone(),
+        text,
+        conversation_id,
+    )
+    .await
+    {
         Ok(()) => {
             // Command executed successfully, output already processed and sent
             // TODO: Extract conversation ID from output and update session state
@@ -210,18 +230,18 @@ async fn handle_claude_message(
 
 #[cfg(test)]
 mod tests {
+    use crate::bot::{AuthSession, AuthSessions, BotState, ClaudeSession, ClaudeSessions};
+    use bollard::Docker;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::{mpsc, oneshot, Mutex};
-    use bollard::Docker;
-    use crate::bot::{AuthSession, AuthSessions, ClaudeSession, ClaudeSessions, BotState};
 
     fn create_test_bot_state() -> BotState {
         // Create a mock Docker instance (won't be used in these tests)
         let docker = Docker::connect_with_socket_defaults().unwrap();
         let auth_sessions: AuthSessions = Arc::new(Mutex::new(HashMap::new()));
         let claude_sessions: ClaudeSessions = Arc::new(Mutex::new(HashMap::new()));
-        
+
         BotState {
             docker,
             auth_sessions,
@@ -245,7 +265,7 @@ mod tests {
             let mut sessions = bot_state.claude_sessions.lock().await;
             sessions.insert(chat_id, ClaudeSession::new());
         }
-        
+
         {
             let sessions = bot_state.claude_sessions.lock().await;
             let session = sessions.get(&chat_id);
@@ -298,12 +318,12 @@ mod tests {
         {
             let auth_sessions = bot_state.auth_sessions.lock().await;
             let claude_sessions = bot_state.claude_sessions.lock().await;
-            
+
             assert!(auth_sessions.contains_key(&chat_id));
             assert!(claude_sessions.contains_key(&chat_id));
             assert!(claude_sessions.get(&chat_id).unwrap().is_active);
         }
-        
+
         // Auth session should take priority (this is tested implicitly in the handler logic)
     }
 
@@ -315,36 +335,39 @@ mod tests {
         // Create different session states for each chat
         {
             let mut claude_sessions = bot_state.claude_sessions.lock().await;
-            
+
             // Chat 1: Active Claude session
             let mut session1 = ClaudeSession::new();
             session1.is_active = true;
             session1.conversation_id = Some("conv-1".to_string());
             claude_sessions.insert(chat_ids[0], session1);
-            
+
             // Chat 2: Inactive Claude session
             let session2 = ClaudeSession::new();
             claude_sessions.insert(chat_ids[1], session2);
-            
+
             // Chat 3: No session (will be empty)
         }
 
         // Verify isolation
         {
             let claude_sessions = bot_state.claude_sessions.lock().await;
-            
+
             // Chat 1 should be active
             let session1 = claude_sessions.get(&chat_ids[0]);
             assert!(session1.is_some());
             assert!(session1.unwrap().is_active);
-            assert_eq!(session1.unwrap().conversation_id, Some("conv-1".to_string()));
-            
+            assert_eq!(
+                session1.unwrap().conversation_id,
+                Some("conv-1".to_string())
+            );
+
             // Chat 2 should be inactive
             let session2 = claude_sessions.get(&chat_ids[1]);
             assert!(session2.is_some());
             assert!(!session2.unwrap().is_active);
             assert!(session2.unwrap().conversation_id.is_none());
-            
+
             // Chat 3 should have no session
             let session3 = claude_sessions.get(&chat_ids[2]);
             assert!(session3.is_none());
@@ -360,7 +383,9 @@ mod tests {
         // Test with no session
         {
             let sessions = bot_state.claude_sessions.lock().await;
-            let conv_id = sessions.get(&chat_id).and_then(|s| s.conversation_id.clone());
+            let conv_id = sessions
+                .get(&chat_id)
+                .and_then(|s| s.conversation_id.clone());
             assert!(conv_id.is_none());
         }
 
@@ -376,7 +401,9 @@ mod tests {
         // Retrieve conversation ID
         {
             let sessions = bot_state.claude_sessions.lock().await;
-            let conv_id = sessions.get(&chat_id).and_then(|s| s.conversation_id.clone());
+            let conv_id = sessions
+                .get(&chat_id)
+                .and_then(|s| s.conversation_id.clone());
             assert_eq!(conv_id, Some(test_conversation_id));
         }
     }
