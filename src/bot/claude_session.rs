@@ -20,6 +20,7 @@ impl ClaudeSession {
         }
     }
 
+    #[allow(dead_code)]
     pub fn start_conversation(&mut self, conversation_id: String, process: Child) {
         self.conversation_id = Some(conversation_id);
         self.process_handle = Some(process);
