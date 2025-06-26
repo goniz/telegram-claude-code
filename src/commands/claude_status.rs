@@ -1,5 +1,6 @@
 use teloxide::{prelude::*, types::ParseMode};
-use crate::{escape_markdown_v2, BotState, claude_code_client::ClaudeCodeClient};
+use crate::{escape_markdown_v2, BotState};
+use telegram_bot::claude_code_client::ClaudeCodeClient;
 
 /// Handle the /claudestatus command
 pub async fn handle_claude_status(bot: Bot, msg: Message, bot_state: BotState, chat_id: i64) -> ResponseResult<()> {

@@ -14,11 +14,10 @@ use teloxide::{
 use tokio::sync::Mutex;
 use url::Url;
 
-mod claude_code_client;
 mod commands;
 
-use claude_code_client::{
-    container_utils, AuthState, ClaudeCodeClient, ClaudeCodeConfig,
+use telegram_bot::claude_code_client::{
+    container_utils, AuthState, ClaudeCodeClient,
     GithubClient, GithubClientConfig,
 };
 use tokio::sync::mpsc;
