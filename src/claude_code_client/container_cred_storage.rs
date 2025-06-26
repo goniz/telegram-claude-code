@@ -25,12 +25,12 @@ impl ContainerCredStorage {
 
     /// Get the path for credentials file in the container
     fn credentials_path() -> &'static str {
-        "/volume_data/claude/.credentials.json"
+        "/root/.claude/.credentials.json"
     }
 
     /// Get the path for OAuth state file in the container
     fn state_path() -> &'static str {
-        "/volume_data/claude/claude_oauth_state.json"
+        "/root/.claude/claude_oauth_state.json"
     }
 }
 
