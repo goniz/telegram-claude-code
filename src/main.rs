@@ -1,5 +1,5 @@
-use bollard::Docker;
 use bollard::image::CreateImageOptions;
+use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::path::Path;
@@ -11,13 +11,13 @@ use teloxide::{
     types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
     utils::command::BotCommands,
 };
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use url::Url;
 
 mod commands;
 
 use telegram_bot::claude_code_client::{
-    AuthState, ClaudeCodeClient, GithubClient, GithubClientConfig, container_utils,
+    container_utils, AuthState, ClaudeCodeClient, GithubClient, GithubClientConfig,
 };
 
 /// Escape reserved characters for Telegram MarkdownV2 formatting
@@ -214,12 +214,14 @@ async fn handle_auth_state_updates(
                     .await;
             }
             AuthState::UrlReady(url) => {
-                let message = "🔐 *Claude Account Authentication*\n\nTo complete authentication with your \
+                let message =
+                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your \
                      Claude account:\n\n*1\\. Click the button below to visit the authentication \
                      URL*\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth \
                      flow in your browser*\n\n*4\\. If prompted for a code, simply paste it here* \
                      \\(no command needed\\)\n\n✨ This will enable full access to your Claude \
-                     subscription features\\!".to_string();
+                     subscription features\\!"
+                        .to_string();
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
                     "🔗 Open Claude OAuth",

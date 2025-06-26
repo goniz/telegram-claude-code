@@ -1,4 +1,4 @@
-use crate::{BotState, Command, escape_markdown_v2};
+use crate::{escape_markdown_v2, BotState, Command};
 use teloxide::utils::command::BotCommands;
 use teloxide::{prelude::*, types::ParseMode};
 

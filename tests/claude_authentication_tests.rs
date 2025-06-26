@@ -2,9 +2,9 @@ use bollard::Docker;
 use rstest::*;
 use std::env;
 use std::time::Duration;
-use telegram_bot::{container_utils, AuthState, ClaudeCodeClient, ClaudeCodeConfig};
 use telegram_bot::claude_code_client::ClaudeCodeResult;
 use telegram_bot::container_utils::CodingContainerConfig;
+use telegram_bot::{container_utils, AuthState, ClaudeCodeClient, ClaudeCodeConfig};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -43,7 +43,7 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
 pub async fn claude_auth_session() -> (Docker, ClaudeCodeClient, String) {
     let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
     let container_name = format!("test-auth-{}", Uuid::new_v4());
-    
+
     // Start coding session outside of timeout - this may pull Docker images
     let claude_client = container_utils::start_coding_session(
         &docker,
@@ -53,7 +53,7 @@ pub async fn claude_auth_session() -> (Docker, ClaudeCodeClient, String) {
     )
     .await
     .expect("Failed to start coding session for auth test");
-    
+
     (docker, claude_client, container_name)
 }
 
@@ -61,10 +61,10 @@ pub async fn claude_auth_session() -> (Docker, ClaudeCodeClient, String) {
 #[tokio::test]
 #[allow(unused_variables)]
 async fn test_claude_authentication_command_workflow(
-    #[future] claude_auth_session: (Docker, ClaudeCodeClient, String)
+    #[future] claude_auth_session: (Docker, ClaudeCodeClient, String),
 ) {
     let (docker, claude_client, container_name) = claude_auth_session.await;
-    
+
     // Check if we're in a CI environment
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
     if is_ci {
@@ -85,14 +85,26 @@ async fn test_claude_authentication_command_workflow(
     let test_result = tokio::time::timeout(test_timeout, async {
         // Step 1: Coding session is already started (outside timeout)
         println!("=== STEP 1: Coding session already started (prerequisite) ===");
-        println!("✅ Coding session started successfully! Container ID: {}", claude_client.container_id().chars().take(12).collect::<String>());
+        println!(
+            "✅ Coding session started successfully! Container ID: {}",
+            claude_client
+                .container_id()
+                .chars()
+                .take(12)
+                .collect::<String>()
+        );
 
         // Step 2: Simulate finding the session (what happens in /authenticateclaude command)
         println!("=== STEP 2: Finding session for authentication ===");
 
-        let auth_client_result = ClaudeCodeClient::for_session(docker.clone(), &container_name).await;
+        let auth_client_result =
+            ClaudeCodeClient::for_session(docker.clone(), &container_name).await;
         if auth_client_result.is_err() {
-            return Err(format!("Failed to find session: {:?}", auth_client_result.unwrap_err()).into());
+            return Err(format!(
+                "Failed to find session: {:?}",
+                auth_client_result.unwrap_err()
+            )
+            .into());
         }
         let auth_client = auth_client_result.unwrap();
 
@@ -105,13 +117,14 @@ async fn test_claude_authentication_command_workflow(
         match auth_result {
             Ok(mut auth_handle) => {
                 println!("✅ Claude account authentication handle received");
-                
+
                 // Try to receive at least one state update to verify the authentication flow
                 let timeout_result = tokio::time::timeout(
-                    tokio::time::Duration::from_secs(5), 
-                    auth_handle.state_receiver.recv()
-                ).await;
-                
+                    tokio::time::Duration::from_secs(5),
+                    auth_handle.state_receiver.recv(),
+                )
+                .await;
+
                 match timeout_result {
                     Ok(Some(state)) => {
                         println!("✅ Received authentication state: {:?}", state);
@@ -119,11 +132,17 @@ async fn test_claude_authentication_command_workflow(
                             AuthState::Completed(msg) => {
                                 println!("✅ Authentication completed: {}", msg);
                                 if !msg.contains("authenticated") {
-                                    return Err("Expected completion message to contain 'authenticated'".into());
+                                    return Err(
+                                        "Expected completion message to contain 'authenticated'"
+                                            .into(),
+                                    );
                                 }
                             }
                             AuthState::Failed(err) => {
-                                println!("⚠️  Authentication failed (may be expected in test): {}", err);
+                                println!(
+                                    "⚠️  Authentication failed (may be expected in test): {}",
+                                    err
+                                );
                             }
                             AuthState::Starting => {
                                 println!("✅ Authentication started successfully");
@@ -147,7 +166,11 @@ async fn test_claude_authentication_command_workflow(
 
                 // Check for invalid command errors
                 if error_msg.contains("command not found") || error_msg.contains("auth login") {
-                    return Err(format!("Error should not be about non-existent commands: {}", error_msg).into());
+                    return Err(format!(
+                        "Error should not be about non-existent commands: {}",
+                        error_msg
+                    )
+                    .into());
                 }
 
                 // In CI, be more lenient about network/container related failures
@@ -165,11 +188,16 @@ async fn test_claude_authentication_command_workflow(
         // Status check should work and return a boolean result
         match status_result {
             Ok(is_authenticated) => {
-                println!("✅ Authentication status check successful: {}", is_authenticated);
+                println!(
+                    "✅ Authentication status check successful: {}",
+                    is_authenticated
+                );
                 // In test environment, we don't expect to be authenticated, but the method should work
                 // The result should be false since we don't have a real API key set up
                 if is_authenticated {
-                    println!("⚠️  Unexpectedly authenticated in test environment - this might be OK");
+                    println!(
+                        "⚠️  Unexpectedly authenticated in test environment - this might be OK"
+                    );
                 }
             }
             Err(e) => {
@@ -178,7 +206,11 @@ async fn test_claude_authentication_command_workflow(
 
                 // Check for invalid command errors
                 if error_msg.contains("command not found") || error_msg.contains("auth status") {
-                    return Err(format!("Error should not be about non-existent commands: {}", error_msg).into());
+                    return Err(format!(
+                        "Error should not be about non-existent commands: {}",
+                        error_msg
+                    )
+                    .into());
                 }
 
                 // In CI, be more lenient about failures
@@ -190,7 +222,8 @@ async fn test_claude_authentication_command_workflow(
 
         println!("🎉 Claude authentication command test completed!");
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-    }).await;
+    })
+    .await;
 
     // Cleanup regardless of test outcome
     cleanup_container(&docker, &container_name).await;
@@ -262,7 +295,7 @@ async fn test_claude_authentication_without_session(docker: Docker) {
 pub async fn claude_session_for_cancel() -> (Docker, ClaudeCodeClient, String) {
     let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
     let container_name = format!("test-cancel-{}", Uuid::new_v4());
-    
+
     // Start coding session outside of timeout - this may pull Docker images
     let claude_client = container_utils::start_coding_session(
         &docker,
@@ -272,7 +305,7 @@ pub async fn claude_session_for_cancel() -> (Docker, ClaudeCodeClient, String) {
     )
     .await
     .expect("Failed to start coding session for cancel test");
-    
+
     (docker, claude_client, container_name)
 }
 
@@ -282,7 +315,7 @@ pub async fn claude_session_for_cancel() -> (Docker, ClaudeCodeClient, String) {
 pub async fn claude_session_for_polls() -> (Docker, ClaudeCodeClient, String) {
     let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
     let container_name = format!("test-multiple-polls-{}", Uuid::new_v4());
-    
+
     // Start coding session outside of timeout - this may pull Docker images
     let claude_client = container_utils::start_coding_session(
         &docker,
@@ -292,14 +325,14 @@ pub async fn claude_session_for_polls() -> (Docker, ClaudeCodeClient, String) {
     )
     .await
     .expect("Failed to start coding session for polls test");
-    
+
     (docker, claude_client, container_name)
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_claude_auth_no_panic_on_cancel(
-    #[future] claude_session_for_cancel: (Docker, ClaudeCodeClient, String)
+    #[future] claude_session_for_cancel: (Docker, ClaudeCodeClient, String),
 ) {
     // Skip in CI to avoid Docker dependency issues
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
@@ -320,19 +353,21 @@ async fn test_claude_auth_no_panic_on_cancel(
                 // Immediately drop the cancel_sender to simulate sender being dropped
                 // This should trigger the cancel receiver error path in the select loop
                 drop(auth_handle.cancel_sender);
-                
+
                 // Give the background task a moment to run and potentially panic
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                
+
                 // If we reach here without panicking, the fix worked
-                println!("✅ Authentication handle created and cancel sender dropped without panic");
-                
+                println!(
+                    "✅ Authentication handle created and cancel sender dropped without panic"
+                );
+
                 // Also drop the code sender to clean up
                 drop(auth_handle.code_sender);
-                
+
                 // Wait a bit more to let the background task exit cleanly
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                
+
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             }
             Err(e) => {
@@ -341,7 +376,8 @@ async fn test_claude_auth_no_panic_on_cancel(
                 Ok(())
             }
         }
-    }).await;
+    })
+    .await;
 
     // Clean up regardless of test outcome
     cleanup_container(&docker, &container_name).await;
@@ -363,7 +399,7 @@ async fn test_claude_auth_no_panic_on_cancel(
 #[rstest]
 #[tokio::test]
 async fn test_claude_auth_no_panic_with_multiple_polls(
-    #[future] claude_session_for_polls: (Docker, ClaudeCodeClient, String)
+    #[future] claude_session_for_polls: (Docker, ClaudeCodeClient, String),
 ) {
     // Skip in CI to avoid Docker dependency issues
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
@@ -384,10 +420,10 @@ async fn test_claude_auth_no_panic_with_multiple_polls(
                 // Keep the handles alive for a bit to let the select loop run multiple iterations
                 // This tests that the oneshot receiver doesn't get polled multiple times
                 tokio::time::sleep(Duration::from_millis(1000)).await;
-                
+
                 // Drop the handles
                 drop(auth_handle);
-                
+
                 println!("✅ Authentication ran for 1 second without panic");
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             }
@@ -397,7 +433,8 @@ async fn test_claude_auth_no_panic_with_multiple_polls(
                 Ok(())
             }
         }
-    }).await;
+    })
+    .await;
 
     // Clean up regardless of test outcome
     cleanup_container(&docker, &container_name).await;
@@ -426,7 +463,7 @@ async fn test_claude_auth_no_panic_with_multiple_polls(
 pub async fn claude_url_session() -> (Docker, ClaudeCodeClient, String) {
     let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
     let container_name = format!("test-auth-url-{}", Uuid::new_v4());
-    
+
     // Start coding session outside of timeout - this may pull Docker images
     let claude_client = container_utils::start_coding_session(
         &docker,
@@ -436,14 +473,14 @@ pub async fn claude_url_session() -> (Docker, ClaudeCodeClient, String) {
     )
     .await
     .expect("Failed to start coding session for URL test");
-    
+
     (docker, claude_client, container_name)
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_claude_auth_url_generation_like_bot(
-    #[future] claude_url_session: (Docker, ClaudeCodeClient, String)
+    #[future] claude_url_session: (Docker, ClaudeCodeClient, String),
 ) {
     pretty_env_logger::init();
     let (docker, claude_client, container_name) = claude_url_session.await;
@@ -673,11 +710,14 @@ fn test_json_auth_success_parsing() {
 
     let parsed: Result<ClaudeCodeResult, _> = serde_json::from_str(success_json);
     assert!(parsed.is_ok(), "Should parse success JSON correctly");
-    
+
     let result = parsed.unwrap();
-    assert!(!result.is_error, "is_error should be false for successful auth");
+    assert!(
+        !result.is_error,
+        "is_error should be false for successful auth"
+    );
     assert_eq!(result.result, "Authentication test successful");
-    
+
     println!("✅ JSON success parsing test passed");
 }
 
@@ -698,11 +738,11 @@ fn test_json_auth_failure_parsing() {
 
     let parsed: Result<ClaudeCodeResult, _> = serde_json::from_str(failure_json);
     assert!(parsed.is_ok(), "Should parse failure JSON correctly");
-    
+
     let result = parsed.unwrap();
     assert!(result.is_error, "is_error should be true for failed auth");
     assert!(result.result.contains("Authentication failed"));
-    
+
     println!("✅ JSON failure parsing test passed");
 }
 
@@ -712,16 +752,23 @@ fn test_new_claude_result_format_parsing() {
     let new_format_json = r#"{"type":"result","subtype":"success","is_error":false,"duration_ms":4754,"duration_api_ms":7098,"num_turns":3,"result":"Working directory: `/workspace`","session_id":"4f7b09bb-236f-46df-b5fc-b973285cdb59","total_cost_usd":0.0558624,"usage":{"input_tokens":9,"cache_creation_input_tokens":13360,"cache_read_input_tokens":13192,"output_tokens":83,"server_tool_use":{"web_search_requests":0}}}"#;
 
     let parsed: Result<ClaudeCodeResult, _> = serde_json::from_str(new_format_json);
-    assert!(parsed.is_ok(), "Should parse new format JSON correctly: {:?}", parsed);
-    
+    assert!(
+        parsed.is_ok(),
+        "Should parse new format JSON correctly: {:?}",
+        parsed
+    );
+
     let result = parsed.unwrap();
     assert_eq!(result.r#type, "result");
     assert_eq!(result.subtype, "success");
-    assert!(!result.is_error, "is_error should be false for successful result");
+    assert!(
+        !result.is_error,
+        "is_error should be false for successful result"
+    );
     assert_eq!(result.total_cost_usd, 0.0558624);
     assert_eq!(result.result, "Working directory: `/workspace`");
     assert_eq!(result.session_id, "4f7b09bb-236f-46df-b5fc-b973285cdb59");
-    
+
     // Test usage field
     assert!(result.usage.is_some(), "usage field should be present");
     let usage = result.usage.unwrap();
@@ -729,12 +776,15 @@ fn test_new_claude_result_format_parsing() {
     assert_eq!(usage.output_tokens, 83);
     assert_eq!(usage.cache_creation_input_tokens, Some(13360));
     assert_eq!(usage.cache_read_input_tokens, Some(13192));
-    
+
     // Test server_tool_use
-    assert!(usage.server_tool_use.is_some(), "server_tool_use should be present");
+    assert!(
+        usage.server_tool_use.is_some(),
+        "server_tool_use should be present"
+    );
     let server_tool_use = usage.server_tool_use.unwrap();
     assert_eq!(server_tool_use.web_search_requests, 0);
-    
+
     println!("✅ New Claude result format parsing test passed");
 }
 
@@ -744,12 +794,19 @@ fn test_backward_compatibility_old_format() {
     let old_format_json = r#"{"type":"result","subtype":"success","is_error":false,"duration_ms":1500,"duration_api_ms":1200,"num_turns":1,"result":"Authentication successful","session_id":"test-session","cost_usd":0.001}"#;
 
     let parsed: Result<ClaudeCodeResult, _> = serde_json::from_str(old_format_json);
-    assert!(parsed.is_ok(), "Should parse old format JSON correctly: {:?}", parsed);
-    
+    assert!(
+        parsed.is_ok(),
+        "Should parse old format JSON correctly: {:?}",
+        parsed
+    );
+
     let result = parsed.unwrap();
     assert_eq!(result.total_cost_usd, 0.001);
-    assert!(result.usage.is_none(), "usage should be None for old format");
-    
+    assert!(
+        result.usage.is_none(),
+        "usage should be None for old format"
+    );
+
     println!("✅ Backward compatibility test passed");
 }
 
@@ -769,9 +826,12 @@ fn test_auth_status_determination() {
         session_id: "test-session".to_string(),
         usage: None,
     };
-    
+
     let auth_status = !success_result.is_error;
-    assert!(auth_status, "Authentication should be successful when is_error is false");
+    assert!(
+        auth_status,
+        "Authentication should be successful when is_error is false"
+    );
 
     // Test failed authentication (is_error = true should return false)
     let failure_result = ClaudeCodeResult {
@@ -786,9 +846,12 @@ fn test_auth_status_determination() {
         session_id: "test-session".to_string(),
         usage: None,
     };
-    
+
     let auth_status = !failure_result.is_error;
-    assert!(!auth_status, "Authentication should fail when is_error is true");
+    assert!(
+        !auth_status,
+        "Authentication should fail when is_error is true"
+    );
 
     println!("✅ Auth status determination test passed");
 }
@@ -797,10 +860,10 @@ fn test_auth_status_determination() {
 #[test]
 fn test_invalid_json_handling() {
     let invalid_json = "{ invalid json content }";
-    
+
     let parsed: Result<ClaudeCodeResult, _> = serde_json::from_str(invalid_json);
     assert!(parsed.is_err(), "Should fail to parse invalid JSON");
-    
+
     println!("✅ Invalid JSON handling test passed");
 }
 
@@ -818,72 +881,96 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
     // Step 1: Create a basic container WITHOUT using start_coding_session
     // This avoids the automatic Claude configuration initialization
     println!("=== STEP 1: Creating raw container without Claude configuration ===");
-    
+
     let container_id = container_utils::create_test_container(&docker, &container_name)
         .await
         .expect("Failed to create test container");
-    
+
     println!("✅ Raw container created: {}", container_id);
 
     // Step 2: Remove any existing Claude configuration that might have been created
     println!("=== STEP 2: Ensuring Claude is truly not configured ===");
-    
+
     // Remove .claude.json file if it exists
     let _ = container_utils::exec_command_in_container(
         &docker,
         &container_id,
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
-    ).await;
-    
+        vec![
+            "rm".to_string(),
+            "-f".to_string(),
+            "/root/.claude.json".to_string(),
+        ],
+    )
+    .await;
+
     // Remove .claude directory if it exists
     let _ = container_utils::exec_command_in_container(
         &docker,
         &container_id,
-        vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()]
-    ).await;
-    
+        vec![
+            "rm".to_string(),
+            "-rf".to_string(),
+            "/root/.claude".to_string(),
+        ],
+    )
+    .await;
+
     println!("✅ Removed any existing Claude configuration");
 
     // Step 3: Create a Claude client and test auth status
     println!("=== STEP 3: Testing auth status with truly unauthenticated container ===");
-    
-    let claude_client = ClaudeCodeClient::new(docker.clone(), container_id.clone(), ClaudeCodeConfig::default());
-    
+
+    let claude_client = ClaudeCodeClient::new(
+        docker.clone(),
+        container_id.clone(),
+        ClaudeCodeConfig::default(),
+    );
+
     // Test the auth status check
     let auth_status_result = claude_client.check_auth_status().await;
-    
+
     match auth_status_result {
         Ok(is_authenticated) => {
             println!("✅ Auth status check completed successfully");
             println!("Authentication status: {}", is_authenticated);
-            
+
             // With a truly unauthenticated container, this should return false
             if is_authenticated {
-                println!("⚠️  WARNING: Container appears authenticated despite removal of config files");
+                println!(
+                    "⚠️  WARNING: Container appears authenticated despite removal of config files"
+                );
                 println!("This might indicate the auth check is not working correctly");
-                
+
                 // Let's debug what's happening by trying the raw commands
                 println!("=== DEBUG: Testing raw Claude commands ===");
-                
+
                 // Test direct claude command
                 let claude_test = container_utils::exec_command_in_container(
                     &docker,
                     &container_id,
-                    vec!["claude".to_string(), "--help".to_string()]
-                ).await;
-                
+                    vec!["claude".to_string(), "--help".to_string()],
+                )
+                .await;
+
                 match claude_test {
                     Ok(output) => println!("Claude --help output: {}", output),
                     Err(e) => println!("Claude --help error: {}", e),
                 }
-                
-                // Test claude status command  
+
+                // Test claude status command
                 let status_test = container_utils::exec_command_in_container(
                     &docker,
                     &container_id,
-                    vec!["claude".to_string(), "-p".to_string(), "status".to_string(), "--output-format".to_string(), "json".to_string()]
-                ).await;
-                
+                    vec![
+                        "claude".to_string(),
+                        "-p".to_string(),
+                        "status".to_string(),
+                        "--output-format".to_string(),
+                        "json".to_string(),
+                    ],
+                )
+                .await;
+
                 match status_test {
                     Ok(output) => println!("Claude status output: {}", output),
                     Err(e) => println!("Claude status error: {}", e),
@@ -891,8 +978,8 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
             } else {
                 println!("✅ PERFECT: Auth status correctly returned false for unauthenticated container");
             }
-            
-            // For the test to pass, we want to verify that we can distinguish 
+
+            // For the test to pass, we want to verify that we can distinguish
             // between authenticated and unauthenticated states
             // The exact boolean value isn't as important as the method working
         }
@@ -905,11 +992,11 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
 
     // Step 4: Test what happens when we try a simple command
     println!("=== STEP 4: Testing simple Claude command execution ===");
-    
-    let simple_command_result = claude_client.exec_basic_command(
-        vec!["claude".to_string(), "--version".to_string()]
-    ).await;
-    
+
+    let simple_command_result = claude_client
+        .exec_basic_command(vec!["claude".to_string(), "--version".to_string()])
+        .await;
+
     match simple_command_result {
         Ok(output) => {
             println!("Claude --version output: {}", output);
@@ -922,12 +1009,12 @@ async fn test_check_auth_status_with_truly_unauthenticated_claude(docker: Docker
     }
 
     println!("🎉 Truly unauthenticated container test completed!");
-    
+
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 }
 
-/// Test that demonstrates the difference between a pre-configured container 
+/// Test that demonstrates the difference between a pre-configured container
 /// and a truly unauthenticated container
 #[rstest]
 #[tokio::test]
@@ -939,7 +1026,7 @@ async fn test_auth_status_comparison_preconfigured_vs_raw(docker: Docker) {
 
     // Step 1: Create a pre-configured container using start_coding_session
     println!("=== STEP 1: Creating pre-configured container ===");
-    
+
     let preconfigured_client = container_utils::start_coding_session(
         &docker,
         &preconfigured_name,
@@ -948,42 +1035,54 @@ async fn test_auth_status_comparison_preconfigured_vs_raw(docker: Docker) {
     )
     .await
     .expect("Failed to start pre-configured coding session");
-    
+
     println!("✅ Pre-configured container created");
 
     // Step 2: Create a raw container without configuration
     println!("=== STEP 2: Creating raw container ===");
-    
+
     let raw_container_id = container_utils::create_test_container(&docker, &raw_name)
         .await
         .expect("Failed to create raw test container");
-    
+
     // Ensure it's truly unconfigured
     let _ = container_utils::exec_command_in_container(
         &docker,
         &raw_container_id,
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
-    ).await;
-    
-    let raw_client = ClaudeCodeClient::new(docker.clone(), raw_container_id, ClaudeCodeConfig::default());
-    
+        vec![
+            "rm".to_string(),
+            "-f".to_string(),
+            "/root/.claude.json".to_string(),
+        ],
+    )
+    .await;
+
+    let raw_client = ClaudeCodeClient::new(
+        docker.clone(),
+        raw_container_id,
+        ClaudeCodeConfig::default(),
+    );
+
     println!("✅ Raw container created");
 
     // Step 3: Compare authentication status
     println!("=== STEP 3: Comparing authentication status ===");
-    
+
     let preconfigured_auth = preconfigured_client.check_auth_status().await;
     let raw_auth = raw_client.check_auth_status().await;
-    
-    println!("Pre-configured container auth status: {:?}", preconfigured_auth);
+
+    println!(
+        "Pre-configured container auth status: {:?}",
+        preconfigured_auth
+    );
     println!("Raw container auth status: {:?}", raw_auth);
-    
+
     // Step 4: Analyze the results
     match (preconfigured_auth, raw_auth) {
         (Ok(pre_auth), Ok(raw_auth)) => {
             println!("✅ Both auth checks completed successfully");
             println!("Pre-configured: {}, Raw: {}", pre_auth, raw_auth);
-            
+
             if pre_auth == raw_auth {
                 println!("⚠️  WARNING: Both containers report the same auth status");
                 println!("This suggests the auth check might not be distinguishing properly");
@@ -1011,7 +1110,7 @@ async fn test_auth_status_comparison_preconfigured_vs_raw(docker: Docker) {
     }
 
     println!("🎉 Container comparison test completed!");
-    
+
     // Cleanup
     cleanup_container(&docker, &preconfigured_name).await;
     cleanup_container(&docker, &raw_name).await;
@@ -1028,7 +1127,7 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
 
     // Step 1: Create a pre-configured container first
     println!("=== STEP 1: Creating pre-configured container ===");
-    
+
     let claude_client = container_utils::start_coding_session(
         &docker,
         &container_name,
@@ -1037,67 +1136,85 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
     )
     .await
     .expect("Failed to start coding session");
-    
+
     println!("✅ Pre-configured container created");
 
     // Step 2: Verify it initially reports as authenticated (due to onboarding config)
     println!("=== STEP 2: Checking initial auth status ===");
-    
+
     let initial_auth = claude_client.check_auth_status().await;
     println!("Initial auth status: {:?}", initial_auth);
 
     // Step 3: Remove all Claude authentication and configuration
     println!("=== STEP 3: Removing all Claude authentication ===");
-    
+
     // Remove the config file
     let _ = container_utils::exec_command_in_container(
         &docker,
         claude_client.container_id(),
-        vec!["rm".to_string(), "-f".to_string(), "/root/.claude.json".to_string()]
-    ).await;
-    
+        vec![
+            "rm".to_string(),
+            "-f".to_string(),
+            "/root/.claude.json".to_string(),
+        ],
+    )
+    .await;
+
     // Remove the entire .claude directory
     let _ = container_utils::exec_command_in_container(
         &docker,
         claude_client.container_id(),
-        vec!["rm".to_string(), "-rf".to_string(), "/root/.claude".to_string()]
-    ).await;
-    
+        vec![
+            "rm".to_string(),
+            "-rf".to_string(),
+            "/root/.claude".to_string(),
+        ],
+    )
+    .await;
+
     // Remove any potential API key environment variables by creating a new empty config
     let _ = container_utils::exec_command_in_container(
         &docker,
         claude_client.container_id(),
-        vec!["sh".to_string(), "-c".to_string(), "echo '{}' > /root/.claude.json".to_string()]
-    ).await;
-    
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo '{}' > /root/.claude.json".to_string(),
+        ],
+    )
+    .await;
+
     println!("✅ Removed Claude configuration");
 
     // Step 4: Test auth status after removal
     println!("=== STEP 4: Checking auth status after configuration removal ===");
-    
+
     let final_auth = claude_client.check_auth_status().await;
     println!("Final auth status: {:?}", final_auth);
-    
+
     // Step 5: Test what specific Claude commands return
     println!("=== STEP 5: Testing specific Claude commands ===");
-    
+
     // Test a Claude prompt command that would require authentication
-    let prompt_test_result = claude_client.exec_basic_command(vec![
-        "claude".to_string(),
-        "-p".to_string(),
-        "echo hello".to_string(),
-        "--output-format".to_string(),
-        "json".to_string(),
-    ]).await;
-    
+    let prompt_test_result = claude_client
+        .exec_basic_command(vec![
+            "claude".to_string(),
+            "-p".to_string(),
+            "echo hello".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+        ])
+        .await;
+
     match prompt_test_result {
         Ok(output) => {
             println!("Claude prompt test output: {}", output);
             // Check if the output indicates authentication issues
             let output_lower = output.to_lowercase();
-            if output_lower.contains("not authenticated") || 
-               output_lower.contains("api key") || 
-               output_lower.contains("login required") {
+            if output_lower.contains("not authenticated")
+                || output_lower.contains("api key")
+                || output_lower.contains("login required")
+            {
                 println!("✅ PERFECT: Claude prompt correctly indicates authentication needed");
             } else {
                 println!("⚠️  Prompt succeeded, might still be authenticated or using fallback");
@@ -1106,9 +1223,10 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
         Err(e) => {
             println!("Claude prompt test error: {}", e);
             let error_lower = e.to_string().to_lowercase();
-            if error_lower.contains("not authenticated") || 
-               error_lower.contains("api key") || 
-               error_lower.contains("login required") {
+            if error_lower.contains("not authenticated")
+                || error_lower.contains("api key")
+                || error_lower.contains("login required")
+            {
                 println!("✅ PERFECT: Error correctly indicates authentication needed");
             } else {
                 println!("Command failed for other reasons: {}", e);
@@ -1122,7 +1240,7 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
             println!("✅ Auth status comparison:");
             println!("  Initial: {}", initial);
             println!("  After removal: {}", final_status);
-            
+
             if initial != final_status {
                 println!("✅ PERFECT: Auth status changed after configuration removal");
                 if !final_status {
@@ -1152,7 +1270,7 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
     }
 
     println!("🎉 Explicit auth removal test completed!");
-    
+
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 }
@@ -1166,7 +1284,7 @@ async fn test_check_auth_status_with_removed_authentication(docker: Docker) {
 #[fixture]
 pub async fn claude_session(docker: Docker) -> (Docker, ClaudeCodeClient, String) {
     let container_name = format!("test-timeout-{}", Uuid::new_v4());
-    
+
     // Start coding session outside of any timeout - this may pull Docker images
     let claude_client = container_utils::start_coding_session(
         &docker,
@@ -1176,17 +1294,17 @@ pub async fn claude_session(docker: Docker) -> (Docker, ClaudeCodeClient, String
     )
     .await
     .expect("Failed to start coding session for timeout test");
-    
+
     (docker, claude_client, container_name)
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_claude_authentication_timeout_behavior(
-    #[future] claude_session: (Docker, ClaudeCodeClient, String)
+    #[future] claude_session: (Docker, ClaudeCodeClient, String),
 ) {
     let (docker, _claude_client, container_name) = claude_session.await;
-    
+
     // This test verifies that the timeout behavior has been improved
     let is_ci = env::var("CI").is_ok() || env::var("GITHUB_ACTIONS").is_ok();
     if is_ci {
@@ -1199,20 +1317,20 @@ async fn test_claude_authentication_timeout_behavior(
     let test_result = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
         // Claude client is already created - just validate the timeout structure is in place
         println!("✅ Claude client created successfully for timeout testing");
-        
+
         // Test validates that the timeout structure is in place
         // Key improvements verified:
         // 1. Functions now use 60-second timeouts instead of 30 seconds
         // 2. Early return pattern is implemented for URL detection
         // 3. Better error handling and logging is in place
         // 4. Graceful termination behavior is implemented
-        
+
         println!("✅ Timeout behavior improvements validated:");
         println!("  - Interactive login timeout: 30s → 60s");
         println!("  - Code processing timeout: 20s → 60s");
         println!("  - Early return pattern for URL detection");
         println!("  - Improved logging and error handling");
-        
+
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await;
@@ -1231,27 +1349,27 @@ async fn test_claude_authentication_timeout_behavior(
 async fn test_timeout_constants_validation() {
     // This test validates that the timeout constants have been improved
     // by testing the behavior structure without requiring Docker
-    
+
     println!("🔍 Validating timeout improvements in code structure:");
-    
+
     // Validate that timeout improvements are implemented
     // This is a compile-time and structure validation test
-    
+
     // 1. Verify that authentication process management exists
     println!("  ✅ ClaudeAuthProcess structure exists for better process management");
-    
+
     // 2. Verify that early return patterns are implemented
     println!("  ✅ Early return pattern implemented for prompt URL/code detection");
-    
+
     // 3. Verify timeout value improvements
     println!("  ✅ Timeout values increased from 30s to 60s for user-friendly experience");
-    
+
     // 4. Verify graceful termination
     println!("  ✅ Graceful termination behavior implemented");
-    
+
     // 5. Verify improved error handling
     println!("  ✅ Enhanced error handling and logging implemented");
-    
+
     println!("✅ All timeout behavior improvements validated successfully");
 }
 
@@ -1413,21 +1531,23 @@ async fn test_claude_json_persistence_across_sessions(docker: Docker) {
     );
 
     // Parse both JSON contents to compare the important fields
-    let json_1: serde_json::Value = serde_json::from_str(&content_1)
-        .expect("First session .claude.json should be valid JSON");
-    let json_2: serde_json::Value = serde_json::from_str(&content_2)
-        .expect("Second session .claude.json should be valid JSON");
-    
+    let json_1: serde_json::Value =
+        serde_json::from_str(&content_1).expect("First session .claude.json should be valid JSON");
+    let json_2: serde_json::Value =
+        serde_json::from_str(&content_2).expect("Second session .claude.json should be valid JSON");
+
     // Verify the important fields persist (firstStartTime may differ)
     assert_eq!(
         json_1.get("hasCompletedOnboarding"),
         json_2.get("hasCompletedOnboarding"),
         "hasCompletedOnboarding should persist between sessions"
     );
-    
+
     // Verify both have the workspace project configuration
     if let (Some(projects_1), Some(projects_2)) = (json_1.get("projects"), json_2.get("projects")) {
-        if let (Some(workspace_1), Some(workspace_2)) = (projects_1.get("/workspace"), projects_2.get("/workspace")) {
+        if let (Some(workspace_1), Some(workspace_2)) =
+            (projects_1.get("/workspace"), projects_2.get("/workspace"))
+        {
             assert_eq!(
                 workspace_1.get("hasTrustDialogAccepted"),
                 workspace_2.get("hasTrustDialogAccepted"),

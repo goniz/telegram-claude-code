@@ -1,9 +1,9 @@
-use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecOptions};
+use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::time::{Duration, timeout};
+use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GithubAuthResult {

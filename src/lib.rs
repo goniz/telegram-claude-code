@@ -3,6 +3,6 @@ pub mod claude_oauth;
 
 #[allow(unused_imports)]
 pub use claude_code_client::{
-    AuthState, AuthenticationHandle, ClaudeCodeClient, ClaudeCodeConfig, ClaudeCodeResult,
-    GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult, container_utils,
+    container_utils, AuthState, AuthenticationHandle, ClaudeCodeClient, ClaudeCodeConfig,
+    ClaudeCodeResult, GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult,
 };

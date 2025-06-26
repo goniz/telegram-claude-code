@@ -1,4 +1,3 @@
-use bollard::Docker;
 use bollard::container::{
     Config, CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
     RemoveContainerOptions, UploadToContainerOptions,
@@ -7,6 +6,7 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::image::CreateImageOptions;
 use bollard::models::{HostConfig, Mount, MountTypeEnum};
 use bollard::volume::CreateVolumeOptions;
+use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::io::Read;

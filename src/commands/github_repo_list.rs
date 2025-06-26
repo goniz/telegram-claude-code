@@ -1,4 +1,4 @@
-use crate::{BotState, escape_markdown_v2};
+use crate::{escape_markdown_v2, BotState};
 use telegram_bot::claude_code_client::{ClaudeCodeClient, GithubClient, GithubClientConfig};
 use teloxide::{prelude::*, types::ParseMode};
 

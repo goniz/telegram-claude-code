@@ -1,8 +1,8 @@
 use bollard::Docker;
-use rstest::*;
-use telegram_bot::{ClaudeCodeClient, GithubClient, GithubClientConfig, container_utils};
-use telegram_bot::claude_code_client::{ClaudeCodeConfig};
 use futures_util;
+use rstest::*;
+use telegram_bot::claude_code_client::ClaudeCodeConfig;
+use telegram_bot::{container_utils, ClaudeCodeClient, GithubClient, GithubClientConfig};
 use uuid;
 
 // =============================================================================
@@ -38,82 +38,99 @@ pub async fn cleanup_container(docker: &Docker, container_name: &str) {
 #[rstest]
 #[tokio::test]
 async fn test_github_auth_command_workflow(
-    #[future] test_container: (Docker, String, String)
+    #[future] test_container: (Docker, String, String),
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (docker, _container_id, container_name) = test_container.await;
-    
+
     println!("=== STEP 1: Creating Claude Code client session ===");
-    
+
     // Step 1: Get ClaudeCodeClient session (simulating the session lookup in the command)
     let claude_client = ClaudeCodeClient::for_session(docker.clone(), &container_name).await;
     if claude_client.is_err() {
         return Err(format!("Failed to find session: {:?}", claude_client.unwrap_err()).into());
     }
     let claude_client = claude_client.unwrap();
-    
+
     println!("=== STEP 2: Creating GitHub client from session ===");
-    
+
     // Step 2: Create GitHub client using same pattern as the new command
     let github_client = GithubClient::new(
-        docker.clone(), 
-        claude_client.container_id().to_string(), 
-        GithubClientConfig::default()
+        docker.clone(),
+        claude_client.container_id().to_string(),
+        GithubClientConfig::default(),
     );
-    
+
     println!("=== STEP 3: Testing GitHub auth availability ===");
-    
+
     // Step 3: Check that gh CLI is available (prerequisite for auth)
     let availability_result = github_client.check_availability().await;
     match availability_result {
         Ok(version_output) => {
-            println!("✅ gh CLI availability check successful: {}", version_output);
+            println!(
+                "✅ gh CLI availability check successful: {}",
+                version_output
+            );
             assert!(
-                version_output.contains("gh version"), 
-                "gh CLI must be installed and working. Got: {}", version_output
+                version_output.contains("gh version"),
+                "gh CLI must be installed and working. Got: {}",
+                version_output
             );
         }
         Err(e) => {
             return Err(format!("gh CLI availability check failed: {}", e).into());
         }
     }
-    
+
     println!("=== STEP 4: Testing GitHub authentication status check ===");
-    
+
     // Step 4: Test authentication status check (part of login flow)
     let auth_status_result = github_client.check_auth_status().await;
     match auth_status_result {
         Ok(auth_result) => {
             println!("✅ GitHub auth status check successful");
-            println!("Auth status: authenticated={}, username={:?}, message={}", 
-                     auth_result.authenticated, auth_result.username, auth_result.message);
-            
+            println!(
+                "Auth status: authenticated={}, username={:?}, message={}",
+                auth_result.authenticated, auth_result.username, auth_result.message
+            );
+
             // Should have a valid response structure
-            assert!(!auth_result.message.is_empty(), "Auth status message should not be empty");
-            
+            assert!(
+                !auth_result.message.is_empty(),
+                "Auth status message should not be empty"
+            );
+
             // gh CLI must be working for this test to be valid
-            assert!(!auth_result.message.contains("not found") && 
-                   !auth_result.message.contains("executable file not found"), 
-                   "gh CLI must be installed. Auth status failed with: {}", auth_result.message);
+            assert!(
+                !auth_result.message.contains("not found")
+                    && !auth_result.message.contains("executable file not found"),
+                "gh CLI must be installed. Auth status failed with: {}",
+                auth_result.message
+            );
         }
         Err(e) => {
             return Err(format!("GitHub auth status check failed: {}", e).into());
         }
     }
-    
+
     println!("=== STEP 5: Testing GitHub login initiation (OAuth flow) ===");
-    
+
     // Step 5: Test the login method (core of the new command)
     // Note: In a test environment, this should initiate OAuth flow without completing it
     let login_result = github_client.login().await;
     match login_result {
         Ok(auth_result) => {
             println!("✅ GitHub login initiation successful");
-            println!("Login result: authenticated={}, oauth_url={:?}, device_code={:?}", 
-                     auth_result.authenticated, auth_result.oauth_url, auth_result.device_code);
-            
+            println!(
+                "Login result: authenticated={}, oauth_url={:?}, device_code={:?}",
+                auth_result.authenticated, auth_result.oauth_url, auth_result.device_code
+            );
+
             // Should return a valid response
-            assert!(!auth_result.message.is_empty(), "Login result message should not be empty");
-            
+            assert!(
+                !auth_result.message.is_empty(),
+                "Login result message should not be empty"
+            );
+
             // In test environment, either:
             // 1. Already authenticated (authenticated=true)
             // 2. OAuth flow initiated (oauth_url and device_code provided)
@@ -122,8 +139,14 @@ async fn test_github_auth_command_workflow(
                 println!("Already authenticated with GitHub");
             } else if auth_result.oauth_url.is_some() && auth_result.device_code.is_some() {
                 println!("OAuth flow initiated successfully");
-                assert!(auth_result.oauth_url.unwrap().starts_with("https://"), "OAuth URL should be valid HTTPS URL");
-                assert!(!auth_result.device_code.unwrap().is_empty(), "Device code should not be empty");
+                assert!(
+                    auth_result.oauth_url.unwrap().starts_with("https://"),
+                    "OAuth URL should be valid HTTPS URL"
+                );
+                assert!(
+                    !auth_result.device_code.unwrap().is_empty(),
+                    "Device code should not be empty"
+                );
             } else {
                 println!("Login returned status: {}", auth_result.message);
             }
@@ -131,43 +154,59 @@ async fn test_github_auth_command_workflow(
         Err(e) => {
             // In CI/test environments, login might fail due to missing config or network issues
             // This is acceptable as long as the command structure works
-            println!("⚠️  GitHub login failed (expected in test environment): {}", e);
+            println!(
+                "⚠️  GitHub login failed (expected in test environment): {}",
+                e
+            );
             let error_msg = e.to_string();
-            
+
             // Verify it's not a structural error (wrong command, missing gh CLI, etc.)
-            assert!(!error_msg.contains("command not found"), 
-                   "gh CLI command should exist: {}", error_msg);
-            assert!(!error_msg.contains("executable file not found"), 
-                   "gh CLI executable should exist: {}", error_msg);
+            assert!(
+                !error_msg.contains("command not found"),
+                "gh CLI command should exist: {}",
+                error_msg
+            );
+            assert!(
+                !error_msg.contains("executable file not found"),
+                "gh CLI executable should exist: {}",
+                error_msg
+            );
         }
     }
-    
+
     // Cleanup
     cleanup_container(&docker, &container_name).await;
-    
+
     println!("✅ GitHub authentication command workflow test completed successfully");
-    
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_github_auth_without_session() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn test_github_auth_without_session() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+{
     let docker = Docker::connect_with_socket_defaults()?;
     let non_existent_container = "non-existent-session";
-    
+
     // Test the error handling when no session exists (simulating command behavior)
     let session_result = ClaudeCodeClient::for_session(docker, non_existent_container).await;
-    
+
     // Should fail gracefully
-    assert!(session_result.is_err(), "Should fail when session doesn't exist");
-    
+    assert!(
+        session_result.is_err(),
+        "Should fail when session doesn't exist"
+    );
+
     let error = session_result.unwrap_err();
     println!("Expected error when no session exists: {}", error);
-    
+
     // Error should be descriptive
-    assert!(!error.to_string().is_empty(), "Error message should not be empty");
-    
+    assert!(
+        !error.to_string().is_empty(),
+        "Error message should not be empty"
+    );
+
     Ok(())
 }
 
@@ -178,70 +217,84 @@ async fn test_github_auth_without_session() -> Result<(), Box<dyn std::error::Er
 #[rstest]
 #[tokio::test]
 async fn test_oauth_early_return_flow(
-    #[future] test_container: (Docker, String, String)
+    #[future] test_container: (Docker, String, String),
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (docker, _container_id, container_name) = test_container.await;
-    
+
     println!("=== Testing OAuth flow with early return ===");
-    
+
     // Step 1: Create GitHub client
     let claude_client = ClaudeCodeClient::for_session(docker.clone(), &container_name).await;
     if claude_client.is_err() {
         return Err(format!("Failed to find session: {:?}", claude_client.unwrap_err()).into());
     }
     let claude_client = claude_client.unwrap();
-    
+
     let github_client = GithubClient::new(
-        docker.clone(), 
-        claude_client.container_id().to_string(), 
-        GithubClientConfig::default()
+        docker.clone(),
+        claude_client.container_id().to_string(),
+        GithubClientConfig::default(),
     );
-    
+
     // Step 2: Check GitHub CLI availability
     let availability_result = github_client.check_availability().await;
     match availability_result {
         Ok(version_output) => {
             println!("✅ gh CLI available: {}", version_output);
-            assert!(version_output.contains("gh version"), "gh CLI must be working");
+            assert!(
+                version_output.contains("gh version"),
+                "gh CLI must be working"
+            );
         }
         Err(e) => {
             return Err(format!("gh CLI not available: {}", e).into());
         }
     }
-    
+
     // Step 3: Test the refactored login method
     println!("=== Testing login with early OAuth return ===");
-    
+
     let start_time = std::time::Instant::now();
     let login_result = github_client.login().await;
     let elapsed_time = start_time.elapsed();
-    
+
     match login_result {
         Ok(auth_result) => {
             println!("✅ Login completed in {:?}", elapsed_time);
-            println!("Auth result: authenticated={}, oauth_url={:?}, device_code={:?}", 
-                     auth_result.authenticated, auth_result.oauth_url, auth_result.device_code);
-            
+            println!(
+                "Auth result: authenticated={}, oauth_url={:?}, device_code={:?}",
+                auth_result.authenticated, auth_result.oauth_url, auth_result.device_code
+            );
+
             // Verify result structure
-            assert!(!auth_result.message.is_empty(), "Auth result should have a message");
-            
+            assert!(
+                !auth_result.message.is_empty(),
+                "Auth result should have a message"
+            );
+
             if auth_result.authenticated {
                 println!("Already authenticated with GitHub");
             } else if auth_result.oauth_url.is_some() && auth_result.device_code.is_some() {
                 println!("✅ OAuth flow initiated with early return");
-                
+
                 // Verify OAuth credentials are present
                 let oauth_url = auth_result.oauth_url.unwrap();
                 let device_code = auth_result.device_code.unwrap();
-                
-                assert!(oauth_url.starts_with("https://"), "OAuth URL should be HTTPS");
+
+                assert!(
+                    oauth_url.starts_with("https://"),
+                    "OAuth URL should be HTTPS"
+                );
                 assert!(!device_code.is_empty(), "Device code should not be empty");
-                
+
                 // The key test: login should return quickly with OAuth credentials
                 // rather than waiting for the entire auth process to complete
-                assert!(elapsed_time.as_secs() < 45, 
-                       "Login should return quickly with OAuth credentials, took {:?}", elapsed_time);
-                
+                assert!(
+                    elapsed_time.as_secs() < 45,
+                    "Login should return quickly with OAuth credentials, took {:?}",
+                    elapsed_time
+                );
+
                 println!("✅ OAuth URL: {}", oauth_url);
                 println!("✅ Device code: {}", device_code);
             } else {
@@ -251,72 +304,84 @@ async fn test_oauth_early_return_flow(
         }
         Err(e) => {
             let error_msg = e.to_string();
-            
+
             // In test environments, OAuth might timeout or fail due to no interaction
             // This is acceptable as long as it's not a structural error
             if error_msg.contains("Timeout waiting for OAuth credentials") {
-                println!("⚠️ OAuth timeout (expected in test environment): {}", error_msg);
+                println!(
+                    "⚠️ OAuth timeout (expected in test environment): {}",
+                    error_msg
+                );
                 // This is actually a success case - it means we tried to get OAuth credentials
                 // but timed out waiting for them, which is expected behavior
             } else {
-                println!("⚠️ OAuth failed (possibly expected in test environment): {}", error_msg);
-                
+                println!(
+                    "⚠️ OAuth failed (possibly expected in test environment): {}",
+                    error_msg
+                );
+
                 // Verify it's not a structural error
-                assert!(!error_msg.contains("command not found"), 
-                       "gh CLI command should exist: {}", error_msg);
-                assert!(!error_msg.contains("executable file not found"), 
-                       "gh CLI executable should exist: {}", error_msg);
+                assert!(
+                    !error_msg.contains("command not found"),
+                    "gh CLI command should exist: {}",
+                    error_msg
+                );
+                assert!(
+                    !error_msg.contains("executable file not found"),
+                    "gh CLI executable should exist: {}",
+                    error_msg
+                );
             }
         }
     }
-    
+
     // Cleanup
     cleanup_container(&docker, &container_name).await;
-    
+
     println!("✅ OAuth early return test completed");
-    
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_oauth_process_timeout_behavior(
-    #[future] test_container: (Docker, String, String)
+    #[future] test_container: (Docker, String, String),
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (docker, _container_id, container_name) = test_container.await;
-    
+
     println!("=== Testing OAuth process timeout behavior ===");
-    
+
     // Create GitHub client with very short timeout for this test
     let claude_client = ClaudeCodeClient::for_session(docker.clone(), &container_name).await;
     if claude_client.is_err() {
         return Err(format!("Failed to find session: {:?}", claude_client.unwrap_err()).into());
     }
     let claude_client = claude_client.unwrap();
-    
+
     let config = GithubClientConfig {
         working_directory: Some("/workspace".to_string()),
         exec_timeout_secs: 10, // Very short timeout for this test
     };
-    
+
     let github_client = GithubClient::new(
-        docker.clone(), 
-        claude_client.container_id().to_string(), 
-        config
+        docker.clone(),
+        claude_client.container_id().to_string(),
+        config,
     );
-    
+
     // Test that timeout handling works correctly
     let start_time = std::time::Instant::now();
     let login_result = github_client.login().await;
     let elapsed_time = start_time.elapsed();
-    
+
     println!("Login attempt took {:?}", elapsed_time);
-    
+
     match login_result {
         Ok(auth_result) => {
             // If we get a result, verify it's structured correctly
             assert!(!auth_result.message.is_empty(), "Should have a message");
-            
+
             if auth_result.oauth_url.is_some() && auth_result.device_code.is_some() {
                 println!("✅ Got OAuth credentials quickly");
             } else {
@@ -326,18 +391,21 @@ async fn test_oauth_process_timeout_behavior(
         Err(e) => {
             let error_msg = e.to_string();
             println!("Expected error (timeout or OAuth failure): {}", error_msg);
-            
+
             // Verify the error is related to expected behavior, not structural issues
-            assert!(!error_msg.contains("command not found"), 
-                   "Should not be a command not found error: {}", error_msg);
+            assert!(
+                !error_msg.contains("command not found"),
+                "Should not be a command not found error: {}",
+                error_msg
+            );
         }
     }
-    
+
     // Cleanup
     cleanup_container(&docker, &container_name).await;
-    
+
     println!("✅ OAuth timeout behavior test completed");
-    
+
     Ok(())
 }
 
@@ -348,7 +416,9 @@ async fn test_oauth_process_timeout_behavior(
 #[tokio::test]
 async fn test_github_status_integration() {
     // Initialize logging for this test
-    let _ = pretty_env_logger::formatted_builder().is_test(true).try_init();
+    let _ = pretty_env_logger::formatted_builder()
+        .is_test(true)
+        .try_init();
 
     let docker = Docker::connect_with_socket_defaults()
         .expect("Failed to connect to Docker daemon for testing");
@@ -359,7 +429,14 @@ async fn test_github_status_integration() {
     println!("Starting coding session for GitHub status test...");
 
     // Start a coding session (creates a container with GitHub CLI)
-    let claude_client = match container_utils::start_coding_session(&docker, container_name, config, container_utils::CodingContainerConfig::default()).await {
+    let claude_client = match container_utils::start_coding_session(
+        &docker,
+        container_name,
+        config,
+        container_utils::CodingContainerConfig::default(),
+    )
+    .await
+    {
         Ok(client) => client,
         Err(e) => {
             eprintln!("Failed to start coding session: {}", e);
@@ -385,10 +462,13 @@ async fn test_github_status_integration() {
                 println!("   Username: {}", username);
             }
             println!("   Message: {}", auth_result.message);
-            
+
             // Should not be authenticated initially (unless user has pre-configured auth)
             // Just ensure the call doesn't fail
-            assert!(!auth_result.message.is_empty(), "Status message should not be empty");
+            assert!(
+                !auth_result.message.is_empty(),
+                "Status message should not be empty"
+            );
         }
         Err(e) => {
             eprintln!("❌ GitHub status check failed: {}", e);
@@ -402,10 +482,16 @@ async fn test_github_status_integration() {
     match github_client.check_availability().await {
         Ok(version_info) => {
             println!("✅ GitHub CLI available: {}", version_info);
-            assert!(version_info.contains("gh version"), "Should contain version info");
+            assert!(
+                version_info.contains("gh version"),
+                "Should contain version info"
+            );
         }
         Err(e) => {
-            println!("ℹ️  GitHub CLI not available (expected in some environments): {}", e);
+            println!(
+                "ℹ️  GitHub CLI not available (expected in some environments): {}",
+                e
+            );
             // This is okay - not all test environments have GitHub CLI
         }
     }
@@ -657,16 +743,16 @@ async fn test_github_repo_list(#[future] test_container: (Docker, String, String
             // Expected failure case - user is not authenticated
             let error_msg = e.to_string();
             assert!(
-                error_msg.contains("gh auth login") || 
-                error_msg.contains("authentication") ||
-                error_msg.contains("GH_TOKEN"),
+                error_msg.contains("gh auth login")
+                    || error_msg.contains("authentication")
+                    || error_msg.contains("GH_TOKEN"),
                 "Error should be related to authentication, got: {}",
                 error_msg
             );
             println!("Expected authentication error: {}", error_msg);
         }
     }
-    
+
     // Note: The actual content depends on authentication status and available repositories
     // The important thing is that the command structure is correct and doesn't crash
 }
@@ -750,7 +836,9 @@ async fn test_github_repo_clone_with_target_directory(
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_empty_repository(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_empty_repository(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -786,7 +874,9 @@ async fn test_github_repo_clone_empty_repository(#[future] test_container: (Dock
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_multi_branch_repository(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_multi_branch_repository(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -827,14 +917,14 @@ async fn test_github_repo_clone_malformed_urls(#[future] test_container: (Docker
 
     // Test various malformed repository URLs
     let malformed_repos = vec![
-        "invalid-repo-name",           // Missing owner
-        "owner/",                      // Missing repo name
-        "/repo-name",                  // Missing owner
-        "owner//repo",                 // Double slash
-        "owner/repo/extra",            // Too many parts
-        "",                            // Empty string
-        "owner/repo with spaces",      // Spaces in name
-        "owner/repo@branch",           // Invalid characters
+        "invalid-repo-name",             // Missing owner
+        "owner/",                        // Missing repo name
+        "/repo-name",                    // Missing owner
+        "owner//repo",                   // Double slash
+        "owner/repo/extra",              // Too many parts
+        "",                              // Empty string
+        "owner/repo with spaces",        // Spaces in name
+        "owner/repo@branch",             // Invalid characters
         "https://github.com/owner/repo", // Full URL instead of owner/repo
     ];
 
@@ -847,17 +937,20 @@ async fn test_github_repo_clone_malformed_urls(#[future] test_container: (Docker
             repo,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
-        
+
         // For malformed URLs, the clone should fail
         if repo.is_empty() {
             // Empty string is a special case - might be handled differently
             println!("Empty string clone result: {:?}", clone_response);
         } else {
             // Most malformed URLs should result in failure
-            println!("Malformed URL '{}' clone result: {:?}", repo, clone_response);
-            
+            println!(
+                "Malformed URL '{}' clone result: {:?}",
+                repo, clone_response
+            );
+
             // Verify the repository name matches what was passed
             assert_eq!(clone_response.repository, repo);
             assert!(
@@ -874,7 +967,9 @@ async fn test_github_repo_clone_malformed_urls(#[future] test_container: (Docker
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_target_directory_edge_cases(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_target_directory_edge_cases(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -891,7 +986,7 @@ async fn test_github_repo_clone_target_directory_edge_cases(#[future] test_conta
 
     for (repo, target_dir, description) in test_cases {
         println!("Testing: {}", description);
-        
+
         let clone_result = client.repo_clone(repo, target_dir).await;
 
         assert!(
@@ -900,19 +995,18 @@ async fn test_github_repo_clone_target_directory_edge_cases(#[future] test_conta
             description,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
-        
+
         // Verify the target directory is set correctly
         if let Some(expected_dir) = target_dir {
             assert_eq!(
-                clone_response.target_directory, 
-                expected_dir,
+                clone_response.target_directory, expected_dir,
                 "Target directory should match for case: {}",
                 description
             );
         }
-        
+
         assert_eq!(clone_response.repository, repo);
         assert!(
             !clone_response.message.is_empty(),
@@ -929,7 +1023,9 @@ async fn test_github_repo_clone_target_directory_edge_cases(#[future] test_conta
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_nonexistent_variations(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_nonexistent_variations(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -953,16 +1049,16 @@ async fn test_github_repo_clone_nonexistent_variations(#[future] test_container:
             repo,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
-        
+
         // Should fail for nonexistent repositories
         assert!(
             !clone_response.success,
             "Clone should fail for nonexistent repo: {}",
             repo
         );
-        
+
         assert_eq!(clone_response.repository, repo);
         assert!(
             !clone_response.message.is_empty(),
@@ -973,19 +1069,22 @@ async fn test_github_repo_clone_nonexistent_variations(#[future] test_container:
         // The message should indicate the failure reason
         // With our improved error analysis, we now get more helpful messages
         assert!(
-            clone_response.message.contains("Clone failed") ||
-            clone_response.message.contains("not found") ||
-            clone_response.message.contains("404") ||
-            clone_response.message.contains("repository not found") ||
-            clone_response.message.contains("Repository not found") ||
-            clone_response.message.contains("Authentication required") ||
-            clone_response.message.contains("Permission denied"),
+            clone_response.message.contains("Clone failed")
+                || clone_response.message.contains("not found")
+                || clone_response.message.contains("404")
+                || clone_response.message.contains("repository not found")
+                || clone_response.message.contains("Repository not found")
+                || clone_response.message.contains("Authentication required")
+                || clone_response.message.contains("Permission denied"),
             "Clone failure message should indicate the reason for repo '{}': {}",
             repo,
             clone_response.message
         );
 
-        println!("Nonexistent repo '{}' clone result: {:?}", repo, clone_response);
+        println!(
+            "Nonexistent repo '{}' clone result: {:?}",
+            repo, clone_response
+        );
     }
 
     // Cleanup
@@ -994,7 +1093,9 @@ async fn test_github_repo_clone_nonexistent_variations(#[future] test_container:
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_private_repo_without_auth(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_private_repo_without_auth(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -1015,9 +1116,9 @@ async fn test_github_repo_clone_private_repo_without_auth(#[future] test_contain
             repo,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
-        
+
         // Should likely fail for private repositories without authentication
         // (Note: might succeed if the repo doesn't exist and fails for that reason instead)
         assert_eq!(clone_response.repository, repo);
@@ -1036,7 +1137,9 @@ async fn test_github_repo_clone_private_repo_without_auth(#[future] test_contain
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_concurrent_operations(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_concurrent_operations(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -1067,14 +1170,14 @@ async fn test_github_repo_clone_concurrent_operations(#[future] test_container: 
 
     for (i, result) in results.iter().enumerate() {
         let (expected_repo, expected_target) = &repos[i];
-        
+
         assert!(
             result.is_ok(),
             "Concurrent clone operation {} should return a result: {:?}",
             i,
             result
         );
-        
+
         let clone_response = result.as_ref().unwrap();
         assert_eq!(clone_response.repository, *expected_repo);
         if let Some(target) = expected_target {
@@ -1087,7 +1190,9 @@ async fn test_github_repo_clone_concurrent_operations(#[future] test_container: 
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_special_characters_and_unicode(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_special_characters_and_unicode(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -1095,7 +1200,7 @@ async fn test_github_repo_clone_special_characters_and_unicode(#[future] test_co
     // Test repository names with special characters and edge cases
     let special_repos = vec![
         "user/repo-with-dashes",
-        "user/repo_with_underscores", 
+        "user/repo_with_underscores",
         "user/repo.with.dots",
         "user-with-dashes/repo",
         "user_with_underscores/repo",
@@ -1112,7 +1217,7 @@ async fn test_github_repo_clone_special_characters_and_unicode(#[future] test_co
             repo,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
         assert_eq!(clone_response.repository, repo);
         assert!(
@@ -1121,7 +1226,10 @@ async fn test_github_repo_clone_special_characters_and_unicode(#[future] test_co
             repo
         );
 
-        println!("Special characters repo '{}' clone result: {:?}", repo, clone_response);
+        println!(
+            "Special characters repo '{}' clone result: {:?}",
+            repo, clone_response
+        );
     }
 
     // Test target directories with special characters
@@ -1133,7 +1241,9 @@ async fn test_github_repo_clone_special_characters_and_unicode(#[future] test_co
     ];
 
     for target_dir in special_target_dirs {
-        let clone_result = client.repo_clone("octocat/Hello-World", Some(&target_dir)).await;
+        let clone_result = client
+            .repo_clone("octocat/Hello-World", Some(&target_dir))
+            .await;
 
         assert!(
             clone_result.is_ok(),
@@ -1141,12 +1251,15 @@ async fn test_github_repo_clone_special_characters_and_unicode(#[future] test_co
             target_dir,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
         assert_eq!(clone_response.target_directory, target_dir);
         assert_eq!(clone_response.repository, "octocat/Hello-World");
 
-        println!("Special target dir '{}' clone result: {:?}", target_dir, clone_response);
+        println!(
+            "Special target dir '{}' clone result: {:?}",
+            target_dir, clone_response
+        );
     }
 
     // Cleanup
@@ -1155,7 +1268,9 @@ async fn test_github_repo_clone_special_characters_and_unicode(#[future] test_co
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_large_repository(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_large_repository(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -1174,7 +1289,7 @@ async fn test_github_repo_clone_large_repository(#[future] test_container: (Dock
         "Clone method should return a result for large repo: {:?}",
         clone_result
     );
-    
+
     let clone_response = clone_result.unwrap();
     assert_eq!(clone_response.repository, "torvalds/linux");
     assert_eq!(clone_response.target_directory, "linux-kernel-clone");
@@ -1190,7 +1305,9 @@ async fn test_github_repo_clone_large_repository(#[future] test_container: (Dock
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_case_sensitivity(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_case_sensitivity(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -1212,7 +1329,7 @@ async fn test_github_repo_clone_case_sensitivity(#[future] test_container: (Dock
             repo,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
         assert_eq!(clone_response.repository, repo);
         assert!(
@@ -1230,7 +1347,9 @@ async fn test_github_repo_clone_case_sensitivity(#[future] test_container: (Dock
 
 #[rstest]
 #[tokio::test]
-async fn test_github_repo_clone_target_directory_default_behavior(#[future] test_container: (Docker, String, String)) {
+async fn test_github_repo_clone_target_directory_default_behavior(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
@@ -1251,20 +1370,22 @@ async fn test_github_repo_clone_target_directory_default_behavior(#[future] test
             repo,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
         assert_eq!(clone_response.repository, repo);
-        
+
         // Default target directory should be the repository name (last part after '/')
         let expected_target = repo.split('/').last().unwrap_or(repo);
         assert_eq!(
-            clone_response.target_directory, 
-            expected_target,
+            clone_response.target_directory, expected_target,
             "Default target directory should be repo name for: {}",
             repo
         );
 
-        println!("Default target dir for '{}' result: {:?}", repo, clone_response);
+        println!(
+            "Default target dir for '{}' result: {:?}",
+            repo, clone_response
+        );
     }
 
     // Cleanup
@@ -1315,7 +1436,10 @@ async fn test_github_clone_with_different_working_directories(
         assert_eq!(clone_response.repository, "octocat/Hello-World");
         assert_eq!(clone_response.target_directory, "test-working-dir");
 
-        println!("Working dir {:?} clone result: {:?}", working_dir, clone_response);
+        println!(
+            "Working dir {:?} clone result: {:?}",
+            working_dir, clone_response
+        );
     }
 
     // Cleanup
@@ -1348,7 +1472,10 @@ async fn test_github_clone_with_different_timeouts(
 
         // Test clone operation with this timeout
         let clone_result = client
-            .repo_clone("octocat/Hello-World", Some(&format!("test-timeout-{}", timeout_secs)))
+            .repo_clone(
+                "octocat/Hello-World",
+                Some(&format!("test-timeout-{}", timeout_secs)),
+            )
             .await;
 
         assert!(
@@ -1361,7 +1488,10 @@ async fn test_github_clone_with_different_timeouts(
         let clone_response = clone_result.unwrap();
         assert_eq!(clone_response.repository, "octocat/Hello-World");
 
-        println!("Timeout {}s clone result: {:?}", timeout_secs, clone_response);
+        println!(
+            "Timeout {}s clone result: {:?}",
+            timeout_secs, clone_response
+        );
     }
 
     // Cleanup
@@ -1498,7 +1628,10 @@ async fn test_github_clone_repository_access_patterns(
         ("octocat/Hello-World", "Classic example repository"),
         ("github/gitignore", "Repository with many files"),
         ("microsoft/TypeScript", "Large active repository"),
-        ("torvalds/linux", "Very large repository (should handle gracefully)"),
+        (
+            "torvalds/linux",
+            "Very large repository (should handle gracefully)",
+        ),
         ("rails/rails", "Another large active repository"),
     ];
 
@@ -1547,7 +1680,7 @@ async fn test_github_clone_workflow_integration(
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
 
     // Simulate a complete workflow: check availability -> check auth -> list repos -> clone
-    
+
     // Step 1: Check GitHub CLI availability
     let availability_result = client.check_availability().await;
     assert!(
@@ -1570,10 +1703,16 @@ async fn test_github_clone_workflow_integration(
     let repo_list_result = client.repo_list().await;
     match repo_list_result {
         Ok(repos) => {
-            println!("✅ Step 3: Repository list retrieved: {} chars", repos.len());
+            println!(
+                "✅ Step 3: Repository list retrieved: {} chars",
+                repos.len()
+            );
         }
         Err(e) => {
-            println!("ℹ️ Step 3: Repository list failed (expected if not authenticated): {}", e);
+            println!(
+                "ℹ️ Step 3: Repository list failed (expected if not authenticated): {}",
+                e
+            );
         }
     }
 
@@ -1581,17 +1720,17 @@ async fn test_github_clone_workflow_integration(
     let clone_result = client
         .repo_clone("octocat/Hello-World", Some("workflow-test"))
         .await;
-    
+
     assert!(
         clone_result.is_ok(),
         "Step 4 - Clone operation failed: {:?}",
         clone_result
     );
-    
+
     let clone_response = clone_result.unwrap();
     assert_eq!(clone_response.repository, "octocat/Hello-World");
     assert_eq!(clone_response.target_directory, "workflow-test");
-    
+
     println!("✅ Step 4: Clone operation completed: {:?}", clone_response);
 
     // Step 5: Test multiple clones to different directories
@@ -1609,7 +1748,7 @@ async fn test_github_clone_workflow_integration(
             repo,
             clone_result
         );
-        
+
         let clone_response = clone_result.unwrap();
         assert_eq!(clone_response.target_directory, target);
         println!("✅ Multiple clone {}: {:?}", target, clone_response);
@@ -1628,141 +1767,157 @@ async fn test_github_clone_workflow_integration(
 #[rstest]
 #[tokio::test]
 async fn test_github_exec_timeout_configuration(
-    #[future] test_container: (Docker, String, String)
+    #[future] test_container: (Docker, String, String),
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (docker, container_id, container_name) = test_container.await;
-    
+
     println!("=== Testing GitHub client timeout configuration ===");
-    
+
     // Test with custom short timeout
     let short_timeout_config = GithubClientConfig {
         working_directory: Some("/workspace".to_string()),
         exec_timeout_secs: 2, // Very short timeout for testing
     };
-    
-    let github_client = GithubClient::new(
-        docker.clone(), 
-        container_id.clone(), 
-        short_timeout_config
-    );
-    
+
+    let github_client =
+        GithubClient::new(docker.clone(), container_id.clone(), short_timeout_config);
+
     // Test that a simple command still works with short timeout
     let availability_result = github_client.check_availability().await;
     match availability_result {
         Ok(version_output) => {
-            println!("✅ gh CLI availability check successful with short timeout: {}", version_output);
+            println!(
+                "✅ gh CLI availability check successful with short timeout: {}",
+                version_output
+            );
         }
         Err(e) => {
             let error_msg = e.to_string();
             if error_msg.contains("timed out after 2 seconds") {
                 println!("⏰ Command timed out as expected with 2 second timeout");
-            } else if error_msg.contains("not found") || error_msg.contains("executable file not found") {
-                println!("⚠️ gh CLI not available in test environment (expected): {}", error_msg);
+            } else if error_msg.contains("not found")
+                || error_msg.contains("executable file not found")
+            {
+                println!(
+                    "⚠️ gh CLI not available in test environment (expected): {}",
+                    error_msg
+                );
             } else {
                 println!("ℹ️ Other error occurred: {}", error_msg);
             }
         }
     }
-    
+
     // Test with default timeout
     let default_config = GithubClientConfig::default();
-    assert_eq!(default_config.exec_timeout_secs, 60, "Default timeout should be 60 seconds");
-    
-    let _github_client_default = GithubClient::new(
-        docker.clone(), 
-        container_id.clone(), 
-        default_config
+    assert_eq!(
+        default_config.exec_timeout_secs, 60,
+        "Default timeout should be 60 seconds"
     );
-    
+
+    let _github_client_default =
+        GithubClient::new(docker.clone(), container_id.clone(), default_config);
+
     // Verify default timeout is configured correctly
     println!("✅ Default timeout configuration verified: {} seconds", 60);
-    
+
     // Test that error messages include timeout information when timeouts occur
     // This is a structural test - we're testing that the error format is correct
     let simulated_timeout_error = format!(
-        "Command timed out after {} seconds: {}", 
+        "Command timed out after {} seconds: {}",
         2,
         vec!["gh", "auth", "login"].join(" ")
     );
-    
+
     assert!(simulated_timeout_error.contains("timed out after 2 seconds"));
     assert!(simulated_timeout_error.contains("gh auth login"));
     println!("✅ Timeout error message format verified");
-    
+
     // Cleanup
     cleanup_container(&docker, &container_name).await;
-    
+
     println!("✅ GitHub client timeout configuration test completed successfully");
-    
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_github_timeout_error_handling(
-    #[future] test_container: (Docker, String, String)
+    #[future] test_container: (Docker, String, String),
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (docker, container_id, container_name) = test_container.await;
-    
+
     println!("=== Testing timeout error handling behavior ===");
-    
+
     // Create client with very short timeout to force timeout scenarios
     let timeout_config = GithubClientConfig {
         working_directory: Some("/workspace".to_string()),
         exec_timeout_secs: 1, // 1 second timeout to trigger timeouts
     };
-    
-    let github_client = GithubClient::new(
-        docker.clone(), 
-        container_id.clone(), 
-        timeout_config
-    );
-    
+
+    let github_client = GithubClient::new(docker.clone(), container_id.clone(), timeout_config);
+
     // Test auth status check with timeout
     let auth_status_result = github_client.check_auth_status().await;
     match auth_status_result {
         Ok(auth_result) => {
             // Command completed quickly enough
             println!("✅ Auth status check completed within timeout");
-            assert!(!auth_result.message.is_empty(), "Auth result should have a message");
+            assert!(
+                !auth_result.message.is_empty(),
+                "Auth result should have a message"
+            );
         }
         Err(e) => {
             let error_msg = e.to_string();
             if error_msg.contains("timed out after 1 seconds") {
                 println!("✅ Auth status check timed out as expected: {}", error_msg);
-                assert!(error_msg.contains("gh auth status"), "Error should mention the command that timed out");
+                assert!(
+                    error_msg.contains("gh auth status"),
+                    "Error should mention the command that timed out"
+                );
             } else {
-                println!("ℹ️ Auth status check failed for other reason: {}", error_msg);
+                println!(
+                    "ℹ️ Auth status check failed for other reason: {}",
+                    error_msg
+                );
                 // This is acceptable - might be gh CLI not available, etc.
             }
         }
     }
-    
+
     // Test login with timeout (this is the main case from the issue)
     let login_result = github_client.login().await;
     match login_result {
         Ok(auth_result) => {
             // Login completed quickly enough or was already authenticated
             println!("✅ Login completed within timeout");
-            assert!(!auth_result.message.is_empty(), "Login result should have a message");
+            assert!(
+                !auth_result.message.is_empty(),
+                "Login result should have a message"
+            );
         }
         Err(e) => {
             let error_msg = e.to_string();
             if error_msg.contains("timed out after 1 seconds") {
                 println!("✅ Login timed out as expected: {}", error_msg);
-                assert!(error_msg.contains("gh auth login"), "Error should mention the login command");
+                assert!(
+                    error_msg.contains("gh auth login"),
+                    "Error should mention the login command"
+                );
             } else {
                 println!("ℹ️ Login failed for other reason: {}", error_msg);
                 // This is acceptable - might be gh CLI not available, auth already failed, etc.
             }
         }
     }
-    
+
     // Cleanup
     cleanup_container(&docker, &container_name).await;
-    
+
     println!("✅ GitHub timeout error handling test completed successfully");
-    
+
     Ok(())
 }
 
@@ -1772,40 +1927,60 @@ async fn test_github_timeout_error_handling(
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_success(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_success(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
 
     // Test successful command execution
-    let result = client.exec_command_allow_failure(vec!["echo".to_string(), "hello".to_string()]).await;
+    let result = client
+        .exec_command_allow_failure(vec!["echo".to_string(), "hello".to_string()])
+        .await;
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 
-    assert!(result.is_ok(), "Command should execute successfully: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Command should execute successfully: {:?}",
+        result
+    );
     let (output, success) = result.unwrap();
-    
+
     assert!(success, "Command should be marked as successful");
     assert_eq!(output.trim(), "hello", "Output should match expected value");
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_command_failure(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_command_failure(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
 
     // Test failing command execution (exit code != 0)
-    let result = client.exec_command_allow_failure(vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()]).await;
+    let result = client
+        .exec_command_allow_failure(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "exit 1".to_string(),
+        ])
+        .await;
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 
-    assert!(result.is_ok(), "Method should return Ok even for failing commands: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Method should return Ok even for failing commands: {:?}",
+        result
+    );
     let (output, success) = result.unwrap();
-    
+
     assert!(!success, "Command should be marked as failed");
     // Output might be empty for simple exit commands
     println!("Failed command output: '{}'", output);
@@ -1813,77 +1988,118 @@ async fn test_exec_command_allow_failure_command_failure(#[future] test_containe
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_stderr_capture(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_stderr_capture(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
 
     // Test command that outputs to stderr
-    let result = client.exec_command_allow_failure(vec![
-        "sh".to_string(), 
-        "-c".to_string(), 
-        "echo 'error output' >&2".to_string()
-    ]).await;
+    let result = client
+        .exec_command_allow_failure(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo 'error output' >&2".to_string(),
+        ])
+        .await;
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 
-    assert!(result.is_ok(), "Command should execute successfully: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Command should execute successfully: {:?}",
+        result
+    );
     let (output, success) = result.unwrap();
-    
+
     assert!(success, "Command should be marked as successful");
-    assert!(output.contains("error output"), "Output should contain stderr content: '{}'", output);
+    assert!(
+        output.contains("error output"),
+        "Output should contain stderr content: '{}'",
+        output
+    );
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_mixed_output(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_mixed_output(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
 
     // Test command that outputs to both stdout and stderr
-    let result = client.exec_command_allow_failure(vec![
-        "sh".to_string(), 
-        "-c".to_string(), 
-        "echo 'stdout line'; echo 'stderr line' >&2".to_string()
-    ]).await;
+    let result = client
+        .exec_command_allow_failure(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo 'stdout line'; echo 'stderr line' >&2".to_string(),
+        ])
+        .await;
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 
-    assert!(result.is_ok(), "Command should execute successfully: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Command should execute successfully: {:?}",
+        result
+    );
     let (output, success) = result.unwrap();
-    
+
     assert!(success, "Command should be marked as successful");
-    assert!(output.contains("stdout line"), "Output should contain stdout: '{}'", output);
-    assert!(output.contains("stderr line"), "Output should contain stderr: '{}'", output);
+    assert!(
+        output.contains("stdout line"),
+        "Output should contain stdout: '{}'",
+        output
+    );
+    assert!(
+        output.contains("stderr line"),
+        "Output should contain stderr: '{}'",
+        output
+    );
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_nonexistent_command(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_nonexistent_command(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
 
     // Test execution of nonexistent command
-    let result = client.exec_command_allow_failure(vec!["nonexistent-command-12345".to_string()]).await;
+    let result = client
+        .exec_command_allow_failure(vec!["nonexistent-command-12345".to_string()])
+        .await;
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 
-    assert!(result.is_ok(), "Method should return Ok even for nonexistent commands: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Method should return Ok even for nonexistent commands: {:?}",
+        result
+    );
     let (output, success) = result.unwrap();
-    
+
     assert!(!success, "Nonexistent command should be marked as failed");
-    assert!(!output.is_empty(), "Output should contain error message about nonexistent command");
+    assert!(
+        !output.is_empty(),
+        "Output should contain error message about nonexistent command"
+    );
     println!("Nonexistent command output: '{}'", output);
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_working_directory(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_working_directory(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     // Test with custom working directory
@@ -1892,21 +2108,33 @@ async fn test_exec_command_allow_failure_working_directory(#[future] test_contai
     let client = GithubClient::new(docker.clone(), container_id, config);
 
     // Test command that shows current working directory
-    let result = client.exec_command_allow_failure(vec!["pwd".to_string()]).await;
+    let result = client
+        .exec_command_allow_failure(vec!["pwd".to_string()])
+        .await;
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 
-    assert!(result.is_ok(), "Command should execute successfully: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Command should execute successfully: {:?}",
+        result
+    );
     let (output, success) = result.unwrap();
-    
+
     assert!(success, "Command should be marked as successful");
-    assert!(output.contains("/tmp"), "Command should run in specified working directory: '{}'", output);
+    assert!(
+        output.contains("/tmp"),
+        "Command should run in specified working directory: '{}'",
+        output
+    );
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_timeout_behavior(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_timeout_behavior(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     // Test with very short timeout to trigger timeout behavior
@@ -1915,49 +2143,77 @@ async fn test_exec_command_allow_failure_timeout_behavior(#[future] test_contain
     let client = GithubClient::new(docker.clone(), container_id, config);
 
     // Test command that takes longer than timeout
-    let result = client.exec_command_allow_failure(vec![
-        "sleep".to_string(), 
-        "2".to_string()
-    ]).await;
+    let result = client
+        .exec_command_allow_failure(vec!["sleep".to_string(), "2".to_string()])
+        .await;
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 
     // This should return an error due to timeout
-    assert!(result.is_err(), "Long-running command should timeout and return error");
+    assert!(
+        result.is_err(),
+        "Long-running command should timeout and return error"
+    );
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("timed out"), "Error should mention timeout: '{}'", error_msg);
-    assert!(error_msg.contains("sleep 2"), "Error should mention the command: '{}'", error_msg);
+    assert!(
+        error_msg.contains("timed out"),
+        "Error should mention timeout: '{}'",
+        error_msg
+    );
+    assert!(
+        error_msg.contains("sleep 2"),
+        "Error should mention the command: '{}'",
+        error_msg
+    );
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_environment_variables(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_environment_variables(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
 
     // Test that environment variables are set correctly (HOME and PATH)
-    let result = client.exec_command_allow_failure(vec![
-        "sh".to_string(), 
-        "-c".to_string(), 
-        "echo \"HOME=$HOME\" && echo \"PATH=$PATH\"".to_string()
-    ]).await;
+    let result = client
+        .exec_command_allow_failure(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo \"HOME=$HOME\" && echo \"PATH=$PATH\"".to_string(),
+        ])
+        .await;
 
     // Cleanup
     cleanup_container(&docker, &container_name).await;
 
-    assert!(result.is_ok(), "Command should execute successfully: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Command should execute successfully: {:?}",
+        result
+    );
     let (output, success) = result.unwrap();
-    
+
     assert!(success, "Command should be marked as successful");
-    assert!(output.contains("HOME=/root"), "HOME should be set to /root: '{}'", output);
-    assert!(output.contains("PATH=") && output.contains("/usr/local/bin"), "PATH should contain standard paths: '{}'", output);
+    assert!(
+        output.contains("HOME=/root"),
+        "HOME should be set to /root: '{}'",
+        output
+    );
+    assert!(
+        output.contains("PATH=") && output.contains("/usr/local/bin"),
+        "PATH should contain standard paths: '{}'",
+        output
+    );
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_exec_command_allow_failure_empty_command(#[future] test_container: (Docker, String, String)) {
+async fn test_exec_command_allow_failure_empty_command(
+    #[future] test_container: (Docker, String, String),
+) {
     let (docker, container_id, container_name) = test_container.await;
 
     let client = GithubClient::new(docker.clone(), container_id, GithubClientConfig::default());
