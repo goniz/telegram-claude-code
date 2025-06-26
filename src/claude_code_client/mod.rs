@@ -1,5 +1,5 @@
-use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
+use bollard::exec::{CreateExecOptions, StartExecOptions};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
@@ -101,7 +101,7 @@ impl ClaudeCodeClient {
     pub fn new(docker: Docker, container_id: String, config: ClaudeCodeConfig) -> Self {
         let storage_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let oauth_client = ClaudeAuth::with_file_storage(config.oauth_config.clone(), storage_dir);
-        
+
         Self {
             docker,
             container_id,
@@ -190,7 +190,8 @@ impl ClaudeCodeClient {
 
         // Clone necessary data for the background task
         let storage_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let oauth_client = ClaudeAuth::with_file_storage(self.config.oauth_config.clone(), storage_dir);
+        let oauth_client =
+            ClaudeAuth::with_file_storage(self.config.oauth_config.clone(), storage_dir);
         let docker = self.docker.clone();
         let container_id = self.container_id.clone();
 
@@ -203,7 +204,8 @@ impl ClaudeCodeClient {
                 state_sender,
                 code_receiver,
                 cancel_receiver,
-            ).await;
+            )
+            .await;
         });
 
         Ok(AuthenticationHandle {
@@ -224,7 +226,10 @@ impl ClaudeCodeClient {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Duration;
 
-        log::debug!("Starting OAuth authentication flow for container: {}", container_id);
+        log::debug!(
+            "Starting OAuth authentication flow for container: {}",
+            container_id
+        );
 
         // Send starting state
         let _ = state_sender.send(AuthState::Starting);
@@ -237,7 +242,10 @@ impl ClaudeCodeClient {
             }
             Err(e) => {
                 log::error!("Failed to generate OAuth login URL: {}", e);
-                let _ = state_sender.send(AuthState::Failed(format!("Failed to generate login URL: {}", e)));
+                let _ = state_sender.send(AuthState::Failed(format!(
+                    "Failed to generate login URL: {}",
+                    e
+                )));
                 return Err(e.into());
             }
         };
@@ -315,11 +323,14 @@ impl ClaudeCodeClient {
             }
             Ok(Err(e)) => {
                 log::error!("Error during OAuth authentication: {}", e);
-                let _ = state_sender.send(AuthState::Failed(format!("Authentication error: {}", e)));
+                let _ =
+                    state_sender.send(AuthState::Failed(format!("Authentication error: {}", e)));
             }
             Err(_) => {
                 log::warn!("OAuth authentication timed out after 5 minutes");
-                let _ = state_sender.send(AuthState::Failed("Authentication timed out after 5 minutes".to_string()));
+                let _ = state_sender.send(AuthState::Failed(
+                    "Authentication timed out after 5 minutes".to_string(),
+                ));
             }
         }
 
@@ -332,7 +343,7 @@ impl ClaudeCodeClient {
         credentials: &Credentials,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         log::debug!("Checking OAuth credentials validity");
-        
+
         // Try to use the credentials with Claude Code
         match self.setup_oauth_credentials(credentials).await {
             Ok(_) => {
@@ -343,7 +354,9 @@ impl ClaudeCodeClient {
                         Ok(true)
                     }
                     Ok(false) => {
-                        log::warn!("OAuth credentials exist but Claude Code reports not authenticated");
+                        log::warn!(
+                            "OAuth credentials exist but Claude Code reports not authenticated"
+                        );
                         Ok(false)
                     }
                     Err(e) => {
@@ -378,8 +391,7 @@ impl ClaudeCodeClient {
         // Copy credentials file into container
         let copy_command = format!(
             "docker cp {} {}:/root/.claude/credentials.json",
-            temp_path,
-            self.container_id
+            temp_path, self.container_id
         );
 
         let copy_result = tokio::process::Command::new("sh")
@@ -402,7 +414,7 @@ impl ClaudeCodeClient {
             "600".to_string(),
             "/root/.claude/credentials.json".to_string(),
         ];
-        
+
         self.exec_command(chmod_command).await?;
 
         log::info!("Successfully setup OAuth credentials in container");
@@ -413,13 +425,16 @@ impl ClaudeCodeClient {
     pub async fn check_auth_status(
         &self,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        log::debug!("Checking Claude authentication status for container: {}", self.container_id);
-        
+        log::debug!(
+            "Checking Claude authentication status for container: {}",
+            self.container_id
+        );
+
         // First, check if OAuth credentials exist and are valid
         match self.oauth_client.load_credentials().await {
             Ok(Some(credentials)) if !credentials.is_expired() => {
                 log::debug!("Found valid OAuth credentials");
-                
+
                 // Test with Claude Code status command
                 let status_command = vec![
                     "claude".to_string(),
@@ -431,7 +446,7 @@ impl ClaudeCodeClient {
                 match self.exec_command(status_command).await {
                     Ok(output) => {
                         log::debug!("Claude status command output: '{}'", output);
-                        
+
                         match self.parse_result(output) {
                             Ok(result) => {
                                 let is_authenticated = !result.is_error;
@@ -496,9 +511,11 @@ impl ClaudeCodeClient {
     }
 
     /// Refresh OAuth credentials if they are expired but refresh token is valid
-    pub async fn refresh_credentials(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn refresh_credentials(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         log::debug!("Attempting to refresh OAuth credentials");
-        
+
         match self.oauth_client.load_credentials().await {
             Ok(Some(credentials)) if credentials.is_expired() => {
                 log::info!("Credentials are expired, but refresh is not implemented yet");
@@ -529,9 +546,7 @@ impl ClaudeCodeClient {
     }
 
     /// Update Claude CLI to latest version
-    pub async fn update_claude(
-        &self,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn update_claude(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec![
             "sh".to_string(),
             "-c".to_string(),
@@ -545,8 +560,12 @@ impl ClaudeCodeClient {
         &self,
         command: Vec<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        log::debug!("Executing command in container {}: {:?}", self.container_id, command);
-        
+        log::debug!(
+            "Executing command in container {}: {:?}",
+            self.container_id,
+            command
+        );
+
         let exec_config = CreateExecOptions {
             cmd: Some(command.clone()),
             attach_stdout: Some(true),
@@ -564,16 +583,27 @@ impl ClaudeCodeClient {
             ..Default::default()
         };
 
-        log::debug!("Creating exec for container {} with working_dir: {:?}", 
-            self.container_id, self.config.working_directory);
+        log::debug!(
+            "Creating exec for container {} with working_dir: {:?}",
+            self.container_id,
+            self.config.working_directory
+        );
 
-        let exec = match self.docker.create_exec(&self.container_id, exec_config).await {
+        let exec = match self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await
+        {
             Ok(exec) => {
                 log::debug!("Successfully created exec with ID: {}", exec.id);
                 exec
             }
             Err(e) => {
-                log::error!("Failed to create exec for container {}: {}", self.container_id, e);
+                log::error!(
+                    "Failed to create exec for container {}: {}",
+                    self.container_id,
+                    e
+                );
                 return Err(e.into());
             }
         };
@@ -618,11 +648,11 @@ impl ClaudeCodeClient {
         // Check the exit code of the executed command
         let exec_inspect = self.docker.inspect_exec(&exec.id).await?;
         let exit_code = exec_inspect.exit_code.unwrap_or(-1);
-        
+
         log::debug!("Command completed with exit code: {}", exit_code);
         log::debug!("Command total output length: {} chars", output.len());
         log::debug!("Command stderr length: {} chars", stderr_output.len());
-        
+
         if exit_code != 0 {
             log::warn!("Command failed with exit code {}", exit_code);
             log::debug!("Failed command output: '{}'", output.trim());
@@ -687,12 +717,14 @@ impl ClaudeCodeClient {
 
     /// Create a client with custom OAuth configuration
     pub fn with_oauth_config(
-        docker: Docker, 
-        container_id: String, 
-        oauth_config: OAuthConfig
+        docker: Docker,
+        container_id: String,
+        oauth_config: OAuthConfig,
     ) -> Self {
-        let mut config = ClaudeCodeConfig::default();
-        config.oauth_config = oauth_config;
+        let config = ClaudeCodeConfig {
+            oauth_config,
+            ..Default::default()
+        };
         Self::new(docker, container_id, config)
     }
 }

@@ -1,13 +1,13 @@
 //! Claude Code OAuth 2.0 Authentication Library
-//! 
+//!
 //! This library provides OAuth 2.0 authentication for Claude Code using the
 //! Authorization Code flow with PKCE (Proof Key for Code Exchange).
-//! 
+//!
 //! # Examples
-//! 
+//!
 //! ```no_run
 //! use claude_oauth::{ClaudeAuth, Config};
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let config = Config::default();
@@ -31,7 +31,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,7 @@ impl Default for Config {
             redirect_uri: "https://console.anthropic.com/oauth/code/callback".to_string(),
             scopes: vec![
                 "org:create_api_key".to_string(),
-                "user:profile".to_string(), 
+                "user:profile".to_string(),
                 "user:inference".to_string(),
             ],
             state_expiry_seconds: 600,
@@ -92,12 +92,12 @@ struct TokenResponse {
 }
 
 /// Claude OAuth credentials - maintains exact JSON compatibility with TypeScript implementation
-/// 
+///
 /// When serialized to JSON, produces:
 /// ```json
 /// {
 ///   "accessToken": "...",
-///   "refreshToken": "...", 
+///   "refreshToken": "...",
 ///   "expiresAt": 1234567890000,
 ///   "scopes": ["user:inference", "user:profile"],
 ///   "isMax": true
@@ -109,7 +109,7 @@ pub struct Credentials {
     #[serde(rename = "accessToken")]
     pub access_token: String,
     /// OAuth refresh token - serialized as "refreshToken" in JSON
-    #[serde(rename = "refreshToken")]  
+    #[serde(rename = "refreshToken")]
     pub refresh_token: String,
     /// Token expiration timestamp in milliseconds - serialized as "expiresAt" in JSON
     #[serde(rename = "expiresAt")]
@@ -130,14 +130,14 @@ impl Credentials {
             .unwrap_or(0);
         current_time >= self.expires_at
     }
-    
+
     /// Get time until token expiration in seconds
     pub fn expires_in_seconds(&self) -> Option<u64> {
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        
+
         if current_time < self.expires_at {
             Some((self.expires_at - current_time) / 1000)
         } else {
@@ -147,7 +147,7 @@ impl Credentials {
 }
 
 /// Credentials file format - maintains exact JSON compatibility with TypeScript implementation
-/// 
+///
 /// When serialized to JSON, produces:
 /// ```json
 /// {
@@ -210,16 +210,16 @@ pub enum OAuthError {
 pub trait CredStorageOps: Send + Sync {
     /// Load credentials from storage
     async fn load_credentials(&self) -> Result<Option<Vec<u8>>, OAuthError>;
-    
+
     /// Save credentials to storage
     async fn save_credentials(&self, data: Vec<u8>) -> Result<(), OAuthError>;
-    
+
     /// Load OAuth state from storage
     async fn load_state(&self) -> Result<Option<Vec<u8>>, OAuthError>;
-    
+
     /// Save OAuth state to storage
     async fn save_state(&self, data: Vec<u8>) -> Result<(), OAuthError>;
-    
+
     /// Remove OAuth state from storage
     async fn remove_state(&self) -> Result<(), OAuthError>;
 }
@@ -245,13 +245,13 @@ impl CredStorageOps for FileStorage {
             Err(e) => Err(OAuthError::IoError(e)),
         }
     }
-    
+
     async fn save_credentials(&self, data: Vec<u8>) -> Result<(), OAuthError> {
         let file_path = self.storage_dir.join("credentials.json");
         tokio::fs::write(&file_path, data).await?;
         Ok(())
     }
-    
+
     async fn load_state(&self) -> Result<Option<Vec<u8>>, OAuthError> {
         let file_path = self.storage_dir.join("claude_oauth_state.json");
         match tokio::fs::read(&file_path).await {
@@ -260,13 +260,13 @@ impl CredStorageOps for FileStorage {
             Err(e) => Err(OAuthError::IoError(e)),
         }
     }
-    
+
     async fn save_state(&self, data: Vec<u8>) -> Result<(), OAuthError> {
         let file_path = self.storage_dir.join("claude_oauth_state.json");
         tokio::fs::write(&file_path, data).await?;
         Ok(())
     }
-    
+
     async fn remove_state(&self) -> Result<(), OAuthError> {
         let file_path = self.storage_dir.join("claude_oauth_state.json");
         match tokio::fs::remove_file(&file_path).await {
@@ -294,6 +294,12 @@ impl std::fmt::Debug for ClaudeAuth {
     }
 }
 
+impl Default for ClaudeAuth {
+    fn default() -> Self {
+        Self::new_default()
+    }
+}
+
 impl ClaudeAuth {
     /// Create a new OAuth client with the given configuration and storage
     pub fn new(config: Config, storage: Box<dyn CredStorageOps>) -> Self {
@@ -301,39 +307,39 @@ impl ClaudeAuth {
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
             .build()
             .expect("Failed to create HTTP client");
-            
-        Self { 
-            config, 
+
+        Self {
+            config,
             http_client,
             storage,
         }
     }
-    
+
     /// Create a new OAuth client with default configuration and file storage
-    pub fn default() -> Self {
+    pub fn new_default() -> Self {
         let storage_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self::with_file_storage(Config::default(), storage_dir)
     }
-    
+
     /// Create a new OAuth client with file-based storage
     pub fn with_file_storage(config: Config, storage_dir: PathBuf) -> Self {
         Self::new(config, Box::new(FileStorage::new(storage_dir)))
     }
-    
+
     /// Create a new OAuth client with custom storage
     pub fn with_custom_storage(config: Config, storage: Box<dyn CredStorageOps>) -> Self {
         Self::new(config, storage)
     }
-    
+
     /// Generate a secure OAuth login URL
     pub async fn generate_login_url(&self) -> Result<String, OAuthError> {
         let (state, code_verifier) = self.generate_secure_params()?;
         let code_challenge = self.create_pkce_challenge(&code_verifier)?;
-        
+
         self.save_oauth_state(&state, &code_verifier).await?;
-        
+
         let mut url = Url::parse(&self.config.authorize_url)?;
-            
+
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("code", "true");
@@ -345,17 +351,17 @@ impl ClaudeAuth {
             query.append_pair("code_challenge_method", "S256");
             query.append_pair("state", &state);
         }
-        
+
         Ok(url.to_string())
     }
-    
+
     /// Exchange authorization code for access tokens
     pub async fn exchange_code(&self, authorization_code: &str) -> Result<Credentials, OAuthError> {
         let cleaned_code = self.clean_authorization_code(authorization_code);
         let oauth_state = self.load_oauth_state().await?;
-        
+
         self.verify_oauth_state(&oauth_state)?;
-        
+
         let request = TokenExchangeRequest {
             grant_type: "authorization_code".to_string(),
             client_id: self.config.client_id.clone(),
@@ -364,8 +370,9 @@ impl ClaudeAuth {
             code_verifier: oauth_state.code_verifier,
             state: oauth_state.state,
         };
-        
-        let response = self.http_client
+
+        let response = self
+            .http_client
             .post(&self.config.token_url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/plain, */*")
@@ -375,31 +382,34 @@ impl ClaudeAuth {
             .json(&request)
             .send()
             .await?;
-            
+
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(OAuthError::TokenExchangeFailed(format!(
-                "{} - {}", status, error_text
+                "{} - {}",
+                status, error_text
             )));
         }
-        
+
         let token_response: TokenResponse = response.json().await?;
         self.create_credentials(token_response).await
     }
-    
+
     /// Save credentials
     pub async fn save_credentials(&self, credentials: &Credentials) -> Result<(), OAuthError> {
         let credentials_file = CredentialsFile {
             claude_ai_oauth: credentials.clone(),
         };
-        
+
         let json_content = serde_json::to_string_pretty(&credentials_file)?;
-        self.storage.save_credentials(json_content.into_bytes()).await?;
-        
+        self.storage
+            .save_credentials(json_content.into_bytes())
+            .await?;
+
         Ok(())
     }
-    
+
     /// Load credentials
     pub async fn load_credentials(&self) -> Result<Option<Credentials>, OAuthError> {
         let content = match self.storage.load_credentials().await? {
@@ -407,76 +417,76 @@ impl ClaudeAuth {
                 .map_err(|e| OAuthError::CustomHandlerError(format!("Invalid UTF-8: {}", e)))?,
             None => return Ok(None),
         };
-        
+
         let credentials_file: CredentialsFile = serde_json::from_str(&content)?;
         Ok(Some(credentials_file.claude_ai_oauth))
     }
-    
+
     /// Clean up OAuth state file after successful authentication
     pub async fn cleanup_state(&self) -> Result<(), OAuthError> {
         self.storage.remove_state().await?;
         Ok(())
     }
-    
+
     // Private helper methods
-    
+
     fn generate_secure_params(&self) -> Result<(String, String), OAuthError> {
         let mut rng = rand::thread_rng();
         let mut state_bytes = [0u8; 32];
         let mut code_verifier_bytes = [0u8; 32];
-        
+
         rng.fill_bytes(&mut state_bytes);
         rng.fill_bytes(&mut code_verifier_bytes);
-        
+
         let state = hex::encode(state_bytes);
         let code_verifier = URL_SAFE_NO_PAD.encode(code_verifier_bytes);
-        
+
         Ok((state, code_verifier))
     }
-    
+
     fn create_pkce_challenge(&self, code_verifier: &str) -> Result<String, OAuthError> {
         let mut hasher = Sha256::new();
         hasher.update(code_verifier.as_bytes());
         Ok(URL_SAFE_NO_PAD.encode(hasher.finalize()))
     }
-    
+
     async fn save_oauth_state(&self, state: &str, code_verifier: &str) -> Result<(), OAuthError> {
         let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        
+
         let oauth_state = OAuthState {
             state: state.to_string(),
             code_verifier: code_verifier.to_string(),
             timestamp: current_time,
             expires_at: current_time + self.config.state_expiry_seconds,
         };
-        
+
         let json_content = serde_json::to_string_pretty(&oauth_state)?;
         self.storage.save_state(json_content.into_bytes()).await?;
-        
+
         Ok(())
     }
-    
+
     async fn load_oauth_state(&self) -> Result<OAuthState, OAuthError> {
         let content = match self.storage.load_state().await? {
             Some(bytes) => String::from_utf8(bytes)
                 .map_err(|e| OAuthError::CustomHandlerError(format!("Invalid UTF-8: {}", e)))?,
             None => return Err(OAuthError::StateNotFound),
         };
-            
+
         let oauth_state: OAuthState = serde_json::from_str(&content)?;
         Ok(oauth_state)
     }
-    
+
     fn verify_oauth_state(&self, oauth_state: &OAuthState) -> Result<(), OAuthError> {
         let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        
+
         if current_time > oauth_state.expires_at {
             return Err(OAuthError::InvalidState);
         }
-        
+
         Ok(())
     }
-    
+
     fn clean_authorization_code(&self, auth_code: &str) -> String {
         auth_code
             .split('#')
@@ -487,14 +497,18 @@ impl ClaudeAuth {
             .unwrap_or(auth_code)
             .to_string()
     }
-    
-    async fn create_credentials(&self, token_response: TokenResponse) -> Result<Credentials, OAuthError> {
+
+    async fn create_credentials(
+        &self,
+        token_response: TokenResponse,
+    ) -> Result<Credentials, OAuthError> {
         let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        
-        let scopes = token_response.scope
+
+        let scopes = token_response
+            .scope
             .map(|s| s.split(' ').map(|s| s.to_string()).collect())
             .unwrap_or_else(|| vec!["user:inference".to_string(), "user:profile".to_string()]);
-        
+
         Ok(Credentials {
             access_token: token_response.access_token,
             refresh_token: token_response.refresh_token,

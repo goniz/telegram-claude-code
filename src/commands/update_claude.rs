@@ -1,6 +1,6 @@
-use teloxide::{prelude::*, types::ParseMode};
-use crate::{escape_markdown_v2, BotState};
+use crate::{BotState, escape_markdown_v2};
 use telegram_bot::claude_code_client::ClaudeCodeClient;
+use teloxide::{prelude::*, types::ParseMode};
 
 /// Handle the /updateclaude command
 pub async fn handle_update_claude(
@@ -23,11 +23,8 @@ pub async fn handle_update_claude(
 
             match client.update_claude().await {
                 Ok(output) => {
-                    let message = format!(
-                        "✅ Claude CLI Update Complete\n\n{}", 
-                        output
-                    );
-                    
+                    let message = format!("✅ Claude CLI Update Complete\n\n{}", output);
+
                     bot.send_message(msg.chat.id, escape_markdown_v2(&message))
                         .parse_mode(ParseMode::MarkdownV2)
                         .await?;

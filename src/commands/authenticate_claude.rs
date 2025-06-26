@@ -1,9 +1,9 @@
-use teloxide::{prelude::*, types::{ChatId, ParseMode}};
-use crate::{
-    escape_markdown_v2, BotState, AuthSession,
-    handle_auth_state_updates
+use crate::{AuthSession, BotState, escape_markdown_v2, handle_auth_state_updates};
+use telegram_bot::claude_code_client::{AuthenticationHandle, ClaudeCodeClient};
+use teloxide::{
+    prelude::*,
+    types::{ChatId, ParseMode},
 };
-use telegram_bot::claude_code_client::{ClaudeCodeClient, AuthenticationHandle};
 
 /// Check if there's an existing authentication session
 async fn check_existing_auth_session(

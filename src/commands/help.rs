@@ -1,6 +1,6 @@
-use teloxide::{prelude::*, types::ParseMode};
-use crate::{escape_markdown_v2, Command, BotState};
+use crate::{BotState, Command, escape_markdown_v2};
 use teloxide::utils::command::BotCommands;
+use teloxide::{prelude::*, types::ParseMode};
 
 /// Generate help text in BotFather format from command descriptions
 pub fn generate_help_text() -> String {

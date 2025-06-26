@@ -1,9 +1,16 @@
-use teloxide::{prelude::*, types::{InputFile, ParseMode}};
-use std::path::Path;
 use crate::{escape_markdown_v2, find_claude_auth_log_file};
+use std::path::Path;
+use teloxide::{
+    prelude::*,
+    types::{InputFile, ParseMode},
+};
 
 /// Handle the /debugclaudelogin command
-pub async fn handle_debug_claude_login(bot: Bot, msg: Message, _chat_id: i64) -> ResponseResult<()> {
+pub async fn handle_debug_claude_login(
+    bot: Bot,
+    msg: Message,
+    _chat_id: i64,
+) -> ResponseResult<()> {
     // Send initial message
     bot.send_message(
         msg.chat.id,
