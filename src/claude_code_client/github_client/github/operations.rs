@@ -160,7 +160,7 @@ impl GitHubOperations {
     }
 
     /// Execute a command and return both output and success status
-    async fn exec_command_allow_failure(
+    pub async fn exec_command_allow_failure(
         &self,
         command: Vec<String>,
     ) -> Result<(String, bool), Box<dyn std::error::Error + Send + Sync>> {

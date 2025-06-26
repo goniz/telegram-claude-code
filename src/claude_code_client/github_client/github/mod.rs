@@ -80,4 +80,13 @@ impl GithubClient {
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         self.operations.exec_basic_command(command).await
     }
+
+    /// Execute a command and return both output and success status (used in tests)
+    #[allow(dead_code)]
+    pub async fn exec_command_allow_failure(
+        &self,
+        command: Vec<String>,
+    ) -> Result<(String, bool), Box<dyn std::error::Error + Send + Sync>> {
+        self.operations.exec_command_allow_failure(command).await
+    }
 }
