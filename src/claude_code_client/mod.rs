@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod auth;
 pub mod config;
+pub mod container;
 pub mod container_cred_storage;
 pub mod container_utils;
 pub mod executor;

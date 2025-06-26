@@ -2,6 +2,7 @@ use bollard::Docker;
 use rstest::*;
 use std::env;
 use std::time::Duration;
+use telegram_bot::claude_code_client::container::generate_volume_name;
 use telegram_bot::claude_code_client::ClaudeCodeResult;
 use telegram_bot::container_utils::CodingContainerConfig;
 use telegram_bot::{container_utils, AuthState, ClaudeCodeClient, ClaudeCodeConfig};
@@ -29,7 +30,7 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
     let _ = container_utils::clear_coding_session(docker, container_name).await;
 
     // Clean up volume
-    let volume_name = container_utils::generate_volume_name(&user_id.to_string());
+    let volume_name = generate_volume_name(&user_id.to_string());
     let _ = docker.remove_volume(&volume_name, None).await;
 }
 
