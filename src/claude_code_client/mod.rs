@@ -99,7 +99,8 @@ pub struct ClaudeCodeClient {
 impl ClaudeCodeClient {
     /// Create a new Claude Code client for the specified container
     pub fn new(docker: Docker, container_id: String, config: ClaudeCodeConfig) -> Self {
-        let oauth_client = ClaudeAuth::new(config.oauth_config.clone());
+        let storage_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let oauth_client = ClaudeAuth::with_file_storage(config.oauth_config.clone(), storage_dir);
         
         Self {
             docker,
@@ -188,7 +189,8 @@ impl ClaudeCodeClient {
         let (cancel_sender, cancel_receiver) = oneshot::channel();
 
         // Clone necessary data for the background task
-        let oauth_client = ClaudeAuth::new(self.config.oauth_config.clone());
+        let storage_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let oauth_client = ClaudeAuth::with_file_storage(self.config.oauth_config.clone(), storage_dir);
         let docker = self.docker.clone();
         let container_id = self.container_id.clone();
 

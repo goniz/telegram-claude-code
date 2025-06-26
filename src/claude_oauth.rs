@@ -52,8 +52,6 @@ pub struct Config {
     pub redirect_uri: String,
     /// OAuth scopes to request
     pub scopes: Vec<String>,
-    /// Directory to store state and credential files
-    pub storage_dir: PathBuf,
     /// State expiration time in seconds (default: 600 = 10 minutes)
     pub state_expiry_seconds: u64,
 }
@@ -70,7 +68,6 @@ impl Default for Config {
                 "user:profile".to_string(), 
                 "user:inference".to_string(),
             ],
-            storage_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             state_expiry_seconds: 600,
         }
     }
@@ -204,29 +201,128 @@ pub enum OAuthError {
     UrlError(#[from] url::ParseError),
     #[error("General error: {0}")]
     GeneralError(#[from] anyhow::Error),
+    #[error("Custom handler error: {0}")]
+    CustomHandlerError(String),
+}
+
+/// Trait for credential storage operations
+#[async_trait::async_trait]
+pub trait CredStorageOps: Send + Sync {
+    /// Load credentials from storage
+    async fn load_credentials(&self) -> Result<Option<Vec<u8>>, OAuthError>;
+    
+    /// Save credentials to storage
+    async fn save_credentials(&self, data: Vec<u8>) -> Result<(), OAuthError>;
+    
+    /// Load OAuth state from storage
+    async fn load_state(&self) -> Result<Option<Vec<u8>>, OAuthError>;
+    
+    /// Save OAuth state to storage
+    async fn save_state(&self, data: Vec<u8>) -> Result<(), OAuthError>;
+    
+    /// Remove OAuth state from storage
+    async fn remove_state(&self) -> Result<(), OAuthError>;
+}
+
+/// File-based storage implementation
+pub struct FileStorage {
+    storage_dir: PathBuf,
+}
+
+impl FileStorage {
+    pub fn new(storage_dir: PathBuf) -> Self {
+        Self { storage_dir }
+    }
+}
+
+#[async_trait::async_trait]
+impl CredStorageOps for FileStorage {
+    async fn load_credentials(&self) -> Result<Option<Vec<u8>>, OAuthError> {
+        let file_path = self.storage_dir.join("credentials.json");
+        match tokio::fs::read(&file_path).await {
+            Ok(content) => Ok(Some(content)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(OAuthError::IoError(e)),
+        }
+    }
+    
+    async fn save_credentials(&self, data: Vec<u8>) -> Result<(), OAuthError> {
+        let file_path = self.storage_dir.join("credentials.json");
+        tokio::fs::write(&file_path, data).await?;
+        Ok(())
+    }
+    
+    async fn load_state(&self) -> Result<Option<Vec<u8>>, OAuthError> {
+        let file_path = self.storage_dir.join("claude_oauth_state.json");
+        match tokio::fs::read(&file_path).await {
+            Ok(content) => Ok(Some(content)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(OAuthError::IoError(e)),
+        }
+    }
+    
+    async fn save_state(&self, data: Vec<u8>) -> Result<(), OAuthError> {
+        let file_path = self.storage_dir.join("claude_oauth_state.json");
+        tokio::fs::write(&file_path, data).await?;
+        Ok(())
+    }
+    
+    async fn remove_state(&self) -> Result<(), OAuthError> {
+        let file_path = self.storage_dir.join("claude_oauth_state.json");
+        match tokio::fs::remove_file(&file_path).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(OAuthError::IoError(e)),
+        }
+    }
 }
 
 /// Main OAuth authentication client
-#[derive(Debug)]
 pub struct ClaudeAuth {
     config: Config,
     http_client: Client,
+    storage: Box<dyn CredStorageOps>,
+}
+
+impl std::fmt::Debug for ClaudeAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeAuth")
+            .field("config", &self.config)
+            .field("http_client", &"<http_client>")
+            .field("storage", &"<storage>")
+            .finish()
+    }
 }
 
 impl ClaudeAuth {
-    /// Create a new OAuth client with the given configuration
-    pub fn new(config: Config) -> Self {
+    /// Create a new OAuth client with the given configuration and storage
+    pub fn new(config: Config, storage: Box<dyn CredStorageOps>) -> Self {
         let http_client = Client::builder()
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
             .build()
             .expect("Failed to create HTTP client");
             
-        Self { config, http_client }
+        Self { 
+            config, 
+            http_client,
+            storage,
+        }
     }
     
-    /// Create a new OAuth client with default configuration
+    /// Create a new OAuth client with default configuration and file storage
     pub fn default() -> Self {
-        Self::new(Config::default())
+        let storage_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::with_file_storage(Config::default(), storage_dir)
+    }
+    
+    /// Create a new OAuth client with file-based storage
+    pub fn with_file_storage(config: Config, storage_dir: PathBuf) -> Self {
+        Self::new(config, Box::new(FileStorage::new(storage_dir)))
+    }
+    
+    /// Create a new OAuth client with custom storage
+    pub fn with_custom_storage(config: Config, storage: Box<dyn CredStorageOps>) -> Self {
+        Self::new(config, storage)
     }
     
     /// Generate a secure OAuth login URL
@@ -292,41 +388,34 @@ impl ClaudeAuth {
         self.create_credentials(token_response).await
     }
     
-    /// Save credentials to file
+    /// Save credentials
     pub async fn save_credentials(&self, credentials: &Credentials) -> Result<(), OAuthError> {
         let credentials_file = CredentialsFile {
             claude_ai_oauth: credentials.clone(),
         };
         
-        let file_path = self.config.storage_dir.join("credentials.json");
         let json_content = serde_json::to_string_pretty(&credentials_file)?;
+        self.storage.save_credentials(json_content.into_bytes()).await?;
         
-        tokio::fs::write(&file_path, json_content).await?;
         Ok(())
     }
     
-    /// Load credentials from file  
+    /// Load credentials
     pub async fn load_credentials(&self) -> Result<Option<Credentials>, OAuthError> {
-        let file_path = self.config.storage_dir.join("credentials.json");
+        let content = match self.storage.load_credentials().await? {
+            Some(bytes) => String::from_utf8(bytes)
+                .map_err(|e| OAuthError::CustomHandlerError(format!("Invalid UTF-8: {}", e)))?,
+            None => return Ok(None),
+        };
         
-        match tokio::fs::read_to_string(&file_path).await {
-            Ok(content) => {
-                let credentials_file: CredentialsFile = serde_json::from_str(&content)?;
-                Ok(Some(credentials_file.claude_ai_oauth))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(OAuthError::IoError(e)),
-        }
+        let credentials_file: CredentialsFile = serde_json::from_str(&content)?;
+        Ok(Some(credentials_file.claude_ai_oauth))
     }
     
     /// Clean up OAuth state file after successful authentication
     pub async fn cleanup_state(&self) -> Result<(), OAuthError> {
-        let state_file = self.config.storage_dir.join("claude_oauth_state.json");
-        match tokio::fs::remove_file(&state_file).await {
-            Ok(_) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(OAuthError::IoError(e)),
-        }
+        self.storage.remove_state().await?;
+        Ok(())
     }
     
     // Private helper methods
@@ -361,18 +450,18 @@ impl ClaudeAuth {
             expires_at: current_time + self.config.state_expiry_seconds,
         };
         
-        let state_file = self.config.storage_dir.join("claude_oauth_state.json");
         let json_content = serde_json::to_string_pretty(&oauth_state)?;
+        self.storage.save_state(json_content.into_bytes()).await?;
         
-        tokio::fs::write(&state_file, json_content).await?;
         Ok(())
     }
     
     async fn load_oauth_state(&self) -> Result<OAuthState, OAuthError> {
-        let state_file = self.config.storage_dir.join("claude_oauth_state.json");
-        
-        let content = tokio::fs::read_to_string(&state_file).await
-            .map_err(|_| OAuthError::StateNotFound)?;
+        let content = match self.storage.load_state().await? {
+            Some(bytes) => String::from_utf8(bytes)
+                .map_err(|e| OAuthError::CustomHandlerError(format!("Invalid UTF-8: {}", e)))?,
+            None => return Err(OAuthError::StateNotFound),
+        };
             
         let oauth_state: OAuthState = serde_json::from_str(&content)?;
         Ok(oauth_state)
