@@ -363,17 +363,6 @@ impl ClaudeCodeClient {
         credentials: &Credentials,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         log::debug!("Setting up OAuth credentials in container");
-        
-        // Create credentials directory in container
-        let mkdir_command = vec![
-            "mkdir".to_string(),
-            "-p".to_string(),
-            "/workspace/.claude".to_string(),
-        ];
-        
-        if let Err(e) = self.exec_command(mkdir_command).await {
-            log::warn!("Failed to create credentials directory (may already exist): {}", e);
-        }
 
         // Write credentials to file in the container
         let credentials_json = serde_json::to_string_pretty(&serde_json::json!({
@@ -386,7 +375,7 @@ impl ClaudeCodeClient {
 
         // Copy credentials file into container
         let copy_command = format!(
-            "docker cp {} {}:/workspace/.claude/credentials.json",
+            "docker cp {} {}:/root/.claude/credentials.json",
             temp_path,
             self.container_id
         );
@@ -409,7 +398,7 @@ impl ClaudeCodeClient {
         let chmod_command = vec![
             "chmod".to_string(),
             "600".to_string(),
-            "/workspace/.claude/credentials.json".to_string(),
+            "/root/.claude/credentials.json".to_string(),
         ];
         
         self.exec_command(chmod_command).await?;
@@ -569,8 +558,6 @@ impl ClaudeCodeClient {
                     .to_string(),
                 // Ensure Node.js modules are available
                 "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
-                // Set Claude credentials path
-                "CLAUDE_CREDENTIALS_PATH=/workspace/.claude/credentials.json".to_string(),
             ]),
             ..Default::default()
         };
