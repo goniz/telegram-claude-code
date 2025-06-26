@@ -2,8 +2,8 @@ use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
 use futures_util::{Stream, StreamExt};
 use std::pin::Pin;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::config::ClaudeCodeConfig;
 
@@ -151,7 +151,10 @@ impl CommandExecutor {
     pub async fn exec_streaming_command(
         &self,
         command: Vec<String>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, String>> + Send>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<String, String>> + Send>>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         log::debug!(
             "Executing streaming command in container {}: {:?}",
             self.container_id,
@@ -219,7 +222,7 @@ impl CommandExecutor {
                 }) => {
                     log::debug!("Successfully attached to streaming exec {}", exec_id);
                     let mut line_buffer = String::new();
-                    
+
                     while let Some(result) = output_stream.next().await {
                         match result {
                             Ok(msg) => {
@@ -234,12 +237,12 @@ impl CommandExecutor {
                                 };
 
                                 line_buffer.push_str(&content);
-                                
+
                                 // Process complete lines
                                 while let Some(newline_pos) = line_buffer.find('\n') {
                                     let line = line_buffer[..newline_pos].to_string();
                                     line_buffer = line_buffer[newline_pos + 1..].to_string();
-                                    
+
                                     if !line.trim().is_empty() {
                                         log::debug!("Streaming output line: '{}'", line.trim());
                                         if tx.send(Ok(line)).is_err() {
@@ -256,17 +259,20 @@ impl CommandExecutor {
                             }
                         }
                     }
-                    
+
                     // Send any remaining content in buffer
                     if !line_buffer.trim().is_empty() {
                         log::debug!("Streaming final line: '{}'", line_buffer.trim());
                         let _ = tx.send(Ok(line_buffer));
                     }
-                    
+
                     log::debug!("Streaming exec {} completed", exec_id);
                 }
                 Ok(bollard::exec::StartExecResults::Detached) => {
-                    log::error!("Unexpected detached execution for streaming exec {}", exec_id);
+                    log::error!(
+                        "Unexpected detached execution for streaming exec {}",
+                        exec_id
+                    );
                     let _ = tx.send(Err("Unexpected detached execution".to_string()));
                 }
                 Err(e) => {

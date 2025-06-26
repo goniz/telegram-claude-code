@@ -191,7 +191,10 @@ impl ClaudeCodeClient {
     pub async fn exec_streaming_command(
         &self,
         command: Vec<String>,
-    ) -> Result<std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<String, String>> + Send>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<
+        std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<String, String>> + Send>>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         self.executor.exec_streaming_command(command).await
     }
 }

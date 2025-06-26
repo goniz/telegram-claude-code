@@ -2130,7 +2130,6 @@ async fn test_exec_command_allow_failure_working_directory(
     );
 }
 
-
 #[rstest]
 #[tokio::test]
 async fn test_exec_command_allow_failure_environment_variables(
