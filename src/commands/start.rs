@@ -2,10 +2,8 @@ use teloxide::{
     prelude::*,
     types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode}
 };
-use crate::{
-    escape_markdown_v2, BotState,
-    claude_code_client::{container_utils, ClaudeCodeConfig, ClaudeCodeClient, GithubClient, GithubClientConfig}
-};
+use crate::{escape_markdown_v2, BotState};
+use telegram_bot::claude_code_client::{container_utils, ClaudeCodeConfig, ClaudeCodeClient, GithubClient, GithubClientConfig};
 
 /// Handle the /start command with enhanced workflow
 pub async fn handle_start(bot: Bot, msg: Message, bot_state: BotState, chat_id: i64, user_id: i64) -> ResponseResult<()> {

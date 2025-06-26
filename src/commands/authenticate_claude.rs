@@ -1,9 +1,9 @@
 use teloxide::{prelude::*, types::{ChatId, ParseMode}};
 use crate::{
     escape_markdown_v2, BotState, AuthSession,
-    claude_code_client::{ClaudeCodeClient, AuthenticationHandle},
     handle_auth_state_updates
 };
+use telegram_bot::claude_code_client::{ClaudeCodeClient, AuthenticationHandle};
 
 /// Check if there's an existing authentication session
 async fn check_existing_auth_session(
@@ -58,13 +58,14 @@ pub async fn handle_claude_authentication(
                     let AuthenticationHandle {
                         state_receiver,
                         code_sender,
-                        cancel_sender: _cancel_sender,
+                        cancel_sender, // No longer prefixed with _
                     } = auth_handle;
 
                     // Store authentication session
                     let session = AuthSession {
                         container_name: container_name.clone(),
                         code_sender: code_sender.clone(),
+                        cancel_sender, // Store the cancel_sender
                     };
 
                     {

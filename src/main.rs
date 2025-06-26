@@ -11,17 +11,15 @@ use teloxide::{
     types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
     utils::command::BotCommands,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot, mpsc};
 use url::Url;
 
-mod claude_code_client;
 mod commands;
 
-use claude_code_client::{
-    container_utils, AuthState, ClaudeCodeClient, ClaudeCodeConfig,
+use telegram_bot::claude_code_client::{
+    container_utils, AuthState, ClaudeCodeClient,
     GithubClient, GithubClientConfig,
 };
-use tokio::sync::mpsc;
 
 /// Escape reserved characters for Telegram MarkdownV2 formatting
 /// According to Telegram's MarkdownV2 spec, these characters must be escaped:
@@ -76,11 +74,12 @@ enum Command {
 }
 
 // Authentication session state
-#[derive(Debug, Clone)]
+#[derive(Debug)] // Removed Clone
 #[allow(dead_code)]
 struct AuthSession {
     container_name: String,
     code_sender: mpsc::UnboundedSender<String>,
+    cancel_sender: oneshot::Sender<()>,
 }
 
 // Global state for tracking authentication sessions
@@ -299,17 +298,17 @@ async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> Res
     let chat_id = msg.chat.id.0;
 
     if let Some(text) = msg.text() {
-        // Check if there's an active authentication session
-        let session = {
+        // Check if there's an active authentication session and get the code_sender if it exists
+        let code_sender_clone = {
             let sessions = bot_state.auth_sessions.lock().await;
-            sessions.get(&chat_id).cloned()
+            sessions.get(&chat_id).map(|s| s.code_sender.clone())
         };
 
-        if let Some(auth_session) = session {
-            // Check if the text looks like an authentication code
+        if let Some(code_sender) = code_sender_clone {
+            // An auth session exists for this chat_id
             if commands::authenticate_claude::is_authentication_code(text) {
                 // Send the code to the authentication process
-                if let Err(_) = auth_session.code_sender.send(text.to_string()) {
+                if let Err(_) = code_sender.send(text.to_string()) {
                     bot.send_message(
                         msg.chat.id,
                         "❌ Failed to send authentication code\\. The authentication session may \
@@ -328,7 +327,7 @@ async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> Res
                     .await?;
                 }
             } else {
-                // Not an auth code, inform user about the ongoing session
+                // Not an auth code, but an auth session is active. Inform user.
                 bot.send_message(
                     msg.chat.id,
                     "🔐 *Authentication in Progress*\n\nI'm currently waiting for your \
@@ -339,7 +338,8 @@ async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> Res
                 .await?;
             }
         }
-        // If no auth session is active, we don't respond to regular text messages
+        // If code_sender_clone was None, it means no auth session is active for this user.
+        // In this case, we don't respond to regular text messages, so no 'else' block needed here.
     }
 
     Ok(())
