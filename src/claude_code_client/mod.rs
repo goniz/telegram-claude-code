@@ -3,7 +3,6 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
-use std::path::PathBuf;
 
 pub mod container_utils;
 pub mod github_client;

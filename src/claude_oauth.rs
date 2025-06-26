@@ -40,6 +40,7 @@ use tokio;
 use url::Url;
 
 /// Default OAuth configuration for Claude Code
+#[derive(Clone, Debug)]
 pub struct Config {
     /// OAuth authorization URL
     pub authorize_url: String,
@@ -206,6 +207,7 @@ pub enum OAuthError {
 }
 
 /// Main OAuth authentication client
+#[derive(Debug)]
 pub struct ClaudeAuth {
     config: Config,
     http_client: Client,

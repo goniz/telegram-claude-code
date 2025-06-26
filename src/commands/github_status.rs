@@ -2,10 +2,8 @@ use teloxide::{
     prelude::*,
     types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode}
 };
-use crate::{
-    escape_markdown_v2, BotState,
-    claude_code_client::{ClaudeCodeClient, GithubClient, GithubClientConfig}
-};
+use crate::{escape_markdown_v2, BotState};
+use telegram_bot::claude_code_client::{ClaudeCodeClient, GithubClient, GithubClientConfig};
 
 /// Handle the /githubstatus command
 pub async fn handle_github_status(
