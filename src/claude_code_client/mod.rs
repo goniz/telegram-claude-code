@@ -6,9 +6,11 @@ use tokio::sync::{mpsc, oneshot};
 
 pub mod container_utils;
 pub mod github_client;
+pub mod container_cred_storage;
 
 #[allow(unused_imports)]
 pub use github_client::{GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult};
+pub use container_cred_storage::ContainerCredStorage;
 
 // Re-export OAuth types from claude_oauth module
 pub use crate::claude_oauth::{ClaudeAuth, Config as OAuthConfig, Credentials, OAuthError};
