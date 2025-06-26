@@ -1,8 +1,44 @@
 use crate::{escape_markdown_v2, BotState};
 use telegram_bot::claude_code_client::ClaudeCodeClient;
-use teloxide::{prelude::*, types::ParseMode};
+use teloxide::{prelude::*, types::{ParseMode, MessageId}};
 use serde::{Deserialize, Serialize};
 use serde_json;
+use futures_util::StreamExt;
+use std::time::{Duration, Instant};
+use tokio::time;
+
+/// Live message state for real-time updates
+#[derive(Debug)]
+struct LiveMessage {
+    message_id: MessageId,
+    content: String,
+    last_update: Instant,
+    is_finalized: bool,
+}
+
+impl LiveMessage {
+    fn new(message_id: MessageId, content: String) -> Self {
+        Self {
+            message_id,
+            content,
+            last_update: Instant::now(),
+            is_finalized: false,
+        }
+    }
+
+    fn should_update(&self) -> bool {
+        !self.is_finalized && self.last_update.elapsed() > Duration::from_millis(500)
+    }
+
+    fn update_content(&mut self, new_content: String) {
+        self.content = new_content;
+        self.last_update = Instant::now();
+    }
+
+    fn finalize(&mut self) {
+        self.is_finalized = true;
+    }
+}
 
 /// Claude CLI streaming JSON message types
 #[derive(Debug, Deserialize, Serialize)]
@@ -148,18 +184,33 @@ pub async fn execute_claude_command(
     // Build the claude command arguments
     let cmd_args = build_claude_command_args(prompt, conversation_id.as_deref());
 
-    // For now, execute and get the complete output
-    // TODO: Implement streaming execution
-    let output = client.exec_basic_command(cmd_args).await?;
-    
-    // Process and send the output, getting back the updated conversation ID
-    let updated_conversation_id = process_claude_output(bot, chat_id, output).await?;
-    
-    // Update the conversation ID in bot state if we got one
-    if let Some(conv_id) = updated_conversation_id {
-        let mut sessions = bot_state.claude_sessions.lock().await;
-        if let Some(session) = sessions.get_mut(&chat_id.0) {
-            session.conversation_id = Some(conv_id);
+    // Try streaming execution first, fallback to batch processing
+    match client.exec_streaming_command(cmd_args.clone()).await {
+        Ok(mut stream) => {
+            log::info!("Using streaming execution for Claude command");
+            let updated_conversation_id = process_claude_stream(bot, chat_id, &mut stream).await?;
+            
+            // Update the conversation ID in bot state if we got one
+            if let Some(conv_id) = updated_conversation_id {
+                let mut sessions = bot_state.claude_sessions.lock().await;
+                if let Some(session) = sessions.get_mut(&chat_id.0) {
+                    session.conversation_id = Some(conv_id);
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("Streaming execution failed, falling back to batch processing: {}", e);
+            // Fallback to non-streaming
+            let output = client.exec_basic_command(cmd_args).await?;
+            let updated_conversation_id = process_claude_output(bot, chat_id, output).await?;
+            
+            // Update the conversation ID in bot state if we got one
+            if let Some(conv_id) = updated_conversation_id {
+                let mut sessions = bot_state.claude_sessions.lock().await;
+                if let Some(session) = sessions.get_mut(&chat_id.0) {
+                    session.conversation_id = Some(conv_id);
+                }
+            }
         }
     }
     
@@ -297,6 +348,251 @@ pub async fn process_claude_output(
     
     // Return the conversation ID so the caller can update bot state
     Ok(conversation_id)
+}
+
+/// Process Claude streaming output in real-time
+pub async fn process_claude_stream(
+    bot: Bot,
+    chat_id: ChatId,
+    stream: &mut std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<String, String>> + Send>>,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut conversation_id: Option<String> = None;
+    let mut current_response_message: Option<LiveMessage> = None;
+    let mut system_initialized = false;
+    
+    // Send typing indicator
+    bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await?;
+    
+    // Set up periodic typing indicator
+    let typing_bot = bot.clone();
+    let typing_chat_id = chat_id;
+    let typing_handle = tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            if typing_bot.send_chat_action(typing_chat_id, teloxide::types::ChatAction::Typing).await.is_err() {
+                break;
+            }
+        }
+    });
+    
+    while let Some(line_result) = stream.next().await {
+        match line_result {
+            Ok(line) => {
+                if let Some(updated_id) = process_streaming_json_line(
+                    bot.clone(), 
+                    chat_id, 
+                    &line, 
+                    &mut current_response_message, 
+                    &mut system_initialized
+                ).await? {
+                    conversation_id = Some(updated_id);
+                }
+            }
+            Err(e) => {
+                log::error!("Error in streaming: {}", e);
+                // Send error message
+                bot.send_message(
+                    chat_id,
+                    format!("❌ *Streaming error:* {}", escape_markdown_v2(&e))
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+                break;
+            }
+        }
+    }
+    
+    // Stop typing indicator
+    typing_handle.abort();
+    
+    // Finalize any pending message
+    if let Some(mut live_msg) = current_response_message {
+        if !live_msg.content.trim().is_empty() && !live_msg.is_finalized {
+            live_msg.finalize();
+            bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+        }
+    }
+    
+    Ok(conversation_id)
+}
+
+/// Process a single JSON line from streaming output
+async fn process_streaming_json_line(
+    bot: Bot,
+    chat_id: ChatId,
+    line: &str,
+    current_response_message: &mut Option<LiveMessage>,
+    system_initialized: &mut bool,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(None);
+    }
+    
+    match serde_json::from_str::<ClaudeMessage>(line) {
+        Ok(message) => {
+            match message {
+                ClaudeMessage::System { session_id, subtype, .. } => {
+                    if subtype == "init" && !*system_initialized {
+                        bot.send_message(chat_id, "🤖 *Claude session initialized*")
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                        *system_initialized = true;
+                    }
+                    Ok(session_id)
+                }
+                ClaudeMessage::Assistant { message: assistant_msg, session_id } => {
+                    if let Some(content_blocks) = assistant_msg.content {
+                        for block in content_blocks {
+                            match block {
+                                ContentBlock::Text { text } => {
+                                    update_or_create_response_message(
+                                        bot.clone(), 
+                                        chat_id, 
+                                        &escape_markdown_v2(&text), 
+                                        current_response_message
+                                    ).await?;
+                                }
+                                ContentBlock::ToolUse { name, input, .. } => {
+                                    let input_str = input
+                                        .map(|v| serde_json::to_string_pretty(&v).unwrap_or_default())
+                                        .unwrap_or_default();
+                                    let tool_message = format!(
+                                        "🔧 *Using tool: {}*\n```json\n{}\n```",
+                                        escape_markdown_v2(&name),
+                                        escape_markdown_v2(&input_str)
+                                    );
+                                    
+                                    bot.send_message(chat_id, tool_message)
+                                        .parse_mode(ParseMode::MarkdownV2)
+                                        .await?;
+                                }
+                            }
+                        }
+                    }
+                    Ok(session_id)
+                }
+                ClaudeMessage::User { message: user_msg, session_id } => {
+                    if let Some(content) = user_msg.content {
+                        for tool_result in content {
+                            if let Some(result_content) = tool_result.content {
+                                let result_message = format!(
+                                    "📋 *Tool result:*\n```\n{}\n```",
+                                    escape_markdown_v2(&result_content)
+                                );
+                                
+                                bot.send_message(chat_id, result_message)
+                                    .parse_mode(ParseMode::MarkdownV2)
+                                    .await?;
+                            }
+                        }
+                    }
+                    Ok(session_id)
+                }
+                ClaudeMessage::Result { result, session_id, is_error, total_cost_usd, duration_ms, num_turns, .. } => {
+                    // Finalize current response message if any
+                    if let Some(mut live_msg) = current_response_message.take() {
+                        if !live_msg.content.trim().is_empty() {
+                            live_msg.finalize();
+                            bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
+                                .parse_mode(ParseMode::MarkdownV2)
+                                .await?;
+                        }
+                    }
+                    
+                    // Send final result if different from current response
+                    if is_error {
+                        let error_message = format!("❌ *Error:*\n{}", escape_markdown_v2(&result));
+                        bot.send_message(chat_id, error_message)
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                    }
+                    
+                    // Send session summary
+                    let mut summary_parts = Vec::new();
+                    if let Some(cost) = total_cost_usd {
+                        if cost > 0.0 {
+                            summary_parts.push(format!("💰 ${:.4}", cost));
+                        }
+                    }
+                    if let Some(duration) = duration_ms {
+                        summary_parts.push(format!("⏱️ {}ms", duration));
+                    }
+                    if let Some(turns) = num_turns {
+                        summary_parts.push(format!("🔄 {} turns", turns));
+                    }
+                    
+                    if !summary_parts.is_empty() {
+                        let summary_message = format!(
+                            "📊 *Session: {}*",
+                            escape_markdown_v2(&summary_parts.join(" • "))
+                        );
+                        bot.send_message(chat_id, summary_message)
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                    }
+                    
+                    Ok(Some(session_id))
+                }
+            }
+        }
+        Err(_) => {
+            // If JSON parsing fails, treat as plain text and append to current response
+            if !line.is_empty() {
+                let plain_text = format!("```\n{}\n```", escape_markdown_v2(line));
+                update_or_create_response_message(
+                    bot, 
+                    chat_id, 
+                    &plain_text, 
+                    current_response_message
+                ).await?;
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// Update existing response message or create a new one
+async fn update_or_create_response_message(
+    bot: Bot,
+    chat_id: ChatId,
+    new_content: &str,
+    current_response_message: &mut Option<LiveMessage>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match current_response_message {
+        Some(live_msg) => {
+            // Append to existing message
+            if !live_msg.content.trim().is_empty() {
+                live_msg.update_content(format!("{}\n\n{}", live_msg.content, new_content));
+            } else {
+                live_msg.update_content(new_content.to_string());
+            }
+            
+            // Update message if enough time has passed
+            if live_msg.should_update() {
+                bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
+                live_msg.last_update = Instant::now();
+            }
+        }
+        None => {
+            // Create new message
+            let sent_message = bot.send_message(chat_id, new_content)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            
+            *current_response_message = Some(LiveMessage::new(
+                sent_message.id,
+                new_content.to_string(),
+            ));
+        }
+    }
+    
+    Ok(())
 }
 
 /// Build Claude command arguments for execution
