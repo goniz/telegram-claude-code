@@ -30,9 +30,14 @@ impl LiveMessage {
         !self.is_finalized && self.last_update.elapsed() > Duration::from_millis(500)
     }
 
-    fn update_content(&mut self, new_content: String) {
-        self.content = new_content;
-        self.last_update = Instant::now();
+    fn update_content(&mut self, new_content: String) -> bool {
+        if self.content != new_content {
+            self.content = new_content;
+            self.last_update = Instant::now();
+            true
+        } else {
+            false
+        }
     }
 
     fn finalize(&mut self) {
@@ -410,9 +415,21 @@ pub async fn process_claude_stream(
     if let Some(mut live_msg) = current_response_message {
         if !live_msg.content.trim().is_empty() && !live_msg.is_finalized {
             live_msg.finalize();
-            bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
+            match bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
                 .parse_mode(ParseMode::MarkdownV2)
-                .await?;
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if error_msg.contains("message is not modified") {
+                        log::debug!("Final message content unchanged, skipping edit");
+                    } else {
+                        log::error!("Failed to finalize message: {}", e);
+                        return Err(e.into());
+                    }
+                }
+            }
         }
     }
     
@@ -497,9 +514,19 @@ async fn process_streaming_json_line(
                     if let Some(mut live_msg) = current_response_message.take() {
                         if !live_msg.content.trim().is_empty() {
                             live_msg.finalize();
-                            bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
+                            match bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
                                 .parse_mode(ParseMode::MarkdownV2)
-                                .await?;
+                                .await
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    let error_msg = e.to_string();
+                                    if !error_msg.contains("message is not modified") {
+                                        log::error!("Failed to finalize result message: {}", e);
+                                        return Err(e.into());
+                                    }
+                                }
+                            }
                         }
                     }
                     
@@ -564,19 +591,37 @@ async fn update_or_create_response_message(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match current_response_message {
         Some(live_msg) => {
-            // Append to existing message
-            if !live_msg.content.trim().is_empty() {
-                live_msg.update_content(format!("{}\n\n{}", live_msg.content, new_content));
+            // Prepare new content
+            let updated_content = if !live_msg.content.trim().is_empty() {
+                format!("{}\n\n{}", live_msg.content, new_content)
             } else {
-                live_msg.update_content(new_content.to_string());
-            }
+                new_content.to_string()
+            };
             
-            // Update message if enough time has passed
-            if live_msg.should_update() {
-                bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
+            // Only update if content actually changed
+            let content_changed = live_msg.update_content(updated_content);
+            
+            // Update message if enough time has passed AND content changed
+            if content_changed && live_msg.should_update() {
+                match bot.edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
                     .parse_mode(ParseMode::MarkdownV2)
-                    .await?;
-                live_msg.last_update = Instant::now();
+                    .await
+                {
+                    Ok(_) => {
+                        live_msg.last_update = Instant::now();
+                    }
+                    Err(e) => {
+                        // Check if it's the "not modified" error
+                        let error_msg = e.to_string();
+                        if error_msg.contains("message is not modified") {
+                            log::debug!("Message content unchanged, skipping edit");
+                            live_msg.last_update = Instant::now();
+                        } else {
+                            log::error!("Failed to edit message: {}", e);
+                            return Err(e.into());
+                        }
+                    }
+                }
             }
         }
         None => {
