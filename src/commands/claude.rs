@@ -183,6 +183,14 @@ pub async fn execute_claude_command(
     prompt: &str,
     conversation_id: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Executing Claude command for chat {}: prompt='{}'", chat_id.0, prompt);
+    
+    if let Some(ref conv_id) = conversation_id {
+        log::info!("Continuing existing conversation with ID: {}", conv_id);
+    } else {
+        log::info!("Starting new conversation (no existing conversation ID)");
+    }
+    
     let container_name = format!("coding-session-{}", chat_id.0);
     let client = ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await?;
 
@@ -197,10 +205,16 @@ pub async fn execute_claude_command(
             
             // Update the conversation ID in bot state if we got one
             if let Some(conv_id) = updated_conversation_id {
+                log::info!("Updating conversation ID for chat {} to: {}", chat_id.0, conv_id);
                 let mut sessions = bot_state.claude_sessions.lock().await;
                 if let Some(session) = sessions.get_mut(&chat_id.0) {
                     session.conversation_id = Some(conv_id);
+                    log::debug!("Successfully updated conversation ID in session state");
+                } else {
+                    log::warn!("No Claude session found for chat {} when trying to update conversation ID", chat_id.0);
                 }
+            } else {
+                log::debug!("No conversation ID returned from streaming execution");
             }
         }
         Err(e) => {
@@ -211,10 +225,16 @@ pub async fn execute_claude_command(
             
             // Update the conversation ID in bot state if we got one
             if let Some(conv_id) = updated_conversation_id {
+                log::info!("Updating conversation ID for chat {} to: {}", chat_id.0, conv_id);
                 let mut sessions = bot_state.claude_sessions.lock().await;
                 if let Some(session) = sessions.get_mut(&chat_id.0) {
                     session.conversation_id = Some(conv_id);
+                    log::debug!("Successfully updated conversation ID in session state");
+                } else {
+                    log::warn!("No Claude session found for chat {} when trying to update conversation ID", chat_id.0);
                 }
+            } else {
+                log::debug!("No conversation ID returned from streaming execution");
             }
         }
     }
@@ -453,6 +473,9 @@ async fn process_streaming_json_line(
         Ok(message) => {
             match message {
                 ClaudeMessage::System { session_id, subtype, .. } => {
+                    if let Some(ref id) = session_id {
+                        log::debug!("System message with session ID: {}", id);
+                    }
                     if subtype == "init" && !*system_initialized {
                         bot.send_message(chat_id, "🤖 *Claude session initialized*")
                             .parse_mode(ParseMode::MarkdownV2)
@@ -562,6 +585,7 @@ async fn process_streaming_json_line(
                             .await?;
                     }
                     
+                    log::info!("Claude command completed, returning conversation ID: {}", session_id);
                     Ok(Some(session_id))
                 }
             }
@@ -651,11 +675,16 @@ pub fn build_claude_command_args(prompt: &str, conversation_id: Option<&str>) ->
     ];
     
     if let Some(conv_id) = conversation_id {
+        log::info!("Building Claude command with conversation ID: {}", conv_id);
         cmd_args.push("--resume".to_string());
         cmd_args.push(conv_id.to_string());
+    } else {
+        log::info!("Building Claude command without conversation ID (new conversation)");
     }
     
     cmd_args.push(prompt.to_string());
+    
+    log::debug!("Built Claude command: {:?}", cmd_args);
     cmd_args
 }
 
@@ -821,5 +850,41 @@ mod tests {
         
         assert_eq!(args.len(), 6);
         assert_eq!(args[5], prompt);
+    }
+
+    #[test]
+    fn test_conversation_id_in_command_args() {
+        let prompt = "Continue the conversation";
+        let conversation_id = "test-conv-id-123";
+        let args = build_claude_command_args(prompt, Some(conversation_id));
+        
+        // Verify the command structure with conversation ID
+        assert_eq!(args.len(), 8);
+        assert_eq!(args[0], "claude");
+        assert_eq!(args[1], "--print");
+        assert_eq!(args[2], "--verbose");
+        assert_eq!(args[3], "--output-format");
+        assert_eq!(args[4], "stream-json");
+        assert_eq!(args[5], "--resume");
+        assert_eq!(args[6], conversation_id);
+        assert_eq!(args[7], prompt);
+    }
+
+    #[test]
+    fn test_no_conversation_id_in_command_args() {
+        let prompt = "Start new conversation";
+        let args = build_claude_command_args(prompt, None);
+        
+        // Verify the command structure without conversation ID
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[0], "claude");
+        assert_eq!(args[1], "--print");
+        assert_eq!(args[2], "--verbose");
+        assert_eq!(args[3], "--output-format");
+        assert_eq!(args[4], "stream-json");
+        assert_eq!(args[5], prompt);
+        
+        // Ensure no --resume flag is present
+        assert!(!args.contains(&"--resume".to_string()));
     }
 }

@@ -183,7 +183,13 @@ async fn handle_claude_message(
     // Get the current conversation ID if any
     let conversation_id = {
         let sessions = bot_state.claude_sessions.lock().await;
-        sessions.get(&chat_id).and_then(|s| s.conversation_id.clone())
+        let conv_id = sessions.get(&chat_id).and_then(|s| s.conversation_id.clone());
+        if let Some(ref id) = conv_id {
+            log::info!("Retrieved existing conversation ID for chat {}: {}", chat_id, id);
+        } else {
+            log::info!("No existing conversation ID found for chat {}", chat_id);
+        }
+        conv_id
     };
 
     // Execute Claude command
