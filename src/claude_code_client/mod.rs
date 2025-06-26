@@ -390,7 +390,68 @@ impl ClaudeCodeClient {
         // Save credentials using the OAuth client (which now uses container storage)
         self.oauth_client.save_credentials(credentials).await?;
 
+        // Update the .claude.json file with OAuth account information
+        self.update_claude_config_with_oauth_account(credentials).await?;
+
         log::info!("Successfully setup OAuth credentials in container using container storage");
+        Ok(())
+    }
+
+    /// Update the .claude.json file with OAuth account information
+    async fn update_claude_config_with_oauth_account(
+        &self,
+        credentials: &Credentials,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use serde_json::{Map, Value};
+        use super::container_utils::{container_get_file, container_put_file};
+
+        log::debug!("Updating .claude.json with OAuth account information");
+
+        let claude_json_path = "/root/.claude.json";
+        
+        // Try to load existing .claude.json file
+        let mut config: Map<String, Value> = match container_get_file(&self.docker, &self.container_id, claude_json_path).await {
+            Ok(content) => {
+                match serde_json::from_slice::<Map<String, Value>>(&content) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        log::warn!("Failed to parse existing .claude.json, creating new one: {}", e);
+                        Map::new()
+                    }
+                }
+            }
+            Err(e) => {
+                log::debug!("No existing .claude.json found ({}), creating new one", e);
+                Map::new()
+            }
+        };
+
+        // Create OAuth account object with the required schema
+        let oauth_account = serde_json::json!({
+            "accountUuid": credentials.oauth_account.uuid,
+            "emailAddress": credentials.oauth_account.email_address,
+            "organizationUuid": credentials.oauth_organization.uuid,
+            "organizationRole": "admin", // Default role, could be enhanced later
+            "workspaceRole": null,
+            "organizationName": credentials.oauth_organization.name
+        });
+
+        // Update the config with OAuth account information
+        config.insert("oauthAccount".to_string(), oauth_account);
+
+        // Serialize the updated config
+        let updated_content = serde_json::to_string_pretty(&config)?;
+
+        // Write the updated config back to the container
+        container_put_file(
+            &self.docker,
+            &self.container_id,
+            claude_json_path,
+            updated_content.as_bytes(),
+            Some(0o644),
+        ).await?;
+
+        log::info!("Successfully updated .claude.json with OAuth account information");
         Ok(())
     }
 

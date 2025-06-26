@@ -82,13 +82,30 @@ struct OAuthState {
     expires_at: u64,
 }
 
+/// Organization information from OAuth response
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct Organization {
+    pub uuid: String,
+    pub name: String,
+}
+
+/// Account information from OAuth response
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct Account {
+    pub uuid: String,
+    pub email_address: String,
+}
+
 /// Token response from OAuth provider
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct TokenResponse {
+    token_type: String,
     access_token: String,
-    refresh_token: String,
     expires_in: u64,
+    refresh_token: String,
     scope: Option<String>,
+    organization: Organization,
+    account: Account,
 }
 
 /// Claude OAuth credentials - maintains exact JSON compatibility with TypeScript implementation
@@ -100,7 +117,7 @@ struct TokenResponse {
 ///   "refreshToken": "...",
 ///   "expiresAt": 1234567890000,
 ///   "scopes": ["user:inference", "user:profile"],
-///   "isMax": true
+///   "subscriptionType": "pro"
 /// }
 /// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -116,9 +133,16 @@ pub struct Credentials {
     pub expires_at: u64,
     /// Granted OAuth scopes - serialized as "scopes" in JSON
     pub scopes: Vec<String>,
-    /// Maximum scope flag - serialized as "isMax" in JSON
-    #[serde(rename = "isMax")]
-    pub is_max: bool,
+    /// Subscription type - serialized as "subscriptionType" in JSON
+    #[serde(rename = "subscriptionType")]
+    pub subscription_type: String,
+
+    /// Optional OAuth account information
+    #[serde(skip)]
+    pub oauth_account: Account,
+
+    #[serde(skip)]
+    pub oauth_organization: Organization,
 }
 
 impl Credentials {
@@ -156,7 +180,7 @@ impl Credentials {
 ///     "refreshToken": "...",
 ///     "expiresAt": 1234567890000,
 ///     "scopes": ["user:inference", "user:profile"],
-///     "isMax": true
+///     "subscriptionType": "pro"
 ///   }
 /// }
 /// ```
@@ -304,7 +328,10 @@ impl ClaudeAuth {
     /// Create a new OAuth client with the given configuration and storage
     pub fn new(config: Config, storage: Box<dyn CredStorageOps>) -> Self {
         let http_client = Client::builder()
-            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .user_agent(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like \
+                 Gecko) Chrome/131.0.0.0 Safari/537.36",
+            )
             .build()
             .expect("Failed to create HTTP client");
 
@@ -392,7 +419,10 @@ impl ClaudeAuth {
             )));
         }
 
-        let token_response: TokenResponse = response.json().await?;
+        let response_text = response.text().await?;
+        log::debug!("Raw OAuth token response: {}", response_text);
+        let token_response: TokenResponse = serde_json::from_str(&response_text)?;
+
         self.create_credentials(token_response).await
     }
 
@@ -514,7 +544,11 @@ impl ClaudeAuth {
             refresh_token: token_response.refresh_token,
             expires_at: (current_time + token_response.expires_in) * 1000,
             scopes,
-            is_max: true,
+            // TODO: Handle subscription type properly
+            subscription_type: "pro".to_string(),
+            // OAuth account and organization information
+            oauth_account: token_response.account,
+            oauth_organization: token_response.organization,
         })
     }
 }
