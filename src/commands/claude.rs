@@ -201,21 +201,8 @@ pub async fn execute_claude_command(
     match client.exec_streaming_command(cmd_args.clone()).await {
         Ok(mut stream) => {
             log::info!("Using streaming execution for Claude command");
-            let updated_conversation_id = process_claude_stream(bot, chat_id, &mut stream).await?;
-            
-            // Update the conversation ID in bot state if we got one
-            if let Some(conv_id) = updated_conversation_id {
-                log::info!("Updating conversation ID for chat {} to: {}", chat_id.0, conv_id);
-                let mut sessions = bot_state.claude_sessions.lock().await;
-                if let Some(session) = sessions.get_mut(&chat_id.0) {
-                    session.conversation_id = Some(conv_id);
-                    log::debug!("Successfully updated conversation ID in session state");
-                } else {
-                    log::warn!("No Claude session found for chat {} when trying to update conversation ID", chat_id.0);
-                }
-            } else {
-                log::debug!("No conversation ID returned from streaming execution");
-            }
+            let _updated_conversation_id = process_claude_stream(bot, chat_id, &mut stream, bot_state.clone()).await?;
+            // Note: Conversation ID is now set immediately when we receive the init message
         }
         Err(e) => {
             log::warn!("Streaming execution failed, falling back to batch processing: {}", e);
@@ -380,6 +367,7 @@ pub async fn process_claude_stream(
     bot: Bot,
     chat_id: ChatId,
     stream: &mut std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<String, String>> + Send>>,
+    bot_state: BotState,
 ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
     let mut conversation_id: Option<String> = None;
     let mut current_response_message: Option<LiveMessage> = None;
@@ -409,7 +397,9 @@ pub async fn process_claude_stream(
                     chat_id, 
                     &line, 
                     &mut current_response_message, 
-                    &mut system_initialized
+                    &mut system_initialized,
+                    &mut conversation_id,
+                    bot_state.clone(),
                 ).await? {
                     conversation_id = Some(updated_id);
                 }
@@ -463,6 +453,8 @@ async fn process_streaming_json_line(
     line: &str,
     current_response_message: &mut Option<LiveMessage>,
     system_initialized: &mut bool,
+    conversation_id: &mut Option<String>,
+    bot_state: BotState,
 ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
     let line = line.trim();
     if line.is_empty() {
@@ -475,7 +467,25 @@ async fn process_streaming_json_line(
                 ClaudeMessage::System { session_id, subtype, .. } => {
                     if let Some(ref id) = session_id {
                         log::debug!("System message with session ID: {}", id);
+                        
+                        // If this is the init message, immediately set and store the conversation ID
+                        if subtype == "init" && conversation_id.is_none() {
+                            log::info!("Setting conversation ID from init message: {}", id);
+                            *conversation_id = Some(id.clone());
+                            
+                            // Immediately update the bot state with the new conversation ID
+                            {
+                                let mut sessions = bot_state.claude_sessions.lock().await;
+                                if let Some(session) = sessions.get_mut(&chat_id.0) {
+                                    session.conversation_id = Some(id.clone());
+                                    log::info!("Immediately updated bot state with conversation ID: {}", id);
+                                } else {
+                                    log::warn!("No Claude session found for chat {} when setting init conversation ID", chat_id.0);
+                                }
+                            }
+                        }
                     }
+                    
                     if subtype == "init" && !*system_initialized {
                         bot.send_message(chat_id, "🤖 *Claude session initialized*")
                             .parse_mode(ParseMode::MarkdownV2)
