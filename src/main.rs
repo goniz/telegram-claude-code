@@ -4,39 +4,17 @@ use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use teloxide::{
-    dispatching::UpdateFilterExt,
-    dptree,
-    prelude::*,
-    types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
-    utils::command::BotCommands,
-};
-use tokio::sync::{mpsc, oneshot, Mutex};
-use url::Url;
+use teloxide::{dispatching::UpdateFilterExt, dptree, prelude::*, utils::command::BotCommands};
+use tokio::sync::Mutex;
 
+mod bot;
 mod commands;
 
-use telegram_bot::claude_code_client::{
-    container_utils, AuthState, ClaudeCodeClient, GithubClient, GithubClientConfig,
+use bot::{
+    escape_markdown_v2, handle_auth_state_updates, handle_callback_query, handle_text_message,
+    AuthSession, AuthSessions, BotState,
 };
-
-/// Escape reserved characters for Telegram MarkdownV2 formatting
-/// According to Telegram's MarkdownV2 spec, these characters must be escaped:
-/// '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
-fn escape_markdown_v2(text: &str) -> String {
-    text.chars()
-        .map(|c| match c {
-            '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|'
-            | '{' | '}' | '.' | '!' => {
-                format!("\\{}", c)
-            }
-            _ => c.to_string(),
-        })
-        .collect()
-}
-
-/// Format GitHub repository list as MarkdownV2 list with hyperlinks
-/// Parses the output from `gh repo list` and creates a formatted list with clickable links
+use telegram_bot::claude_code_client::container_utils;
 
 // Define the commands that your bot will handle
 #[derive(BotCommands, Clone)]
@@ -69,24 +47,6 @@ enum Command {
     DebugClaudeLogin,
     #[command(description = "Update Claude CLI to latest version")]
     UpdateClaude,
-}
-
-// Authentication session state
-#[derive(Debug)] // Removed Clone
-#[allow(dead_code)]
-struct AuthSession {
-    container_name: String,
-    code_sender: mpsc::UnboundedSender<String>,
-    cancel_sender: oneshot::Sender<()>,
-}
-
-// Global state for tracking authentication sessions
-type AuthSessions = Arc<Mutex<HashMap<i64, AuthSession>>>;
-
-#[derive(Clone)]
-struct BotState {
-    docker: Docker,
-    auth_sessions: AuthSessions,
 }
 
 /// Find Claude authentication log file (fixed filename)
@@ -197,152 +157,6 @@ async fn main() {
         .await;
 }
 
-// Authentication state monitoring task
-async fn handle_auth_state_updates(
-    mut state_receiver: mpsc::UnboundedReceiver<AuthState>,
-    bot: Bot,
-    chat_id: ChatId,
-    bot_state: BotState,
-) {
-    while let Some(state) = state_receiver.recv().await {
-        log::debug!("Received authentication state update: {:?}", state);
-        match state {
-            AuthState::Starting => {
-                let _ = bot
-                    .send_message(chat_id, "🔄 Starting Claude authentication\\.\\.\\.")
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await;
-            }
-            AuthState::UrlReady(url) => {
-                let message =
-                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your \
-                     Claude account:\n\n*1\\. Click the button below to visit the authentication \
-                     URL*\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth \
-                     flow in your browser*\n\n*4\\. If prompted for a code, simply paste it here* \
-                     \\(no command needed\\)\n\n✨ This will enable full access to your Claude \
-                     subscription features\\!"
-                        .to_string();
-
-                let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
-                    "🔗 Open Claude OAuth",
-                    Url::parse(&url).unwrap_or_else(|_| Url::parse("https://claude.ai").unwrap()),
-                )]]);
-
-                let _ = bot
-                    .send_message(chat_id, message)
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .reply_markup(keyboard)
-                    .await;
-            }
-            AuthState::WaitingForCode => {
-                let _ = bot
-                    .send_message(
-                        chat_id,
-                        "🔑 *Authentication code required*\n\nPlease check your browser for an \
-                         authentication code and paste it directly into this chat\\. No command \
-                         needed\\!",
-                    )
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await;
-            }
-            AuthState::Completed(message) => {
-                let _ = bot
-                    .send_message(chat_id, escape_markdown_v2(&message))
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await;
-                // Clean up the session
-                {
-                    let mut sessions = bot_state.auth_sessions.lock().await;
-                    sessions.remove(&chat_id.0);
-                }
-                break;
-            }
-            AuthState::Failed(error) => {
-                let _ = bot
-                    .send_message(
-                        chat_id,
-                        format!("❌ Authentication failed: {}", escape_markdown_v2(&error)),
-                    )
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await;
-                // Clean up the session
-                {
-                    let mut sessions = bot_state.auth_sessions.lock().await;
-                    sessions.remove(&chat_id.0);
-                }
-                break;
-            }
-        }
-    }
-
-    // Log when the state_receiver is closed
-    log::warn!(
-        "Authentication state receiver closed for chat_id: {}",
-        chat_id.0
-    );
-
-    // Clean up the session if it still exists
-    {
-        let mut sessions = bot_state.auth_sessions.lock().await;
-        sessions.remove(&chat_id.0);
-    }
-}
-
-// Check if authentication session is already in progress
-// Handle regular text messages (for authentication codes)
-async fn handle_text_message(bot: Bot, msg: Message, bot_state: BotState) -> ResponseResult<()> {
-    let chat_id = msg.chat.id.0;
-
-    if let Some(text) = msg.text() {
-        // Check if there's an active authentication session and get the code_sender if it exists
-        let code_sender_clone = {
-            let sessions = bot_state.auth_sessions.lock().await;
-            sessions.get(&chat_id).map(|s| s.code_sender.clone())
-        };
-
-        if let Some(code_sender) = code_sender_clone {
-            // An auth session exists for this chat_id
-            if commands::authenticate_claude::is_authentication_code(text) {
-                // Send the code to the authentication process
-                if code_sender.send(text.to_string()).is_err() {
-                    bot.send_message(
-                        msg.chat.id,
-                        "❌ Failed to send authentication code\\. The authentication session may \
-                         have expired\\.\n\nPlease restart authentication with \
-                         `/authenticateclaude`",
-                    )
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await?;
-                } else {
-                    bot.send_message(
-                        msg.chat.id,
-                        "✅ Authentication code received\\! Please wait while we complete the \
-                         authentication process\\.\\.\\.",
-                    )
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await?;
-                }
-            } else {
-                // Not an auth code, but an auth session is active. Inform user.
-                bot.send_message(
-                    msg.chat.id,
-                    "🔐 *Authentication in Progress*\n\nI'm currently waiting for your \
-                     authentication code\\. Please paste the code you received during the OAuth \
-                     flow\\.\n\nIf you need to restart authentication, use `/authenticateclaude`",
-                )
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
-            }
-        }
-        // If code_sender_clone was None, it means no auth session is active for this user.
-        // In this case, we don't respond to regular text messages, so no 'else' block needed here.
-    }
-
-    Ok(())
-}
-
-// Helper function to determine if a text looks like an authentication code
-
 // Handler function for bot commands
 async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
@@ -396,143 +210,4 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
     }
 
     Ok(())
-}
-
-// Handle callback queries from inline keyboard buttons
-async fn handle_callback_query(
-    bot: Bot,
-    query: CallbackQuery,
-    bot_state: BotState,
-) -> ResponseResult<()> {
-    if let Some(data) = &query.data {
-        if data.starts_with("clone:") {
-            // Extract repository name from callback data
-            let repository = data.strip_prefix("clone:").unwrap_or("");
-
-            if let Some(message) = &query.message {
-                // Handle both accessible and inaccessible messages
-                let chat_id = message.chat().id;
-                let container_name = format!("coding-session-{}", chat_id.0);
-
-                // Answer the callback query to remove the loading state
-                bot.answer_callback_query(&query.id).await?;
-
-                match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await
-                {
-                    Ok(client) => {
-                        let github_client = GithubClient::new(
-                            bot_state.docker.clone(),
-                            client.container_id().to_string(),
-                            GithubClientConfig::default(),
-                        );
-
-                        // Perform the clone operation
-                        commands::perform_github_clone(&bot, chat_id, &github_client, repository)
-                            .await?;
-                    }
-                    Err(e) => {
-                        bot.send_message(
-                            chat_id,
-                            format!(
-                                "❌ No active coding session found: {}\\n\\nPlease start a coding session \
-                                 first using /start",
-                                escape_markdown_v2(&e.to_string())
-                            ),
-                        )
-                        .parse_mode(ParseMode::MarkdownV2)
-                        .await?;
-                    }
-                }
-            }
-        } else {
-            // Unknown callback data, just answer the query
-            bot.answer_callback_query(&query.id).await?;
-        }
-    } else {
-        // No callback data, just answer the query
-        bot.answer_callback_query(&query.id).await?;
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod markdown_v2_tests {
-    use super::*;
-
-    #[test]
-    fn test_escape_markdown_v2_reserved_characters() {
-        // Test each reserved character is properly escaped
-        assert_eq!(escape_markdown_v2("_"), "\\_");
-        assert_eq!(escape_markdown_v2("*"), "\\*");
-        assert_eq!(escape_markdown_v2("["), "\\[");
-        assert_eq!(escape_markdown_v2("]"), "\\]");
-        assert_eq!(escape_markdown_v2("("), "\\(");
-        assert_eq!(escape_markdown_v2(")"), "\\)");
-        assert_eq!(escape_markdown_v2("~"), "\\~");
-        assert_eq!(escape_markdown_v2("`"), "\\`");
-        assert_eq!(escape_markdown_v2(">"), "\\>");
-        assert_eq!(escape_markdown_v2("#"), "\\#");
-        assert_eq!(escape_markdown_v2("+"), "\\+");
-        assert_eq!(escape_markdown_v2("-"), "\\-");
-        assert_eq!(escape_markdown_v2("="), "\\=");
-        assert_eq!(escape_markdown_v2("|"), "\\|");
-        assert_eq!(escape_markdown_v2("{"), "\\{");
-        assert_eq!(escape_markdown_v2("}"), "\\}");
-        assert_eq!(escape_markdown_v2("."), "\\.");
-        assert_eq!(escape_markdown_v2("!"), "\\!");
-    }
-
-    #[test]
-    fn test_escape_markdown_v2_non_reserved_characters() {
-        // Test non-reserved characters are not escaped
-        assert_eq!(escape_markdown_v2("a"), "a");
-        assert_eq!(escape_markdown_v2("Z"), "Z");
-        assert_eq!(escape_markdown_v2("0"), "0");
-        assert_eq!(escape_markdown_v2("9"), "9");
-        assert_eq!(escape_markdown_v2(" "), " ");
-        assert_eq!(escape_markdown_v2("\n"), "\n");
-        assert_eq!(escape_markdown_v2("🎯"), "🎯");
-    }
-
-    #[test]
-    fn test_escape_markdown_v2_mixed_text() {
-        // Test realistic examples with mixed content
-        assert_eq!(
-            escape_markdown_v2("user.name@example.com"),
-            "user\\.name@example\\.com"
-        );
-        assert_eq!(
-            escape_markdown_v2("https://github.com/user/repo"),
-            "https://github\\.com/user/repo"
-        );
-        assert_eq!(
-            escape_markdown_v2("Device code: ABC-123!"),
-            "Device code: ABC\\-123\\!"
-        );
-        assert_eq!(
-            escape_markdown_v2("Configuration [UPDATED]"),
-            "Configuration \\[UPDATED\\]"
-        );
-    }
-
-    #[test]
-    fn test_escape_markdown_v2_empty_string() {
-        assert_eq!(escape_markdown_v2(""), "");
-    }
-
-    #[test]
-    fn test_markdownv2_url_format() {
-        let url = "https://github.com/device";
-        let display_text = "Click here";
-        let formatted = format!("[{}]({})", escape_markdown_v2(display_text), url);
-        assert_eq!(formatted, "[Click here](https://github.com/device)");
-    }
-
-    #[test]
-    fn test_markdownv2_code_block_format() {
-        let code = "ABC-123";
-        let formatted = format!("```{}```", escape_markdown_v2(code));
-        assert_eq!(formatted, "```ABC\\-123```");
-    }
 }

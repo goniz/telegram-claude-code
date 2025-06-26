@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use bollard::Docker;
 
 use super::container_utils::{container_get_file, container_put_file};
-use crate::claude_oauth::{CredStorageOps, OAuthError};
+use crate::oauth::{CredStorageOps, OAuthError};
 
 /// Container-based credential storage implementation
 ///

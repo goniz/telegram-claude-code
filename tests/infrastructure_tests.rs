@@ -12,6 +12,7 @@
 use bollard::Docker;
 use rstest::*;
 use std::time::Duration;
+use telegram_bot::claude_code_client::container::generate_volume_name;
 use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClientConfig};
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
@@ -32,7 +33,7 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
     let _ = container_utils::clear_coding_session(docker, container_name).await;
 
     // Clean up volume
-    let volume_name = container_utils::generate_volume_name(&user_id.to_string());
+    let volume_name = generate_volume_name(&user_id.to_string());
     let _ = docker.remove_volume(&volume_name, None).await;
 }
 
@@ -56,7 +57,7 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
     let container_name = format!("test-volume-{}", Uuid::new_v4());
 
     // Clean up any existing volume before starting test
-    let volume_name = container_utils::generate_volume_name(&test_user_id.to_string());
+    let volume_name = generate_volume_name(&test_user_id.to_string());
     let _ = docker.remove_volume(&volume_name, None).await;
 
     // Step 1: Start first coding session
@@ -220,8 +221,8 @@ async fn test_volume_isolation_between_users(docker: Docker) {
     let container_name_2 = format!("test-isolation-2-{}", Uuid::new_v4());
 
     // Clean up any existing volumes before starting test
-    let volume_name_1 = container_utils::generate_volume_name(&user_id_1.to_string());
-    let volume_name_2 = container_utils::generate_volume_name(&user_id_2.to_string());
+    let volume_name_1 = generate_volume_name(&user_id_1.to_string());
+    let volume_name_2 = generate_volume_name(&user_id_2.to_string());
     let _ = docker.remove_volume(&volume_name_1, None).await;
     let _ = docker.remove_volume(&volume_name_2, None).await;
 
@@ -344,13 +345,13 @@ async fn test_volume_isolation_between_users(docker: Docker) {
 async fn test_volume_name_generation() {
     // Test volume name generation function
     let volume_key = "12345";
-    let volume_name = container_utils::generate_volume_name(volume_key);
+    let volume_name = generate_volume_name(volume_key);
 
     assert_eq!(volume_name, "dev-session-claude-12345");
 
     // Test with different volume key
     let volume_key_2 = "67890";
-    let volume_name_2 = container_utils::generate_volume_name(volume_key_2);
+    let volume_name_2 = generate_volume_name(volume_key_2);
 
     assert_eq!(volume_name_2, "dev-session-claude-67890");
     assert_ne!(
@@ -371,7 +372,7 @@ async fn test_use_persistant_volume_setting(docker: Docker) {
     let container_name_without_volume = format!("test-without-volume-{}", Uuid::new_v4());
 
     // Clean up any existing volume before starting test
-    let volume_name = container_utils::generate_volume_name(&test_user_id.to_string());
+    let volume_name = generate_volume_name(&test_user_id.to_string());
     let _ = docker.remove_volume(&volume_name, None).await;
 
     // Test 1: Start session WITH persistent volume

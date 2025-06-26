@@ -1,19 +1,23 @@
-use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
 
+pub mod auth;
+pub mod config;
+pub mod container;
 pub mod container_cred_storage;
 pub mod container_utils;
+pub mod executor;
 pub mod github_client;
 
+pub use auth::{AuthState, AuthenticationHandle};
+pub use config::ClaudeCodeConfig;
 pub use container_cred_storage::ContainerCredStorage;
+pub use executor::CommandExecutor;
 #[allow(unused_imports)]
 pub use github_client::{GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult};
 
-// Re-export OAuth types from claude_oauth module
-pub use crate::claude_oauth::{ClaudeAuth, Config as OAuthConfig, Credentials, OAuthError};
+// Re-export OAuth types from oauth module
+pub use crate::oauth::{ClaudeAuth, Config as OAuthConfig, Credentials, OAuthError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usage {
@@ -49,69 +53,30 @@ pub struct ClaudeCodeResult {
     pub usage: Option<Usage>,
 }
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct ClaudeCodeConfig {
-    pub model: String,
-    pub max_tokens: Option<u32>,
-    pub temperature: Option<f32>,
-    pub working_directory: Option<String>,
-    /// OAuth configuration for Claude authentication
-    pub oauth_config: OAuthConfig,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AuthState {
-    Starting,
-    UrlReady(String),
-    WaitingForCode,
-    Completed(String),
-    Failed(String),
-}
-
-#[derive(Debug)]
-pub struct AuthenticationHandle {
-    pub state_receiver: mpsc::UnboundedReceiver<AuthState>,
-    pub code_sender: mpsc::UnboundedSender<String>,
-    pub cancel_sender: oneshot::Sender<()>,
-}
-
-impl Default for ClaudeCodeConfig {
-    fn default() -> Self {
-        Self {
-            model: "claude-sonnet-4".to_string(),
-            max_tokens: None,
-            temperature: None,
-            working_directory: Some("/workspace".to_string()),
-            oauth_config: OAuthConfig::default(),
-        }
-    }
-}
-
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct ClaudeCodeClient {
     docker: Docker,
     container_id: String,
     config: ClaudeCodeConfig,
-    oauth_client: ClaudeAuth,
+    auth_manager: auth::AuthenticationManager,
+    executor: CommandExecutor,
 }
 
 #[allow(dead_code)]
 impl ClaudeCodeClient {
     /// Create a new Claude Code client for the specified container
     pub fn new(docker: Docker, container_id: String, config: ClaudeCodeConfig) -> Self {
-        let storage = Box::new(ContainerCredStorage::new(
-            docker.clone(),
-            container_id.clone(),
-        ));
-        let oauth_client = ClaudeAuth::with_custom_storage(config.oauth_config.clone(), storage);
+        let auth_manager =
+            auth::AuthenticationManager::new(docker.clone(), container_id.clone(), config.clone());
+        let executor = CommandExecutor::new(docker.clone(), container_id.clone(), config.clone());
 
         Self {
             docker,
             container_id,
             config,
-            oauth_client,
+            auth_manager,
+            executor,
         }
     }
 
@@ -155,395 +120,37 @@ impl ClaudeCodeClient {
     pub async fn authenticate_claude_account(
         &self,
     ) -> Result<AuthenticationHandle, Box<dyn std::error::Error + Send + Sync>> {
-        // Check if valid credentials already exist
-        match self.oauth_client.load_credentials().await {
-            Ok(Some(credentials)) if !credentials.is_expired() => {
-                // Check if credentials work with Claude Code
-                if let Ok(true) = self.check_oauth_credentials(&credentials).await {
-                    let (state_sender, state_receiver) = mpsc::unbounded_channel();
-                    let (code_sender, _code_receiver) = mpsc::unbounded_channel();
-                    let (cancel_sender, _cancel_receiver) = oneshot::channel();
-
-                    // Send immediate completion state
-                    let _ = state_sender.send(AuthState::Completed(
-                        "✅ Claude Code is already authenticated and ready to use!".to_string(),
-                    ));
-
-                    return Ok(AuthenticationHandle {
-                        state_receiver,
-                        code_sender,
-                        cancel_sender,
-                    });
-                }
-            }
-            _ => {
-                // No valid credentials found, start OAuth flow
-            }
-        }
-
-        // Start OAuth authentication flow
-        self.start_oauth_flow().await
-    }
-
-    /// Start OAuth authentication flow with channel communication
-    async fn start_oauth_flow(
-        &self,
-    ) -> Result<AuthenticationHandle, Box<dyn std::error::Error + Send + Sync>> {
-        let (state_sender, state_receiver) = mpsc::unbounded_channel();
-        let (code_sender, code_receiver) = mpsc::unbounded_channel();
-        let (cancel_sender, cancel_receiver) = oneshot::channel();
-
-        // Clone necessary data for the background task
-        let storage = Box::new(ContainerCredStorage::new(
-            self.docker.clone(),
-            self.container_id.clone(),
-        ));
-        let oauth_client =
-            ClaudeAuth::with_custom_storage(self.config.oauth_config.clone(), storage);
-        let docker = self.docker.clone();
-        let container_id = self.container_id.clone();
-
-        // Spawn the background authentication task
-        tokio::spawn(async move {
-            let _ = Self::background_oauth_flow(
-                oauth_client,
-                docker,
-                container_id,
-                state_sender,
-                code_receiver,
-                cancel_receiver,
-            )
-            .await;
-        });
-
-        Ok(AuthenticationHandle {
-            state_receiver,
-            code_sender,
-            cancel_sender,
-        })
-    }
-
-    /// Background task for OAuth authentication flow
-    async fn background_oauth_flow(
-        oauth_client: ClaudeAuth,
-        docker: Docker,
-        container_id: String,
-        state_sender: mpsc::UnboundedSender<AuthState>,
-        mut code_receiver: mpsc::UnboundedReceiver<String>,
-        cancel_receiver: oneshot::Receiver<()>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use std::time::Duration;
-
-        log::debug!(
-            "Starting OAuth authentication flow for container: {}",
-            container_id
-        );
-
-        // Send starting state
-        let _ = state_sender.send(AuthState::Starting);
-
-        // Generate OAuth login URL
-        let login_url = match oauth_client.generate_login_url().await {
-            Ok(url) => {
-                log::info!("Generated OAuth login URL: {}", url);
-                url
-            }
-            Err(e) => {
-                log::error!("Failed to generate OAuth login URL: {}", e);
-                let _ = state_sender.send(AuthState::Failed(format!(
-                    "Failed to generate login URL: {}",
-                    e
-                )));
-                return Err(e.into());
-            }
-        };
-
-        // Send URL to user
-        let _ = state_sender.send(AuthState::UrlReady(login_url));
-        let _ = state_sender.send(AuthState::WaitingForCode);
-
-        // Wait for authorization code with timeout
-        let timeout_result = tokio::time::timeout(Duration::from_secs(300), async {
-            tokio::select! {
-                // Handle cancellation
-                _ = cancel_receiver => {
-                    log::info!("OAuth authentication cancelled by user");
-                    let _ = state_sender.send(AuthState::Failed("Authentication cancelled".to_string()));
-                    return Ok(());
-                }
-
-                // Handle auth code input
-                code = code_receiver.recv() => {
-                    if let Some(auth_code) = code {
-                        log::info!("Received authorization code from user");
-
-                        // Exchange authorization code for tokens
-                        match oauth_client.exchange_code(&auth_code).await {
-                            Ok(credentials) => {
-                                log::info!("Successfully obtained OAuth credentials");
-
-                                // Save credentials to file
-                                if let Err(e) = oauth_client.save_credentials(&credentials).await {
-                                    log::warn!("Failed to save credentials: {}", e);
-                                }
-
-                                // Test credentials with Claude Code
-                                let client = ClaudeCodeClient::new(
-                                    docker.clone(),
-                                    container_id.clone(),
-                                    ClaudeCodeConfig::default(),
-                                );
-
-                                match client.setup_oauth_credentials(&credentials).await {
-                                    Ok(_) => {
-                                        log::info!("Successfully configured Claude Code with OAuth credentials");
-                                        let _ = oauth_client.cleanup_state().await;
-                                        let _ = state_sender.send(AuthState::Completed(
-                                            "✅ Claude Code authentication completed successfully!".to_string()
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        log::error!("Failed to configure Claude Code with credentials: {}", e);
-                                        let _ = state_sender.send(AuthState::Failed(
-                                            format!("Failed to configure credentials: {}", e)
-                                        ));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Failed to exchange authorization code: {}", e);
-                                let _ = state_sender.send(AuthState::Failed(
-                                    format!("Failed to exchange authorization code: {}", e)
-                                ));
-                            }
-                        }
-                    } else {
-                        let _ = state_sender.send(AuthState::Failed("No authorization code received".to_string()));
-                    }
-                }
-            }
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await;
-
-        match timeout_result {
-            Ok(Ok(())) => {
-                log::info!("OAuth authentication completed successfully");
-            }
-            Ok(Err(e)) => {
-                log::error!("Error during OAuth authentication: {}", e);
-                let _ =
-                    state_sender.send(AuthState::Failed(format!("Authentication error: {}", e)));
-            }
-            Err(_) => {
-                log::warn!("OAuth authentication timed out after 5 minutes");
-                let _ = state_sender.send(AuthState::Failed(
-                    "Authentication timed out after 5 minutes".to_string(),
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Check if OAuth credentials are valid by testing them with Claude Code
-    async fn check_oauth_credentials(
-        &self,
-        credentials: &Credentials,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        log::debug!("Checking OAuth credentials validity");
-
-        // Try to use the credentials with Claude Code
-        match self.setup_oauth_credentials(credentials).await {
-            Ok(_) => {
-                // Test with a simple status command
-                match self.check_auth_status().await {
-                    Ok(true) => {
-                        log::info!("OAuth credentials are valid and working");
-                        Ok(true)
-                    }
-                    Ok(false) => {
-                        log::warn!(
-                            "OAuth credentials exist but Claude Code reports not authenticated"
-                        );
-                        Ok(false)
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to check auth status with OAuth credentials: {}", e);
-                        Ok(false)
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("Failed to setup OAuth credentials: {}", e);
-                Ok(false)
-            }
-        }
-    }
-
-    /// Setup OAuth credentials in the container for Claude Code to use
-    async fn setup_oauth_credentials(
-        &self,
-        credentials: &Credentials,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        log::debug!("Setting up OAuth credentials in container");
-
-        // Save credentials using the OAuth client (which now uses container storage)
-        self.oauth_client.save_credentials(credentials).await?;
-
-        // Update the .claude.json file with OAuth account information
-        self.update_claude_config_with_oauth_account(credentials)
-            .await?;
-
-        log::info!("Successfully setup OAuth credentials in container using container storage");
-        Ok(())
-    }
-
-    /// Update the .claude.json file with OAuth account information
-    async fn update_claude_config_with_oauth_account(
-        &self,
-        credentials: &Credentials,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use super::container_utils::{container_get_file, container_put_file};
-        use serde_json::{Map, Value};
-
-        log::debug!("Updating .claude.json with OAuth account information");
-
-        let claude_json_path = "/volume_data/claude.json";
-
-        // Try to load existing .claude.json file
-        let mut config: Map<String, Value> =
-            match container_get_file(&self.docker, &self.container_id, claude_json_path).await {
-                Ok(content) => {
-                    log::debug!("JSON Content: {}", String::from_utf8_lossy(&content));
-                    // Parse the existing JSON content
-                    match serde_json::from_slice::<Map<String, Value>>(&content) {
-                        Ok(config) => config,
-                        Err(e) => {
-                            log::warn!(
-                                "Failed to parse existing .claude.json, creating new one: {}",
-                                e
-                            );
-                            Map::new()
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::debug!("No existing .claude.json found ({}), creating new one", e);
-                    Map::new()
-                }
-            };
-
-        // Create OAuth account object with the required schema
-        let oauth_account = serde_json::json!({
-            "accountUuid": credentials.oauth_account.uuid,
-            "emailAddress": credentials.oauth_account.email_address,
-            "organizationUuid": credentials.oauth_organization.uuid,
-            "organizationRole": "admin", // Default role, could be enhanced later
-            "workspaceRole": null,
-            "organizationName": credentials.oauth_organization.name
-        });
-
-        // Update the config with OAuth account information
-        config.insert("oauthAccount".to_string(), oauth_account);
-
-        // Serialize the updated config
-        let updated_content = serde_json::to_string_pretty(&config)?;
-
-        // Write the updated config back to the container
-        container_put_file(
-            &self.docker,
-            &self.container_id,
-            claude_json_path,
-            updated_content.as_bytes(),
-            Some(0o644),
-        )
-        .await?;
-
-        log::info!("Successfully updated .claude.json with OAuth account information");
-        Ok(())
+        self.auth_manager.authenticate_claude_account().await
     }
 
     /// Check authentication status using OAuth credentials
     pub async fn check_auth_status(
         &self,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        log::debug!(
-            "Checking Claude authentication status for container: {}",
-            self.container_id
-        );
+        // Delegate to executor for status commands
+        let status_command = vec![
+            "claude".to_string(),
+            "status".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+        ];
 
-        // First, check if OAuth credentials exist and are valid
-        match self.oauth_client.load_credentials().await {
-            Ok(Some(credentials)) if !credentials.is_expired() => {
-                log::debug!("Found valid OAuth credentials");
-
-                // Test with Claude Code status command
-                let status_command = vec![
-                    "claude".to_string(),
-                    "status".to_string(),
-                    "--output-format".to_string(),
-                    "json".to_string(),
-                ];
-
-                match self.exec_command(status_command).await {
-                    Ok(output) => {
-                        log::debug!("Claude status command output: '{}'", output);
-
-                        match self.parse_result(output) {
-                            Ok(result) => {
-                                let is_authenticated = !result.is_error;
-                                log::info!("Authentication status: {}", is_authenticated);
-                                Ok(is_authenticated)
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to parse status output: {}", e);
-                                Ok(false)
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("Claude status command failed: {}", e);
-                        Ok(false)
-                    }
+        match self.executor.exec_command(status_command).await {
+            Ok(output) => match self.parse_result(output) {
+                Ok(result) => {
+                    let is_authenticated = !result.is_error;
+                    Ok(is_authenticated)
                 }
-            }
-            Ok(Some(_credentials)) => {
-                log::warn!("OAuth credentials are expired");
-                Ok(false)
-            }
-            Ok(None) => {
-                log::debug!("No OAuth credentials found");
-                Ok(false)
-            }
-            Err(e) => {
-                log::warn!("Failed to load OAuth credentials: {}", e);
-                Ok(false)
-            }
+                Err(_) => Ok(false),
+            },
+            Err(_) => Ok(false),
         }
     }
 
     /// Get current authentication info
     pub async fn get_auth_info(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         match self.check_auth_status().await {
-            Ok(true) => {
-                // Get additional credential info if available
-                match self.oauth_client.load_credentials().await {
-                    Ok(Some(credentials)) => {
-                        let expires_info = if let Some(seconds) = credentials.expires_in_seconds() {
-                            format!(" (expires in {} seconds)", seconds)
-                        } else {
-                            " (expired)".to_string()
-                        };
-
-                        Ok(format!(
-                            "✅ Claude Code is authenticated and ready to use{}\nScopes: {}",
-                            expires_info,
-                            credentials.scopes.join(", ")
-                        ))
-                    }
-                    _ => Ok("✅ Claude Code is authenticated and ready to use".to_string()),
-                }
-            }
+            Ok(true) => Ok("✅ Claude Code is authenticated and ready to use".to_string()),
             Ok(false) => Ok(
                 "❌ Claude Code is not authenticated. Please authenticate with your Claude \
                  account using OAuth."
@@ -553,39 +160,12 @@ impl ClaudeCodeClient {
         }
     }
 
-    /// Refresh OAuth credentials if they are expired but refresh token is valid
-    pub async fn refresh_credentials(
-        &self,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        log::debug!("Attempting to refresh OAuth credentials");
-
-        match self.oauth_client.load_credentials().await {
-            Ok(Some(credentials)) if credentials.is_expired() => {
-                log::info!("Credentials are expired, but refresh is not implemented yet");
-                // TODO: Implement refresh token flow in claude_oauth module
-                Err("Token refresh not yet implemented".into())
-            }
-            Ok(Some(_)) => {
-                log::debug!("Credentials are still valid, no refresh needed");
-                Ok(())
-            }
-            Ok(None) => {
-                log::debug!("No credentials found to refresh");
-                Err("No credentials found".into())
-            }
-            Err(e) => {
-                log::error!("Failed to load credentials for refresh: {}", e);
-                Err(e.into())
-            }
-        }
-    }
-
     /// Check Claude Code version and availability
     pub async fn check_availability(
         &self,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec!["claude".to_string(), "--version".to_string()];
-        self.exec_command(command).await
+        self.executor.exec_command(command).await
     }
 
     /// Update Claude CLI to latest version
@@ -595,121 +175,7 @@ impl ClaudeCodeClient {
             "-c".to_string(),
             "/opt/entrypoint.sh -c \"nvm use default && claude update\"".to_string(),
         ];
-        self.exec_command(command).await
-    }
-
-    /// Execute a command in the container and return output
-    async fn exec_command(
-        &self,
-        command: Vec<String>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        log::debug!(
-            "Executing command in container {}: {:?}",
-            self.container_id,
-            command
-        );
-
-        let exec_config = CreateExecOptions {
-            cmd: Some(command.clone()),
-            attach_stdout: Some(true),
-            attach_stderr: Some(true),
-            working_dir: self.config.working_directory.clone(),
-            env: Some(vec![
-                // Set up PATH to include NVM Node.js installation and standard paths
-                "PATH=/root/.nvm/versions/node/v22.16.0/bin:/root/.nvm/versions/node/v20.19.2/bin:\
-                 /root/.nvm/versions/node/v18.20.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/\
-                 usr/bin:/sbin:/bin"
-                    .to_string(),
-                // Ensure Node.js modules are available
-                "NODE_PATH=/root/.nvm/versions/node/v22.16.0/lib/node_modules".to_string(),
-            ]),
-            ..Default::default()
-        };
-
-        log::debug!(
-            "Creating exec for container {} with working_dir: {:?}",
-            self.container_id,
-            self.config.working_directory
-        );
-
-        let exec = match self
-            .docker
-            .create_exec(&self.container_id, exec_config)
-            .await
-        {
-            Ok(exec) => {
-                log::debug!("Successfully created exec with ID: {}", exec.id);
-                exec
-            }
-            Err(e) => {
-                log::error!(
-                    "Failed to create exec for container {}: {}",
-                    self.container_id,
-                    e
-                );
-                return Err(e.into());
-            }
-        };
-
-        let start_config = StartExecOptions {
-            detach: false,
-            ..Default::default()
-        };
-
-        let mut output = String::new();
-        let mut stderr_output = String::new();
-
-        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
-            bollard::exec::StartExecResults::Attached {
-                output: mut output_stream,
-                ..
-            } => {
-                log::debug!("Successfully attached to exec {}, reading output", exec.id);
-                while let Some(Ok(msg)) = output_stream.next().await {
-                    match msg {
-                        bollard::container::LogOutput::StdOut { message } => {
-                            let stdout_str = String::from_utf8_lossy(&message);
-                            log::debug!("Command stdout: '{}'", stdout_str);
-                            output.push_str(&stdout_str);
-                        }
-                        bollard::container::LogOutput::StdErr { message } => {
-                            let stderr_str = String::from_utf8_lossy(&message);
-                            log::debug!("Command stderr: '{}'", stderr_str);
-                            stderr_output.push_str(&stderr_str);
-                            output.push_str(&stderr_str);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            bollard::exec::StartExecResults::Detached => {
-                log::error!("Unexpected detached execution for exec {}", exec.id);
-                return Err("Unexpected detached execution".into());
-            }
-        }
-
-        // Check the exit code of the executed command
-        let exec_inspect = self.docker.inspect_exec(&exec.id).await?;
-        let exit_code = exec_inspect.exit_code.unwrap_or(-1);
-
-        log::debug!("Command completed with exit code: {}", exit_code);
-        log::debug!("Command total output length: {} chars", output.len());
-        log::debug!("Command stderr length: {} chars", stderr_output.len());
-
-        if exit_code != 0 {
-            log::warn!("Command failed with exit code {}", exit_code);
-            log::debug!("Failed command output: '{}'", output.trim());
-            // Command failed - return error with the output
-            return Err(format!(
-                "Command failed with exit code {}: {}",
-                exit_code,
-                output.trim()
-            )
-            .into());
-        }
-
-        log::debug!("Command succeeded, returning output");
-        Ok(output.trim().to_string())
+        self.executor.exec_command(command).await
     }
 
     /// Helper method for basic command execution (used in tests)
@@ -718,7 +184,7 @@ impl ClaudeCodeClient {
         &self,
         command: Vec<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        self.exec_command(command).await
+        self.executor.exec_command(command).await
     }
 }
 

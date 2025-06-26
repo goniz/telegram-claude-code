@@ -11,6 +11,7 @@
 
 use bollard::Docker;
 use rstest::*;
+use telegram_bot::claude_code_client::container::generate_volume_name;
 use telegram_bot::{
     container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig,
 };
@@ -97,7 +98,7 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
     let _ = container_utils::clear_coding_session(docker, container_name).await;
 
     // Clean up volume
-    let volume_name = container_utils::generate_volume_name(&user_id.to_string());
+    let volume_name = generate_volume_name(&user_id.to_string());
     let _ = docker.remove_volume(&volume_name, None).await;
 }
 
@@ -539,7 +540,7 @@ async fn test_claude_config_persistence_between_sessions(docker_socket: Docker) 
     let container_name_2 = format!("test-config-persistence-2-{}", Uuid::new_v4());
 
     // Clean up any existing volume before starting test
-    let volume_name = container_utils::generate_volume_name(&test_user_id.to_string());
+    let volume_name = generate_volume_name(&test_user_id.to_string());
     let _ = docker_socket.remove_volume(&volume_name, None).await;
 
     // Step 1: Start first coding session with persistent volume
@@ -697,8 +698,8 @@ async fn test_claude_config_isolation_between_users(docker_socket: Docker) {
     let container_name_2 = format!("test-config-isolation-2-{}", Uuid::new_v4());
 
     // Clean up any existing volumes
-    let volume_name_1 = container_utils::generate_volume_name(&test_user_id_1.to_string());
-    let volume_name_2 = container_utils::generate_volume_name(&test_user_id_2.to_string());
+    let volume_name_1 = generate_volume_name(&test_user_id_1.to_string());
+    let volume_name_2 = generate_volume_name(&test_user_id_2.to_string());
     let _ = docker_socket.remove_volume(&volume_name_1, None).await;
     let _ = docker_socket.remove_volume(&volume_name_2, None).await;
 

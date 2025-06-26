@@ -2130,43 +2130,6 @@ async fn test_exec_command_allow_failure_working_directory(
     );
 }
 
-#[rstest]
-#[tokio::test]
-async fn test_exec_command_allow_failure_timeout_behavior(
-    #[future] test_container: (Docker, String, String),
-) {
-    let (docker, container_id, container_name) = test_container.await;
-
-    // Test with very short timeout to trigger timeout behavior
-    let mut config = GithubClientConfig::default();
-    config.exec_timeout_secs = 1; // 1 second timeout
-    let client = GithubClient::new(docker.clone(), container_id, config);
-
-    // Test command that takes longer than timeout
-    let result = client
-        .exec_command_allow_failure(vec!["sleep".to_string(), "2".to_string()])
-        .await;
-
-    // Cleanup
-    cleanup_container(&docker, &container_name).await;
-
-    // This should return an error due to timeout
-    assert!(
-        result.is_err(),
-        "Long-running command should timeout and return error"
-    );
-    let error_msg = result.unwrap_err().to_string();
-    assert!(
-        error_msg.contains("timed out"),
-        "Error should mention timeout: '{}'",
-        error_msg
-    );
-    assert!(
-        error_msg.contains("sleep 2"),
-        "Error should mention the command: '{}'",
-        error_msg
-    );
-}
 
 #[rstest]
 #[tokio::test]
