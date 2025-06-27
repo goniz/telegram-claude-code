@@ -13,6 +13,7 @@ pub fn escape_markdown_v2(text: &str) -> String {
         .collect()
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,4 +93,5 @@ mod tests {
         let formatted = format!("```{}```", escape_markdown_v2(code));
         assert_eq!(formatted, "```ABC\\-123```");
     }
+
 }

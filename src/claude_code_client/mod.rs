@@ -8,6 +8,7 @@ pub mod container_cred_storage;
 pub mod container_utils;
 pub mod executor;
 pub mod github_client;
+pub mod streaming;
 
 pub use auth::{AuthState, AuthenticationHandle};
 pub use config::ClaudeCodeConfig;
@@ -15,6 +16,7 @@ pub use container_cred_storage::ContainerCredStorage;
 pub use executor::CommandExecutor;
 #[allow(unused_imports)]
 pub use github_client::{GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult};
+pub use streaming::{AssistantMessage, ClaudeMessage, ContentBlock, ToolResult, UserMessage};
 
 // Re-export OAuth types from oauth module
 pub use crate::oauth::{ClaudeAuth, Config as OAuthConfig, Credentials, OAuthError};
