@@ -1,14 +1,66 @@
-use crate::{escape_markdown_v2, BotState};
+use crate::bot::markdown::escape_markdown_v2;
+use crate::BotState;
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
 use serde_json;
 use std::time::{Duration, Instant};
-use telegram_bot::claude_code_client::ClaudeCodeClient;
+use telegram_bot::claude_code_client::{ClaudeCodeClient, ClaudeMessage, ContentBlock};
 use teloxide::{
     prelude::*,
-    types::{MessageId, ParseMode},
+    types::{MessageId, ParseMode, InputFile},
 };
 use tokio::time;
+
+/// Maximum number of lines to show in tool result preview
+const TOOL_RESULT_PREVIEW_LINES: usize = 20;
+
+/// Create a truncated preview of tool result content
+fn create_tool_result_preview(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    
+    if lines.len() <= TOOL_RESULT_PREVIEW_LINES {
+        // Content is short enough, show it all
+        format!("📋 *Tool result:*\n```\n{}\n```", escape_markdown_v2(content))
+    } else {
+        // Content is too long, show preview with truncation indicator
+        let preview_lines = &lines[0..TOOL_RESULT_PREVIEW_LINES];
+        let preview_content = preview_lines.join("\n");
+        let remaining_lines = lines.len() - TOOL_RESULT_PREVIEW_LINES;
+        
+        format!(
+            "📋 *Tool result \\(showing first {} lines, {} more lines hidden\\):*\n```\n{}\n\\.\\.\\.\n```",
+            TOOL_RESULT_PREVIEW_LINES,
+            remaining_lines,
+            escape_markdown_v2(&preview_content)
+        )
+    }
+}
+
+/// Send tool result as attachment, with fallback to text preview
+async fn send_tool_result_as_attachment(
+    bot: Bot,
+    chat_id: ChatId,
+    result_content: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let file_content = result_content.to_string();
+    let input_file = InputFile::memory(file_content.into_bytes())
+        .file_name("tool_result.txt");
+    
+    match bot.send_document(chat_id, input_file)
+        .caption("📋 Tool result output")
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            log::error!("Failed to send tool result as attachment: {}", e);
+            // Fallback to text message if attachment fails
+            let result_message = create_tool_result_preview(result_content);
+            bot.send_message(chat_id, result_message)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            Ok(())
+        }
+    }
+}
 
 /// Live message state for real-time updates
 #[derive(Debug)]
@@ -48,84 +100,6 @@ impl LiveMessage {
     }
 }
 
-/// Claude CLI streaming JSON message types
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
-enum ClaudeMessage {
-    #[serde(rename = "system")]
-    System {
-        subtype: String,
-        #[serde(default)]
-        cwd: Option<String>,
-        #[serde(default)]
-        session_id: Option<String>,
-        #[serde(default)]
-        tools: Option<Vec<String>>,
-        #[serde(default)]
-        model: Option<String>,
-    },
-    #[serde(rename = "assistant")]
-    Assistant {
-        message: AssistantMessage,
-        #[serde(default)]
-        session_id: Option<String>,
-    },
-    #[serde(rename = "user")]
-    User {
-        message: UserMessage,
-        #[serde(default)]
-        session_id: Option<String>,
-    },
-    #[serde(rename = "result")]
-    Result {
-        subtype: String,
-        is_error: bool,
-        result: String,
-        session_id: String,
-        #[serde(default)]
-        total_cost_usd: Option<f64>,
-        #[serde(default)]
-        duration_ms: Option<u64>,
-        #[serde(default)]
-        num_turns: Option<u32>,
-    },
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct AssistantMessage {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    content: Option<Vec<ContentBlock>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct UserMessage {
-    #[serde(default)]
-    content: Option<Vec<ToolResult>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
-enum ContentBlock {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        id: String,
-        name: String,
-        #[serde(default)]
-        input: Option<serde_json::Value>,
-    },
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ToolResult {
-    #[serde(default)]
-    tool_use_id: Option<String>,
-    #[serde(default)]
-    content: Option<String>,
-}
 
 /// Handle the /claude command
 pub async fn handle_claude(
@@ -320,10 +294,12 @@ pub async fn process_claude_output(
                         if let Some(content) = user_msg.content {
                             for tool_result in content {
                                 if let Some(result_content) = tool_result.content {
-                                    responses.push(format!(
-                                        "📋 *Tool result:*\n```\n{}\n```",
-                                        escape_markdown_v2(&result_content)
-                                    ));
+                                    // Send tool result as attachment instead of text
+                                    if let Err(e) = send_tool_result_as_attachment(bot.clone(), chat_id, &result_content).await {
+                                        log::error!("Failed to send tool result: {}", e);
+                                        // Add to responses as fallback
+                                        responses.push(create_tool_result_preview(&result_content));
+                                    }
                                 }
                             }
                         }
@@ -585,14 +561,8 @@ async fn process_streaming_json_line(
                     if let Some(content) = user_msg.content {
                         for tool_result in content {
                             if let Some(result_content) = tool_result.content {
-                                let result_message = format!(
-                                    "📋 *Tool result:*\n```\n{}\n```",
-                                    escape_markdown_v2(&result_content)
-                                );
-
-                                bot.send_message(chat_id, result_message)
-                                    .parse_mode(ParseMode::MarkdownV2)
-                                    .await?;
+                                // Send tool result as attachment instead of text
+                                send_tool_result_as_attachment(bot.clone(), chat_id, &result_content).await?;
                             }
                         }
                     }
@@ -770,6 +740,7 @@ pub fn build_claude_command_args(prompt: &str, conversation_id: Option<&str>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use telegram_bot::claude_code_client::{ClaudeMessage, ContentBlock};
 
     #[test]
     fn test_json_parsing_with_example_output() {
@@ -985,5 +956,48 @@ mod tests {
 
         // Ensure no --resume flag is present
         assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn test_create_tool_result_preview_short_content() {
+        let short_content = "Line 1\nLine 2\nLine 3";
+        let result = create_tool_result_preview(short_content);
+        
+        // Should not be truncated
+        assert!(result.contains("📋 *Tool result:*"));
+        assert!(result.contains("Line 1"));
+        assert!(result.contains("Line 3"));
+        assert!(!result.contains("more lines hidden"));
+    }
+
+    #[test]
+    fn test_create_tool_result_preview_long_content() {
+        // Create content with more than TOOL_RESULT_PREVIEW_LINES
+        let lines: Vec<String> = (1..=30).map(|i| format!("Line {}", i)).collect();
+        let long_content = lines.join("\n");
+        
+        let result = create_tool_result_preview(&long_content);
+        
+        // Should be truncated
+        assert!(result.contains(&format!("showing first {} lines", TOOL_RESULT_PREVIEW_LINES)));
+        assert!(result.contains("more lines hidden"));
+        assert!(result.contains("Line 1"));
+        assert!(result.contains(&format!("Line {}", TOOL_RESULT_PREVIEW_LINES)));
+        assert!(!result.contains(&format!("Line {}", TOOL_RESULT_PREVIEW_LINES + 1)));
+        assert!(result.contains("\\.\\.\\.")); // Truncation indicator
+    }
+
+    #[test]
+    fn test_create_tool_result_preview_exactly_at_limit() {
+        // Create content with exactly TOOL_RESULT_PREVIEW_LINES
+        let lines: Vec<String> = (1..=TOOL_RESULT_PREVIEW_LINES).map(|i| format!("Line {}", i)).collect();
+        let content = lines.join("\n");
+        
+        let result = create_tool_result_preview(&content);
+        
+        // Should not be truncated
+        assert!(result.contains("📋 *Tool result:*"));
+        assert!(!result.contains("more lines hidden"));
+        assert!(!result.contains("\\.\\.\\.")); 
     }
 }
