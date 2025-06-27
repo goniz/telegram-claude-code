@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use telegram_bot::claude_code_client::{ClaudeCodeClient, ClaudeMessage, ContentBlock};
 use teloxide::{
     prelude::*,
-    types::{MessageId, ParseMode},
+    types::{MessageId, ParseMode, InputFile},
 };
 use tokio::time;
 
@@ -32,6 +32,33 @@ fn create_tool_result_preview(content: &str) -> String {
             remaining_lines,
             escape_markdown_v2(&preview_content)
         )
+    }
+}
+
+/// Send tool result as attachment, with fallback to text preview
+async fn send_tool_result_as_attachment(
+    bot: Bot,
+    chat_id: ChatId,
+    result_content: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let file_content = result_content.to_string();
+    let input_file = InputFile::memory(file_content.into_bytes())
+        .file_name("tool_result.txt");
+    
+    match bot.send_document(chat_id, input_file)
+        .caption("📋 Tool result output")
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            log::error!("Failed to send tool result as attachment: {}", e);
+            // Fallback to text message if attachment fails
+            let result_message = create_tool_result_preview(result_content);
+            bot.send_message(chat_id, result_message)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            Ok(())
+        }
     }
 }
 
@@ -267,10 +294,12 @@ pub async fn process_claude_output(
                         if let Some(content) = user_msg.content {
                             for tool_result in content {
                                 if let Some(result_content) = tool_result.content {
-                                    responses.push(format!(
-                                        "📋 *Tool result:*\n```\n{}\n```",
-                                        escape_markdown_v2(&result_content)
-                                    ));
+                                    // Send tool result as attachment instead of text
+                                    if let Err(e) = send_tool_result_as_attachment(bot.clone(), chat_id, &result_content).await {
+                                        log::error!("Failed to send tool result: {}", e);
+                                        // Add to responses as fallback
+                                        responses.push(create_tool_result_preview(&result_content));
+                                    }
                                 }
                             }
                         }
@@ -532,11 +561,8 @@ async fn process_streaming_json_line(
                     if let Some(content) = user_msg.content {
                         for tool_result in content {
                             if let Some(result_content) = tool_result.content {
-                                let result_message = create_tool_result_preview(&result_content);
-
-                                bot.send_message(chat_id, result_message)
-                                    .parse_mode(ParseMode::MarkdownV2)
-                                    .await?;
+                                // Send tool result as attachment instead of text
+                                send_tool_result_as_attachment(bot.clone(), chat_id, &result_content).await?;
                             }
                         }
                     }
