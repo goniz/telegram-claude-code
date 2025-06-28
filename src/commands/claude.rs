@@ -876,8 +876,8 @@ mod tests {
         let prompt = "Write a script with \"quotes\" and 'apostrophes' and $variables";
         let args = build_claude_command_args(prompt, None);
 
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
+        assert_eq!(args.len(), 7);
+        assert_eq!(args[6], prompt);
     }
 
     #[test]
@@ -886,8 +886,8 @@ mod tests {
             "Write a script that:\n1. Reads a file\n2. Processes the data\n3. Outputs results";
         let args = build_claude_command_args(prompt, None);
 
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
+        assert_eq!(args.len(), 7);
+        assert_eq!(args[6], prompt);
     }
 
     #[test]
@@ -895,8 +895,8 @@ mod tests {
         let prompt = "Write a program that displays 🤖 emojis and handles café, naïve, and résumé";
         let args = build_claude_command_args(prompt, None);
 
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
+        assert_eq!(args.len(), 7);
+        assert_eq!(args[6], prompt);
     }
 
     #[test]
@@ -906,17 +906,16 @@ mod tests {
         let args = build_claude_command_args(prompt, Some(conversation_id));
 
         // Verify the command structure with conversation ID
-        assert_eq!(args.len(), 10);
+        assert_eq!(args.len(), 9);
         assert_eq!(args[0], "claude");
         assert_eq!(args[1], "--print");
         assert_eq!(args[2], "--verbose");
         assert_eq!(args[3], "--output-format");
         assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "--resume");
-        assert_eq!(args[8], conversation_id);
-        assert_eq!(args[9], prompt);
+        assert_eq!(args[5], "--allowedTools=Edit");
+        assert_eq!(args[6], "--resume");
+        assert_eq!(args[7], conversation_id);
+        assert_eq!(args[8], prompt);
     }
 
     #[test]
@@ -925,15 +924,14 @@ mod tests {
         let args = build_claude_command_args(prompt, None);
 
         // Verify the command structure without conversation ID
-        assert_eq!(args.len(), 8);
+        assert_eq!(args.len(), 7);
         assert_eq!(args[0], "claude");
         assert_eq!(args[1], "--print");
         assert_eq!(args[2], "--verbose");
         assert_eq!(args[3], "--output-format");
         assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], prompt);
+        assert_eq!(args[5], "--allowedTools=Edit");
+        assert_eq!(args[6], prompt);
 
         // Ensure no --resume flag is present
         assert!(!args.contains(&"--resume".to_string()));
