@@ -16,6 +16,8 @@ use std::collections::HashMap;
 
 // Import volume management functions from the volume module
 use super::volume::{create_auth_mounts, ensure_user_volume};
+// Import file operations for container file management
+use super::file_ops::container_put_file;
 
 /// Configuration for coding container behavior
 #[derive(Debug, Clone, Default)]
@@ -65,7 +67,7 @@ async fn init_claude_configuration(
     .await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
 
-    // Create .claude directory and settings.json with allowedTools configuration for all basic tools
+    // Create .claude directory and settings.json with defaultMode configuration for auto-accepting edits
     exec_command_in_container(
         docker,
         container_id,
@@ -79,30 +81,32 @@ async fn init_claude_configuration(
     .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
     
     let settings_json = r#"{
-    "allowedTools": [
-        "Edit",
-        "Read", 
-        "Write",
-        "Bash",
-        "Glob",
-        "Grep",
-        "LS",
-        "MultiEdit",
-        "Task"
+  "defaultMode": "acceptEdits",
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Read", 
+      "Write",
+      "Bash",
+      "Glob",
+      "Grep",
+      "LS",
+      "MultiEdit",
+      "Task"
     ]
+  }
 }"#;
     
-    exec_command_in_container(
+    // Use container_put_file to write settings.json directly to the container
+    container_put_file(
         docker,
         container_id,
-        vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("echo '{}' > /root/.claude/settings.json", settings_json),
-        ],
+        "/root/.claude/settings.json",
+        settings_json.as_bytes(),
+        Some(0o644),
     )
     .await
-    .map_err(|e| format!("Failed to initialize settings.json: {}", e))?;
+    .map_err(|e| format!("Failed to write settings.json: {}", e))?;
 
     // Set Claude configuration for trust dialog
     exec_command_in_container(
