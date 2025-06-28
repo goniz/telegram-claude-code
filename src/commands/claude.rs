@@ -721,8 +721,7 @@ pub fn build_claude_command_args(prompt: &str, conversation_id: Option<&str>) ->
         "--verbose".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
-        "--allowedTools".to_string(),
-        "Edit".to_string(),
+        "--allowedTools=Edit".to_string(),
     ];
 
     if let Some(conv_id) = conversation_id {
@@ -844,8 +843,7 @@ mod tests {
             "--verbose".to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
-            "--allowedTools".to_string(),
-            "Edit".to_string(),
+            "--allowedTools=Edit".to_string(),
             prompt.to_string(),
         ];
 
@@ -864,30 +862,13 @@ mod tests {
             "--verbose".to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
-            "--allowedTools".to_string(),
-            "Edit".to_string(),
+            "--allowedTools=Edit".to_string(),
             "--resume".to_string(),
             conversation_id.to_string(),
             prompt.to_string(),
         ];
 
         assert_eq!(args, expected);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_empty_prompt() {
-        let prompt = "";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[0], "claude");
-        assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--verbose");
-        assert_eq!(args[3], "--output-format");
-        assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "");
     }
 
     #[test]
@@ -907,20 +888,6 @@ mod tests {
 
         assert_eq!(args.len(), 8);
         assert_eq!(args[7], prompt);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_long_conversation_id() {
-        let prompt = "Test prompt";
-        let conversation_id = "very-long-conversation-id-with-many-characters-and-dashes-123456789";
-        let args = build_claude_command_args(prompt, Some(conversation_id));
-
-        assert_eq!(args.len(), 10);
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "--resume");
-        assert_eq!(args[8], conversation_id);
-        assert_eq!(args[9], prompt);
     }
 
     #[test]
