@@ -756,3 +756,162 @@ async fn test_complete_start_claudestatus_workflow(docker: Docker) {
 
     println!("🎉 Complete workflow test passed!");
 }
+
+/// Tests that settings.json is properly created in both volume and non-volume scenarios
+///
+/// This test verifies that the Claude settings.json file is created in the correct
+/// location and with the correct content for both persistent and non-persistent scenarios.
+#[rstest]
+#[tokio::test]
+async fn test_claude_settings_json_creation(docker: Docker) {
+    let test_user_id = 777777;
+    let container_name_with_volume = format!("test-settings-volume-{}", Uuid::new_v4());
+    let container_name_without_volume = format!("test-settings-no-volume-{}", Uuid::new_v4());
+
+    // Clean up any existing volume before starting test
+    let volume_name = generate_volume_name(&test_user_id.to_string());
+    let _ = docker.remove_volume(&volume_name, None).await;
+
+    // Test 1: With persistent volume - settings.json should be in volume
+    println!("=== Testing settings.json with persistent volume ===");
+    let session_with_volume = container_utils::start_coding_session(
+        &docker,
+        &container_name_with_volume,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig {
+            persistent_volume_key: Some(test_user_id.to_string()),
+        },
+    )
+    .await;
+
+    assert!(
+        session_with_volume.is_ok(),
+        "Session with persistent volume should start successfully: {:?}",
+        session_with_volume.as_ref().err()
+    );
+    let client_with_volume = session_with_volume.unwrap();
+
+    // Check that settings.json exists and has correct content
+    let settings_content_result = container_utils::exec_command_in_container(
+        &docker,
+        client_with_volume.container_id(),
+        vec!["cat".to_string(), "/root/.claude/settings.json".to_string()],
+    )
+    .await;
+
+    assert!(
+        settings_content_result.is_ok(),
+        "Should be able to read settings.json with persistent volume"
+    );
+    let settings_content = settings_content_result.unwrap();
+    assert!(
+        settings_content.contains("defaultMode"),
+        "settings.json should contain defaultMode"
+    );
+    assert!(
+        settings_content.contains("acceptEdits"),
+        "settings.json should contain acceptEdits"
+    );
+    assert!(
+        settings_content.contains("Edit"),
+        "settings.json should allow Edit tool"
+    );
+
+    // Test 2: Without persistent volume - settings.json should be in regular location
+    println!("=== Testing settings.json without persistent volume ===");
+    let session_without_volume = container_utils::start_coding_session(
+        &docker,
+        &container_name_without_volume,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig {
+            persistent_volume_key: None,
+        },
+    )
+    .await;
+
+    assert!(
+        session_without_volume.is_ok(),
+        "Session without persistent volume should start successfully"
+    );
+    let client_without_volume = session_without_volume.unwrap();
+
+    // Check that settings.json exists and has correct content
+    let settings_content_result_no_volume = container_utils::exec_command_in_container(
+        &docker,
+        client_without_volume.container_id(),
+        vec!["cat".to_string(), "/root/.claude/settings.json".to_string()],
+    )
+    .await;
+
+    assert!(
+        settings_content_result_no_volume.is_ok(),
+        "Should be able to read settings.json without persistent volume"
+    );
+    let settings_content_no_volume = settings_content_result_no_volume.unwrap();
+    assert!(
+        settings_content_no_volume.contains("defaultMode"),
+        "settings.json should contain defaultMode"
+    );
+    assert!(
+        settings_content_no_volume.contains("acceptEdits"),
+        "settings.json should contain acceptEdits"
+    );
+    assert!(
+        settings_content_no_volume.contains("Edit"),
+        "settings.json should allow Edit tool"
+    );
+
+    // Test 3: Verify persistence of settings.json across volume sessions
+    println!("=== Testing settings.json persistence across volume sessions ===");
+
+    // Stop the first volume session
+    container_utils::clear_coding_session(&docker, &container_name_with_volume)
+        .await
+        .expect("Should clear session successfully");
+
+    // Start a new session with the same volume
+    let container_name_with_volume_2 = format!("test-settings-volume-2-{}", Uuid::new_v4());
+    let session_with_volume_2 = container_utils::start_coding_session(
+        &docker,
+        &container_name_with_volume_2,
+        ClaudeCodeConfig::default(),
+        container_utils::CodingContainerConfig {
+            persistent_volume_key: Some(test_user_id.to_string()),
+        },
+    )
+    .await;
+
+    assert!(
+        session_with_volume_2.is_ok(),
+        "Second session with persistent volume should start successfully"
+    );
+    let client_with_volume_2 = session_with_volume_2.unwrap();
+
+    // Check that settings.json still exists and has correct content
+    let settings_persistent_result = container_utils::exec_command_in_container(
+        &docker,
+        client_with_volume_2.container_id(),
+        vec!["cat".to_string(), "/root/.claude/settings.json".to_string()],
+    )
+    .await;
+
+    assert!(
+        settings_persistent_result.is_ok(),
+        "Should be able to read persisted settings.json"
+    );
+    let settings_persistent = settings_persistent_result.unwrap();
+    assert!(
+        settings_persistent.contains("defaultMode"),
+        "Persisted settings.json should contain defaultMode"
+    );
+    assert!(
+        settings_persistent.contains("acceptEdits"),
+        "Persisted settings.json should contain acceptEdits"
+    );
+
+    println!("✅ settings.json creation and persistence tests passed!");
+
+    // Cleanup
+    cleanup_test_resources(&docker, &container_name_without_volume, test_user_id).await;
+    cleanup_test_resources(&docker, &container_name_with_volume_2, test_user_id).await;
+}

@@ -47,7 +47,7 @@ fn prepare_container_env_vars_dynamic() -> Vec<String> {
 }
 
 /// Initialize Claude configuration in the container
-/// This sets up the Claude configuration files regardless of volume usage
+/// This sets up the basic Claude configuration files (without settings.json)
 async fn init_claude_configuration(
     docker: &Docker,
     container_id: &str,
@@ -67,6 +67,40 @@ async fn init_claude_configuration(
     .await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
 
+    // Set Claude configuration for trust dialog
+    exec_command_in_container(
+        docker,
+        container_id,
+        vec!["sh".to_string(), "-c".to_string(), "/opt/entrypoint.sh -c \"nvm use default && claude config set hasTrustDialogAccepted true\"".to_string()]
+    ).await
+    .map_err(|e| format!("Failed to set Claude trust dialog configuration: {}", e))?;
+
+    log::info!("Claude configuration initialization completed");
+    Ok(())
+}
+
+/// Initialize Claude settings.json file
+/// This creates the settings.json file with proper tool permissions
+async fn init_claude_settings(
+    docker: &Docker,
+    container_id: &str,
+    claude_dir_path: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Initializing Claude settings.json...");
+
+    // Create the .claude directory if it doesn't exist
+    exec_command_in_container(
+        docker,
+        container_id,
+        vec![
+            "mkdir".to_string(),
+            "-p".to_string(),
+            claude_dir_path.to_string(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("Failed to create Claude directory: {}", e))?;
+
     let settings_json = r#"{
   "permissions": {
     "defaultMode": "acceptEdits",
@@ -84,26 +118,20 @@ async fn init_claude_configuration(
   }
 }"#;
     
-    // Use container_put_file to write settings.json directly to the container
+    let settings_path = format!("{}/settings.json", claude_dir_path);
+    
+    // Use container_put_file to write settings.json
     container_put_file(
         docker,
         container_id,
-        "/root/.claude/settings.json",
+        &settings_path,
         settings_json.as_bytes(),
         Some(0o644),
     )
     .await
     .map_err(|e| format!("Failed to write settings.json: {}", e))?;
 
-    // Set Claude configuration for trust dialog
-    exec_command_in_container(
-        docker,
-        container_id,
-        vec!["sh".to_string(), "-c".to_string(), "/opt/entrypoint.sh -c \"nvm use default && claude config set hasTrustDialogAccepted true\"".to_string()]
-    ).await
-    .map_err(|e| format!("Failed to set Claude trust dialog configuration: {}", e))?;
-
-    log::info!("Claude configuration initialization completed");
+    log::info!("Claude settings.json initialization completed");
     Ok(())
 }
 
@@ -218,6 +246,9 @@ async fn init_volume_structure(
             .await
             .map_err(|e| format!("Failed to create authentication symlink: {}", e))?;
     }
+
+    // Initialize Claude settings.json in the volume directory
+    init_claude_settings(docker, container_id, "/volume_data/claude").await?;
 
     log::info!("Volume structure initialization completed");
     Ok(())
@@ -407,6 +438,9 @@ pub async fn start_coding_session(
     // Initialize volume structure for authentication persistence only if using persistent volumes
     if container_config.persistent_volume_key.is_some() {
         init_volume_structure(docker, &container.id).await?;
+    } else {
+        // For non-volume scenarios, create settings.json in the regular location
+        init_claude_settings(docker, &container.id, "/root/.claude").await?;
     }
 
     // Create Claude Code client (Claude Code is pre-installed in the runtime image)
