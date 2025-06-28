@@ -271,8 +271,8 @@ async fn prompt_for_repository_setup(bot: Bot, chat_id: ChatId) -> ResponseResul
                 "/claudestatus",
             ),
             InlineKeyboardButton::switch_inline_query_current_chat(
-                "📋 GitHub Status",
-                "/githubstatus",
+                "🔐 Auth Status",
+                "/auth",
             ),
         ],
     ]);

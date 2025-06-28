@@ -31,14 +31,8 @@ enum Command {
     ClearSession,
     #[command(description = "Check Claude Code availability")]
     ClaudeStatus,
-    #[command(
-        description = "Authenticate Claude using your Claude account credentials (OAuth flow)"
-    )]
-    AuthenticateClaude,
-    #[command(description = "Authenticate with GitHub using OAuth flow")]
-    GitHubAuth,
-    #[command(description = "Check GitHub authentication status")]
-    GitHubStatus,
+    #[command(description = "Unified authentication management for GitHub and Claude")]
+    Auth(String),
     #[command(description = "List GitHub repositories for the authenticated user")]
     GitHubRepoList,
     #[command(description = "Clone a GitHub repository")]
@@ -185,14 +179,13 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         Command::ClaudeStatus => {
             commands::handle_claude_status(bot, msg, bot_state, chat_id).await?;
         }
-        Command::AuthenticateClaude => {
-            commands::handle_claude_authentication(bot, msg, bot_state, chat_id).await?;
-        }
-        Command::GitHubAuth => {
-            commands::handle_github_authentication(bot, msg, bot_state, chat_id).await?;
-        }
-        Command::GitHubStatus => {
-            commands::handle_github_status(bot, msg, bot_state, chat_id).await?;
+        Command::Auth(args) => {
+            let auth_args = if args.trim().is_empty() {
+                None
+            } else {
+                Some(args)
+            };
+            commands::handle_auth(bot, msg, bot_state, chat_id, auth_args).await?;
         }
         Command::GitHubRepoList => {
             commands::handle_github_repo_list(bot, msg, bot_state, chat_id).await?;

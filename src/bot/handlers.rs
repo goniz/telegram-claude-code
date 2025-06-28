@@ -119,14 +119,14 @@ pub async fn handle_text_message(
 
         if let Some(code_sender) = code_sender_clone {
             // An auth session exists for this chat_id
-            if commands::authenticate_claude::is_authentication_code(&text) {
+            if commands::auth::is_authentication_code(&text) {
                 // Send the code to the authentication process
                 if code_sender.send(text.clone()).is_err() {
                     bot.send_message(
                         msg.chat.id,
                         "❌ Failed to send authentication code\\. The authentication session may \
                          have expired\\.\n\nPlease restart authentication with \
-                         `/authenticateclaude`",
+                         `/auth login`",
                     )
                     .parse_mode(ParseMode::MarkdownV2)
                     .await?;
