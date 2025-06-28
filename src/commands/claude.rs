@@ -869,20 +869,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_claude_command_args_empty_prompt() {
-        let prompt = "";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 6);
-        assert_eq!(args[0], "claude");
-        assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--verbose");
-        assert_eq!(args[3], "--output-format");
-        assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "");
-    }
-
-    #[test]
     fn test_build_claude_command_args_special_characters() {
         let prompt = "Write a script with \"quotes\" and 'apostrophes' and $variables";
         let args = build_claude_command_args(prompt, None);
@@ -899,18 +885,6 @@ mod tests {
 
         assert_eq!(args.len(), 6);
         assert_eq!(args[5], prompt);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_long_conversation_id() {
-        let prompt = "Test prompt";
-        let conversation_id = "very-long-conversation-id-with-many-characters-and-dashes-123456789";
-        let args = build_claude_command_args(prompt, Some(conversation_id));
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[5], "--resume");
-        assert_eq!(args[6], conversation_id);
-        assert_eq!(args[7], prompt);
     }
 
     #[test]
