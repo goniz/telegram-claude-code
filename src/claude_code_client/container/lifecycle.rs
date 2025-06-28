@@ -67,19 +67,6 @@ async fn init_claude_configuration(
     .await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
 
-    // Create .claude directory and settings.json with defaultMode configuration for auto-accepting edits
-    exec_command_in_container(
-        docker,
-        container_id,
-        vec![
-            "mkdir".to_string(),
-            "-p".to_string(),
-            "/root/.claude".to_string(),
-        ],
-    )
-    .await
-    .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
-    
     let settings_json = r#"{
   "permissions": {
     "defaultMode": "acceptEdits",
