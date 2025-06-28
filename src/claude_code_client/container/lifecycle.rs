@@ -65,6 +65,45 @@ async fn init_claude_configuration(
     .await
     .map_err(|e| format!("Failed to initialize .claude.json: {}", e))?;
 
+    // Create .claude directory and settings.json with allowedTools configuration for all basic tools
+    exec_command_in_container(
+        docker,
+        container_id,
+        vec![
+            "mkdir".to_string(),
+            "-p".to_string(),
+            "/root/.claude".to_string(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
+    
+    let settings_json = r#"{
+    "allowedTools": [
+        "Edit",
+        "Read", 
+        "Write",
+        "Bash",
+        "Glob",
+        "Grep",
+        "LS",
+        "MultiEdit",
+        "Task"
+    ]
+}"#;
+    
+    exec_command_in_container(
+        docker,
+        container_id,
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo '{}' > /root/.claude/settings.json", settings_json),
+        ],
+    )
+    .await
+    .map_err(|e| format!("Failed to initialize settings.json: {}", e))?;
+
     // Set Claude configuration for trust dialog
     exec_command_in_container(
         docker,
