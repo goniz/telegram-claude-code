@@ -81,8 +81,8 @@ async fn init_claude_configuration(
     .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
     
     let settings_json = r#"{
-  "defaultMode": "acceptEdits",
   "permissions": {
+    "defaultMode": "acceptEdits",
     "allow": [
       "Edit",
       "Read", 
