@@ -32,7 +32,8 @@ fn create_tool_result_preview(content: &str) -> String {
         let remaining_lines = lines.len() - TOOL_RESULT_PREVIEW_LINES;
 
         format!(
-            "📋 *Tool result \\\\(showing first {} lines, {} more lines hidden\\\\):*\\n```\\n{}\\n\\\\.\\\\.\\\\.\\n```",
+            "📋 *Tool result \\\\(showing first {} lines, {} more lines \
+             hidden\\\\):*\\n```\\n{}\\n\\\\.\\\\.\\\\.\\n```",
             TOOL_RESULT_PREVIEW_LINES,
             remaining_lines,
             escape_markdown_v2(&preview_content)
@@ -67,41 +68,6 @@ async fn send_tool_result_as_attachment(
     }
 }
 
-/// Live message state for real-time updates
-#[derive(Debug)]
-struct LiveMessage {
-    content: String,
-    last_update: Instant,
-    is_finalized: bool,
-}
-
-impl LiveMessage {
-    fn new(content: String) -> Self {
-        Self {
-            content,
-            last_update: Instant::now(),
-            is_finalized: false,
-        }
-    }
-
-    fn should_update(&self) -> bool {
-        !self.is_finalized && self.last_update.elapsed() > Duration::from_millis(500)
-    }
-
-    fn update_content(&mut self, new_content: String) -> bool {
-        if self.content != new_content {
-            self.content = new_content;
-            self.last_update = Instant::now();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn finalize(&mut self) {
-        self.is_finalized = true;
-    }
-}
 /// Handle the /claude command
 pub async fn handle_claude(
     bot: Bot,
@@ -397,24 +363,6 @@ async fn update_live_message(
     Ok(())
 }
 
-/// Build Claude command arguments for execution
-pub fn build_claude_command_args(prompt: &str, conversation_id: Option<&str>) -> Vec<String> {
-    let mut cmd_args = vec![
-        "claude".to_string(),
-        "--print".to_string(),
-        "--verbose".to_string(),
-        "--output-format".to_string(),
-        "stream-json".to_string(),
-    ];
-
-    if let Some(conv_id) = conversation_id {
-        cmd_args.push("--resume".to_string());
-        cmd_args.push(conv_id.to_string());
-    }
-
-    cmd_args.push(prompt.to_string());
-    cmd_args
-}
 
 /// Update conversation ID in bot state
 async fn update_conversation_id(bot_state: &BotState, chat_id: i64, conversation_id: String) {
@@ -438,42 +386,6 @@ async fn update_conversation_id(bot_state: &BotState, chat_id: i64, conversation
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_build_claude_command_args_basic() {
-        let prompt = "Write a hello world program";
-        let args = build_claude_command_args(prompt, None);
-
-        let expected = vec![
-            "claude".to_string(),
-            "--print".to_string(),
-            "--verbose".to_string(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            prompt.to_string(),
-        ];
-
-        assert_eq!(args, expected);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_with_resume() {
-        let prompt = "Continue the previous task";
-        let conversation_id = "test-conversation-123";
-        let args = build_claude_command_args(prompt, Some(conversation_id));
-
-        let expected = vec![
-            "claude".to_string(),
-            "--print".to_string(),
-            "--verbose".to_string(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            "--resume".to_string(),
-            conversation_id.to_string(),
-            prompt.to_string(),
-        ];
-
-        assert_eq!(args, expected);
-    }
 
     #[test]
     fn test_create_tool_result_preview_short_content() {
