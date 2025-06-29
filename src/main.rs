@@ -3,7 +3,7 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{dispatching::UpdateFilterExt, dptree, prelude::*, utils::command::BotCommands};
+use teloxide::{dispatching::UpdateFilterExt, dptree, prelude::*, utils::command::BotCommands, types::AllowedUpdate};
 use tokio::sync::Mutex;
 
 mod bot;
@@ -110,20 +110,23 @@ async fn main() {
     let bot_state_clone2 = bot_state.clone();
     let bot_state_clone3 = bot_state.clone();
 
-    let handler = Update::filter_message()
+    let handler = dptree::entry()
         .branch(
-            dptree::entry()
-                .filter_command::<Command>()
-                .endpoint(move |bot, msg, cmd| {
-                    let bot_state = bot_state_clone1.clone();
-                    answer(bot, msg, cmd, bot_state)
-                }),
-        )
-        .branch(
-            dptree::filter(|msg: Message| msg.text().is_some()).endpoint(move |bot, msg| {
-                let bot_state = bot_state_clone2.clone();
-                handle_text_message(bot, msg, bot_state)
-            }),
+            Update::filter_message()
+                .branch(
+                    dptree::entry()
+                        .filter_command::<Command>()
+                        .endpoint(move |bot, msg, cmd| {
+                            let bot_state = bot_state_clone1.clone();
+                            answer(bot, msg, cmd, bot_state)
+                        }),
+                )
+                .branch(
+                    dptree::filter(|msg: Message| msg.text().is_some()).endpoint(move |bot, msg| {
+                        let bot_state = bot_state_clone2.clone();
+                        handle_text_message(bot, msg, bot_state)
+                    }),
+                ),
         )
         .branch(Update::filter_callback_query().endpoint(move |bot, query| {
             let bot_state = bot_state_clone3.clone();
@@ -132,6 +135,9 @@ async fn main() {
 
     Dispatcher::builder(bot, handler)
         .enable_ctrlc_handler()
+        .default_handler(|upd| async move {
+            log::warn!("Unhandled update: {:?}", upd);
+        })
         .build()
         .dispatch()
         .await;
