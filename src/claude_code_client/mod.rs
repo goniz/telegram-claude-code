@@ -312,7 +312,13 @@ impl ClaudeCodeClient {
 
         let mut config = ClaudeCodeConfig::default();
         if let Some(dir) = working_directory {
-            config.working_directory = Some(dir);
+            // Ensure working directory is absolute for Docker exec
+            let absolute_dir = if std::path::Path::new(&dir).is_absolute() {
+                dir
+            } else {
+                format!("/workspace/{}", dir)
+            };
+            config.working_directory = Some(absolute_dir);
         }
 
         Ok(Self::new(docker, container_id, config))
