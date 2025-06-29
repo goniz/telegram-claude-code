@@ -143,10 +143,7 @@ async fn handle_auth_status(
         Err(_) => ("Claude Auth: Status unknown ❓".to_string(), false),
     };
 
-    let message = format!(
-        "🔐 *Authentication Status*\n\n{}\n{}",
-        github_status, claude_status
-    );
+    let message = format!("🔐 *Auth Status*\n\n{}\n{}", github_status, claude_status);
 
     // Create keyboard based on authentication status
     let mut keyboard_buttons = Vec::new();
@@ -240,7 +237,7 @@ async fn handle_auth_login(
                         .push("GitHub Auth: Waiting for OAuth completion 🔄".to_string());
 
                     let github_message = format!(
-                        "🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Click the button below to visit the authentication URL*\n\n2️⃣ *Enter this device code:*\n```{}```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes\\.",
+                        "🔗 *GitHub OAuth Required*\n\nDevice code: ```{}```\n\nClick below to authorize, then return here\\.",
                         escape_markdown_v2(device_code)
                     );
 
@@ -326,7 +323,7 @@ async fn handle_auth_login(
     }
 
     let summary_message = format!(
-        "🔐 *Authentication Login Results*\n\n{}",
+        "🔐 *Auth Results*\n\n{}",
         status_messages.join("\n")
     );
 
