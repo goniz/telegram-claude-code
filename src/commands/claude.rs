@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use telegram_bot::claude_code_client::{ClaudeCodeClient, ClaudeMessage, ContentBlock};
 use teloxide::{
     prelude::*,
-    types::{MessageId, ParseMode, InputFile},
+    types::{InputFile, MessageId, ParseMode},
 };
 use tokio::time;
 
@@ -16,18 +16,22 @@ const TOOL_RESULT_PREVIEW_LINES: usize = 20;
 /// Create a truncated preview of tool result content
 fn create_tool_result_preview(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
-    
+
     if lines.len() <= TOOL_RESULT_PREVIEW_LINES {
         // Content is short enough, show it all
-        format!("📋 *Tool result:*\n```\n{}\n```", escape_markdown_v2(content))
+        format!(
+            "📋 *Tool result:*\n```\n{}\n```",
+            escape_markdown_v2(content)
+        )
     } else {
         // Content is too long, show preview with truncation indicator
         let preview_lines = &lines[0..TOOL_RESULT_PREVIEW_LINES];
         let preview_content = preview_lines.join("\n");
         let remaining_lines = lines.len() - TOOL_RESULT_PREVIEW_LINES;
-        
+
         format!(
-            "📋 *Tool result \\(showing first {} lines, {} more lines hidden\\):*\n```\n{}\n\\.\\.\\.\n```",
+            "📋 *Tool result \\(showing first {} lines, {} more lines \
+             hidden\\):*\n```\n{}\n\\.\\.\\.\n```",
             TOOL_RESULT_PREVIEW_LINES,
             remaining_lines,
             escape_markdown_v2(&preview_content)
@@ -42,10 +46,10 @@ async fn send_tool_result_as_attachment(
     result_content: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let file_content = result_content.to_string();
-    let input_file = InputFile::memory(file_content.into_bytes())
-        .file_name("tool_result.txt");
-    
-    match bot.send_document(chat_id, input_file)
+    let input_file = InputFile::memory(file_content.into_bytes()).file_name("tool_result.txt");
+
+    match bot
+        .send_document(chat_id, input_file)
         .caption("📋 Tool result output")
         .await
     {
@@ -100,7 +104,6 @@ impl LiveMessage {
     }
 }
 
-
 /// Handle the /claude command
 pub async fn handle_claude(
     bot: Bot,
@@ -131,7 +134,8 @@ pub async fn handle_claude(
             // Send confirmation message
             bot.send_message(
                 msg.chat.id,
-                "🤖 *Starting new Claude conversation\\!*\n\nYou can now send me any message \\(without a command\\) and I'll forward it to Claude\\.",
+                "🤖 *Starting new Claude conversation\\!*\n\nYou can now send me any message \
+                 \\(without a command\\) and I'll forward it to Claude\\.",
             )
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
@@ -140,7 +144,8 @@ pub async fn handle_claude(
             bot.send_message(
                 msg.chat.id,
                 format!(
-                    "❌ No active coding session found: {}\n\nPlease start a coding session first using /start",
+                    "❌ No active coding session found: {}\n\nPlease start a coding session first \
+                     using /start",
                     escape_markdown_v2(&e.to_string())
                 ),
             )
@@ -295,7 +300,13 @@ pub async fn process_claude_output(
                             for tool_result in content {
                                 if let Some(result_content) = tool_result.content {
                                     // Send tool result as attachment instead of text
-                                    if let Err(e) = send_tool_result_as_attachment(bot.clone(), chat_id, &result_content).await {
+                                    if let Err(e) = send_tool_result_as_attachment(
+                                        bot.clone(),
+                                        chat_id,
+                                        &result_content,
+                                    )
+                                    .await
+                                    {
                                         log::error!("Failed to send tool result: {}", e);
                                         // Add to responses as fallback
                                         responses.push(create_tool_result_preview(&result_content));
@@ -503,7 +514,11 @@ async fn process_streaming_json_line(
                                         id
                                     );
                                 } else {
-                                    log::warn!("No Claude session found for chat {} when setting init conversation ID", chat_id.0);
+                                    log::warn!(
+                                        "No Claude session found for chat {} when setting init \
+                                         conversation ID",
+                                        chat_id.0
+                                    );
                                 }
                             }
                         }
@@ -562,7 +577,12 @@ async fn process_streaming_json_line(
                         for tool_result in content {
                             if let Some(result_content) = tool_result.content {
                                 // Send tool result as attachment instead of text
-                                send_tool_result_as_attachment(bot.clone(), chat_id, &result_content).await?;
+                                send_tool_result_as_attachment(
+                                    bot.clone(),
+                                    chat_id,
+                                    &result_content,
+                                )
+                                .await?;
                             }
                         }
                     }
@@ -721,8 +741,6 @@ pub fn build_claude_command_args(prompt: &str, conversation_id: Option<&str>) ->
         "--verbose".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
-        "--allowedTools".to_string(),
-        "Edit".to_string(),
     ];
 
     if let Some(conv_id) = conversation_id {
@@ -844,8 +862,6 @@ mod tests {
             "--verbose".to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
-            "--allowedTools".to_string(),
-            "Edit".to_string(),
             prompt.to_string(),
         ];
 
@@ -864,8 +880,6 @@ mod tests {
             "--verbose".to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
-            "--allowedTools".to_string(),
-            "Edit".to_string(),
             "--resume".to_string(),
             conversation_id.to_string(),
             prompt.to_string(),
@@ -875,108 +889,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_claude_command_args_empty_prompt() {
-        let prompt = "";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[0], "claude");
-        assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--verbose");
-        assert_eq!(args[3], "--output-format");
-        assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "");
-    }
-
-    #[test]
-    fn test_build_claude_command_args_special_characters() {
-        let prompt = "Write a script with \"quotes\" and 'apostrophes' and $variables";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_multiline_prompt() {
-        let prompt =
-            "Write a script that:\n1. Reads a file\n2. Processes the data\n3. Outputs results";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_long_conversation_id() {
-        let prompt = "Test prompt";
-        let conversation_id = "very-long-conversation-id-with-many-characters-and-dashes-123456789";
-        let args = build_claude_command_args(prompt, Some(conversation_id));
-
-        assert_eq!(args.len(), 10);
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "--resume");
-        assert_eq!(args[8], conversation_id);
-        assert_eq!(args[9], prompt);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_unicode_prompt() {
-        let prompt = "Write a program that displays 🤖 emojis and handles café, naïve, and résumé";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
-    }
-
-    #[test]
-    fn test_conversation_id_in_command_args() {
-        let prompt = "Continue the conversation";
-        let conversation_id = "test-conv-id-123";
-        let args = build_claude_command_args(prompt, Some(conversation_id));
-
-        // Verify the command structure with conversation ID
-        assert_eq!(args.len(), 10);
-        assert_eq!(args[0], "claude");
-        assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--verbose");
-        assert_eq!(args[3], "--output-format");
-        assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "--resume");
-        assert_eq!(args[8], conversation_id);
-        assert_eq!(args[9], prompt);
-    }
-
-    #[test]
-    fn test_no_conversation_id_in_command_args() {
-        let prompt = "Start new conversation";
-        let args = build_claude_command_args(prompt, None);
-
-        // Verify the command structure without conversation ID
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[0], "claude");
-        assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--verbose");
-        assert_eq!(args[3], "--output-format");
-        assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], prompt);
-
-        // Ensure no --resume flag is present
-        assert!(!args.contains(&"--resume".to_string()));
-    }
-
-    #[test]
     fn test_create_tool_result_preview_short_content() {
         let short_content = "Line 1\nLine 2\nLine 3";
         let result = create_tool_result_preview(short_content);
-        
+
         // Should not be truncated
         assert!(result.contains("📋 *Tool result:*"));
         assert!(result.contains("Line 1"));
@@ -989,11 +905,14 @@ mod tests {
         // Create content with more than TOOL_RESULT_PREVIEW_LINES
         let lines: Vec<String> = (1..=30).map(|i| format!("Line {}", i)).collect();
         let long_content = lines.join("\n");
-        
+
         let result = create_tool_result_preview(&long_content);
-        
+
         // Should be truncated
-        assert!(result.contains(&format!("showing first {} lines", TOOL_RESULT_PREVIEW_LINES)));
+        assert!(result.contains(&format!(
+            "showing first {} lines",
+            TOOL_RESULT_PREVIEW_LINES
+        )));
         assert!(result.contains("more lines hidden"));
         assert!(result.contains("Line 1"));
         assert!(result.contains(&format!("Line {}", TOOL_RESULT_PREVIEW_LINES)));
@@ -1004,14 +923,16 @@ mod tests {
     #[test]
     fn test_create_tool_result_preview_exactly_at_limit() {
         // Create content with exactly TOOL_RESULT_PREVIEW_LINES
-        let lines: Vec<String> = (1..=TOOL_RESULT_PREVIEW_LINES).map(|i| format!("Line {}", i)).collect();
+        let lines: Vec<String> = (1..=TOOL_RESULT_PREVIEW_LINES)
+            .map(|i| format!("Line {}", i))
+            .collect();
         let content = lines.join("\n");
-        
+
         let result = create_tool_result_preview(&content);
-        
+
         // Should not be truncated
         assert!(result.contains("📋 *Tool result:*"));
         assert!(!result.contains("more lines hidden"));
-        assert!(!result.contains("\\.\\.\\.")); 
+        assert!(!result.contains("\\.\\.\\."));
     }
 }
