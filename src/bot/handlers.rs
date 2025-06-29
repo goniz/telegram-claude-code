@@ -416,47 +416,139 @@ pub async fn handle_callback_query(
     bot_state: BotState,
 ) -> ResponseResult<()> {
     if let Some(data) = &query.data {
-        if data.starts_with("clone:") {
-            // Extract repository name from callback data
-            let repository = data.strip_prefix("clone:").unwrap_or("");
+        if let Some(message) = &query.message {
+            let chat_id = message.chat().id;
+            
+            // Answer the callback query first to remove the loading state
+            bot.answer_callback_query(&query.id).await?;
 
-            if let Some(message) = &query.message {
-                // Handle both accessible and inaccessible messages
-                let chat_id = message.chat().id;
-                let container_name = format!("coding-session-{}", chat_id.0);
-
-                // Answer the callback query to remove the loading state
-                bot.answer_callback_query(&query.id).await?;
-
-                match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await
-                {
-                    Ok(client) => {
-                        let github_client = GithubClient::new(
-                            bot_state.docker.clone(),
-                            client.container_id().to_string(),
-                            GithubClientConfig::default(),
-                        );
-
-                        // Perform the clone operation
-                        commands::perform_github_clone(&bot, chat_id, &github_client, repository)
+            match data.as_str() {
+                "auth_login" => {
+                    // Handle auth login callback
+                    let container_name = format!("coding-session-{}", chat_id.0);
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                        Ok(client) => {
+                            // Create a fake message to pass to the auth handler
+                            let fake_msg = teloxide::types::Message {
+                                id: teloxide::types::MessageId(0),
+                                thread_id: None,
+                                date: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                                chat: message.chat().clone(),
+                                via_bot: None,
+                                kind: teloxide::types::MessageKind::Common(
+                                    teloxide::types::MessageCommon {
+                                        from: None,
+                                        forward: None,
+                                        reply_to_message: None,
+                                        edit_date: None,
+                                        media_kind: teloxide::types::MediaKind::Text(
+                                            teloxide::types::MediaText {
+                                                text: String::new(),
+                                                entities: Vec::new(),
+                                            }
+                                        ),
+                                        reply_markup: None,
+                                    }
+                                ),
+                            };
+                            commands::auth::handle_auth(bot, fake_msg, bot_state, chat_id.0, Some("login".to_string())).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                     first using /start",
+                                    escape_markdown_v2(&e.to_string())
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
                             .await?;
+                        }
                     }
-                    Err(e) => {
-                        bot.send_message(
-                            chat_id,
-                            format!(
-                                "❌ No active coding session found: {}\\n\\nPlease start a coding session \
-                                 first using /start",
-                                escape_markdown_v2(&e.to_string())
-                            ),
-                        )
-                        .parse_mode(ParseMode::MarkdownV2)
-                        .await?;
+                }
+                "github_repo_list" => {
+                    // Handle github repo list callback
+                    let container_name = format!("coding-session-{}", chat_id.0);
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                        Ok(client) => {
+                            // Create a fake message to pass to the command handler
+                            let fake_msg = teloxide::types::Message {
+                                id: teloxide::types::MessageId(0),
+                                thread_id: None,
+                                date: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                                chat: message.chat().clone(),
+                                via_bot: None,
+                                kind: teloxide::types::MessageKind::Common(
+                                    teloxide::types::MessageCommon {
+                                        from: None,
+                                        forward: None,
+                                        reply_to_message: None,
+                                        edit_date: None,
+                                        media_kind: teloxide::types::MediaKind::Text(
+                                            teloxide::types::MediaText {
+                                                text: String::new(),
+                                                entities: Vec::new(),
+                                            }
+                                        ),
+                                        reply_markup: None,
+                                    }
+                                ),
+                            };
+                            commands::github_repo_list::handle_github_repo_list(bot, fake_msg, bot_state, chat_id.0).await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                     first using /start",
+                                    escape_markdown_v2(&e.to_string())
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                        }
                     }
+                }
+                data if data.starts_with("clone:") => {
+                    // Extract repository name from callback data
+                    let repository = data.strip_prefix("clone:").unwrap_or("");
+                    let container_name = format!("coding-session-{}", chat_id.0);
+
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await
+                    {
+                        Ok(client) => {
+                            let github_client = GithubClient::new(
+                                bot_state.docker.clone(),
+                                client.container_id().to_string(),
+                                GithubClientConfig::default(),
+                            );
+
+                            // Perform the clone operation
+                            commands::perform_github_clone(&bot, chat_id, &github_client, repository)
+                                .await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                     first using /start",
+                                    escape_markdown_v2(&e.to_string())
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                        }
+                    }
+                }
+                _ => {
+                    // Unknown callback data, already answered above
                 }
             }
         } else {
-            // Unknown callback data, just answer the query
+            // No message, just answer the query
             bot.answer_callback_query(&query.id).await?;
         }
     } else {

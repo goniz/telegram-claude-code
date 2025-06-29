@@ -103,9 +103,9 @@ async fn handle_auth_status(
         GithubClientConfig::default(),
     );
 
-    let github_status = match github_client.check_auth_status().await {
+    let (github_status, github_authenticated) = match github_client.check_auth_status().await {
         Ok(auth_result) => {
-            if auth_result.authenticated {
+            let status = if auth_result.authenticated {
                 if let Some(username) = &auth_result.username {
                     format!("GitHub Auth: Logged in as {} ✅", escape_markdown_v2(username))
                 } else {
@@ -113,21 +113,24 @@ async fn handle_auth_status(
                 }
             } else {
                 "GitHub Auth: Not logged in ❌".to_string()
-            }
+            };
+            (status, auth_result.authenticated)
         }
-        Err(_) => "GitHub Auth: Status unknown ❓".to_string(),
+        Err(_) => ("GitHub Auth: Status unknown ❓".to_string(), false),
     };
 
     // Check Claude authentication status
-    let claude_status = match client.get_auth_info().await {
+    let (claude_status, claude_authenticated) = match client.get_auth_info().await {
         Ok(auth_info) => {
-            if auth_info.contains("Authenticated") || auth_info.contains("authenticated") {
+            let authenticated = auth_info.contains("Authenticated") || auth_info.contains("authenticated");
+            let status = if authenticated {
                 "Claude Auth: Logged in ✅".to_string()
             } else {
                 "Claude Auth: Not logged in ❌".to_string()
-            }
+            };
+            (status, authenticated)
         }
-        Err(_) => "Claude Auth: Status unknown ❓".to_string(),
+        Err(_) => ("Claude Auth: Status unknown ❓".to_string(), false),
     };
 
     let message = format!("🔐 *Authentication Status*\n\n{}\n{}", github_status, claude_status);
@@ -135,17 +138,17 @@ async fn handle_auth_status(
     // Create keyboard based on authentication status
     let mut keyboard_buttons = Vec::new();
     
-    if github_status.contains("❌") || claude_status.contains("❌") {
-        keyboard_buttons.push(vec![InlineKeyboardButton::switch_inline_query_current_chat(
+    if !github_authenticated || !claude_authenticated {
+        keyboard_buttons.push(vec![InlineKeyboardButton::callback(
             "🔐 Login to Services",
-            "/auth login",
+            "auth_login",
         )]);
     }
 
-    if github_status.contains("✅") {
-        keyboard_buttons.push(vec![InlineKeyboardButton::switch_inline_query_current_chat(
+    if github_authenticated {
+        keyboard_buttons.push(vec![InlineKeyboardButton::callback(
             "📂 List Repositories",
-            "/githubrepolist",
+            "github_repo_list",
         )]);
     }
 
