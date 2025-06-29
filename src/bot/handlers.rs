@@ -145,7 +145,7 @@ pub async fn handle_text_message(
                     msg.chat.id,
                     "🔐 *Authentication in Progress*\n\nI'm currently waiting for your \
                      authentication code\\. Please paste the code you received during the OAuth \
-                     flow\\.\n\nIf you need to restart authentication, use `/authenticateclaude`",
+                     flow\\.\n\nIf you need to restart authentication, use `/auth login`",
                 )
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;

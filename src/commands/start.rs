@@ -207,7 +207,7 @@ async fn show_authentication_guidance(
         keyboard_buttons.push(vec![
             InlineKeyboardButton::switch_inline_query_current_chat(
                 "🔐 Authenticate GitHub",
-                "/githubauth",
+                "/auth login",
             ),
         ]);
     }
@@ -217,7 +217,7 @@ async fn show_authentication_guidance(
         keyboard_buttons.push(vec![
             InlineKeyboardButton::switch_inline_query_current_chat(
                 "🔐 Authenticate Claude",
-                "/authenticateclaude",
+                "/auth login",
             ),
         ]);
     }

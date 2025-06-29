@@ -45,7 +45,7 @@ pub async fn handle_github_repo_list(
                         || e.to_string().contains("not authenticated")
                     {
                         "❌ *GitHub Authentication Required*\n\n🔐 Please authenticate with GitHub \
-                         first using /githubauth"
+                         first using /auth login"
                     } else if e.to_string().contains("gh: command not found")
                         || e.to_string().contains("executable file not found")
                     {
