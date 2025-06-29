@@ -14,7 +14,7 @@ pub mod response_processor;
 pub mod streaming;
 
 pub use auth::{AuthState, AuthenticationHandle};
-pub use claude_command::{ClaudeCommandExecutor, ClaudeExecutionResult, ClaudeStreamEvent};
+pub use claude_command::{ClaudeCommandExecutor, ClaudeExecutionResult};
 pub use config::ClaudeCodeConfig;
 pub use container_cred_storage::ContainerCredStorage;
 pub use executor::CommandExecutor;
@@ -261,13 +261,13 @@ impl ClaudeCodeClient {
             .build_command_args(prompt, conversation_id)
     }
 
-    /// Process Claude events using the response processor
-    pub fn process_claude_events(
+    /// Process parsed Claude messages using the response processor
+    pub fn process_claude_messages(
         &self,
-        events: Vec<ClaudeStreamEvent>,
+        messages: Vec<ParsedClaudeMessage>,
         processor: &mut ResponseProcessor,
     ) -> ProcessedResponse {
-        processor.process_events(events)
+        processor.process_messages(messages)
     }
 }
 

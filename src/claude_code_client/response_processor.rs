@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
-use super::claude_command::ClaudeStreamEvent;
-use super::streaming::{AssistantMessage, ContentBlock, UserMessage};
+use super::message_parser::{MessageType, ParsedClaudeMessage};
 
 /// Processes Claude responses and maintains conversation state
 #[derive(Debug)]
@@ -30,69 +29,73 @@ impl ResponseProcessor {
         self.conversation_id = conversation_id;
     }
 
-    /// Process a list of Claude stream events and extract structured responses
-    pub fn process_events(&mut self, events: Vec<ClaudeStreamEvent>) -> ProcessedResponse {
+    /// Process a list of parsed Claude messages and extract structured responses
+    pub fn process_messages(&mut self, messages: Vec<ParsedClaudeMessage>) -> ProcessedResponse {
         let mut responses = Vec::new();
         let mut tool_results = Vec::new();
         let mut session_info = None;
         let mut error_info = None;
 
-        for event in events {
+        for parsed_message in messages {
             // Update conversation ID if found
-            if let Some(conv_id) = event.conversation_id() {
+            if let Some(conv_id) = &parsed_message.conversation_id {
                 self.conversation_id = Some(conv_id.clone());
             }
 
-            match event {
-                ClaudeStreamEvent::System { subtype, .. } => {
-                    if subtype == "init" {
-                        responses.push(ResponseItem::SystemMessage(
-                            "Claude session initialized".to_string(),
-                        ));
-                    }
+            match &parsed_message.message_type {
+                MessageType::SystemInit { .. } => {
+                    responses.push(ResponseItem::SystemMessage(
+                        "Claude session initialized".to_string(),
+                    ));
                 }
-                ClaudeStreamEvent::Assistant { message, .. } => {
-                    self.process_assistant_message(message, &mut responses);
+                MessageType::AssistantText { text, .. } => {
+                    responses.push(ResponseItem::AssistantText(text.clone()));
                 }
-                ClaudeStreamEvent::User { message, .. } => {
-                    self.process_user_message(message, &mut tool_results);
+                MessageType::AssistantToolUse { name, input, .. } => {
+                    let input_str = input
+                        .as_ref()
+                        .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
+                        .unwrap_or_default();
+                    responses.push(ResponseItem::ToolUse {
+                        name: name.clone(),
+                        input: input_str,
+                        id: "".to_string(), // ParsedClaudeMessage doesn't store tool ID
+                    });
                 }
-                ClaudeStreamEvent::Result {
+                MessageType::UserToolResult { content, .. } => {
+                    tool_results.push(ToolResultItem {
+                        tool_use_id: None,
+                        content: content.clone(),
+                    });
+                }
+                MessageType::Result {
                     result,
                     is_error,
-                    total_cost_usd,
+                    cost,
                     duration_ms,
                     num_turns,
                     ..
                 } => {
-                    if is_error {
+                    if *is_error {
                         error_info = Some(ErrorInfo {
-                            message: result,
-                            cost: total_cost_usd,
-                            duration_ms,
-                            num_turns,
+                            message: result.clone(),
+                            cost: *cost,
+                            duration_ms: *duration_ms,
+                            num_turns: *num_turns,
                         });
                     } else {
-                        responses.push(ResponseItem::FinalResult(result));
+                        responses.push(ResponseItem::FinalResult(result.clone()));
                     }
 
                     // Create session info
                     session_info = Some(SessionInfo {
-                        cost: total_cost_usd,
-                        duration_ms,
-                        num_turns,
+                        cost: *cost,
+                        duration_ms: *duration_ms,
+                        num_turns: *num_turns,
                     });
                 }
-                ClaudeStreamEvent::PlainText(text) => {
-                    responses.push(ResponseItem::PlainText(text));
-                }
-                ClaudeStreamEvent::Error(error) => {
-                    error_info = Some(ErrorInfo {
-                        message: error,
-                        cost: None,
-                        duration_ms: None,
-                        num_turns: None,
-                    });
+                MessageType::Other { .. } => {
+                    // Skip other message types
                 }
             }
         }
@@ -106,46 +109,6 @@ impl ResponseProcessor {
         }
     }
 
-    /// Process assistant message content
-    fn process_assistant_message(
-        &self,
-        message: AssistantMessage,
-        responses: &mut Vec<ResponseItem>,
-    ) {
-        if let Some(content_blocks) = message.content {
-            for block in content_blocks {
-                match block {
-                    ContentBlock::Text { text } => {
-                        responses.push(ResponseItem::AssistantText(text));
-                    }
-                    ContentBlock::ToolUse { name, input, id } => {
-                        let input_str = input
-                            .map(|v| serde_json::to_string_pretty(&v).unwrap_or_default())
-                            .unwrap_or_default();
-                        responses.push(ResponseItem::ToolUse {
-                            name,
-                            input: input_str,
-                            id,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    /// Process user message content (typically tool results)
-    fn process_user_message(&self, message: UserMessage, tool_results: &mut Vec<ToolResultItem>) {
-        if let Some(content) = message.content {
-            for tool_result in content {
-                if let Some(result_content) = tool_result.content {
-                    tool_results.push(ToolResultItem {
-                        tool_use_id: tool_result.tool_use_id,
-                        content: result_content,
-                    });
-                }
-            }
-        }
-    }
 
     /// Reset conversation state
     pub fn reset(&mut self) {
@@ -321,23 +284,39 @@ mod tests {
         let mut processor = ResponseProcessor::new();
         assert!(processor.conversation_id().is_none());
 
-        let events = vec![
-            ClaudeStreamEvent::System {
-                session_id: Some("test-session".to_string()),
-                subtype: "init".to_string(),
-            },
-            ClaudeStreamEvent::Assistant {
-                message: AssistantMessage {
-                    id: Some("msg1".to_string()),
-                    content: Some(vec![ContentBlock::Text {
-                        text: "Hello!".to_string(),
-                    }]),
+        let messages = vec![
+            ParsedClaudeMessage {
+                message: crate::claude_code_client::ClaudeMessage::System {
+                    subtype: "init".to_string(),
+                    session_id: Some("test-session".to_string()),
+                    cwd: Some("/workspace".to_string()),
+                    tools: None,
+                    model: None,
                 },
-                session_id: Some("test-session".to_string()),
+                conversation_id: Some("test-session".to_string()),
+                message_type: MessageType::SystemInit {
+                    conversation_id: Some("test-session".to_string()),
+                },
+            },
+            ParsedClaudeMessage {
+                message: crate::claude_code_client::ClaudeMessage::Assistant {
+                    message: crate::claude_code_client::AssistantMessage {
+                        id: Some("msg1".to_string()),
+                        content: Some(vec![crate::claude_code_client::ContentBlock::Text {
+                            text: "Hello!".to_string(),
+                        }]),
+                    },
+                    session_id: Some("test-session".to_string()),
+                },
+                conversation_id: Some("test-session".to_string()),
+                message_type: MessageType::AssistantText {
+                    text: "Hello!".to_string(),
+                    conversation_id: Some("test-session".to_string()),
+                },
             },
         ];
 
-        let response = processor.process_events(events);
+        let response = processor.process_messages(messages);
 
         assert_eq!(response.conversation_id, Some("test-session".to_string()));
         assert_eq!(

@@ -5,7 +5,6 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::executor::CommandExecutor;
 use super::message_parser::{ClaudeMessageParser, ParseResult, ParsedClaudeMessage};
-use super::streaming::ClaudeMessage;
 
 /// Claude command execution functionality
 #[derive(Debug)]
@@ -78,112 +77,6 @@ impl ClaudeCommandExecutor {
         cmd_args
     }
 
-    /// Process streaming JSON output and extract conversation information
-    pub async fn process_streaming_json(
-        &self,
-        stream: &mut Pin<Box<dyn futures_util::Stream<Item = Result<String, String>> + Send>>,
-    ) -> Result<Vec<ClaudeStreamEvent>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut events = Vec::new();
-
-        while let Some(line_result) = stream.next().await {
-            match line_result {
-                Ok(line) => {
-                    if let Some(event) = self.parse_streaming_line(&line)? {
-                        events.push(event);
-                    }
-                }
-                Err(e) => {
-                    log::error!("Error in streaming: {}", e);
-                    events.push(ClaudeStreamEvent::Error(e));
-                    break;
-                }
-            }
-        }
-
-        Ok(events)
-    }
-
-    /// Parse a single JSON line from streaming output
-    fn parse_streaming_line(
-        &self,
-        line: &str,
-    ) -> Result<Option<ClaudeStreamEvent>, Box<dyn std::error::Error + Send + Sync>> {
-        let line = line.trim();
-        if line.is_empty() {
-            return Ok(None);
-        }
-
-        match serde_json::from_str::<ClaudeMessage>(line) {
-            Ok(message) => {
-                let event = match message {
-                    ClaudeMessage::System {
-                        session_id,
-                        subtype,
-                        ..
-                    } => ClaudeStreamEvent::System {
-                        session_id,
-                        subtype,
-                    },
-                    ClaudeMessage::Assistant {
-                        message: assistant_msg,
-                        session_id,
-                    } => ClaudeStreamEvent::Assistant {
-                        message: assistant_msg,
-                        session_id,
-                    },
-                    ClaudeMessage::User {
-                        message: user_msg,
-                        session_id,
-                    } => ClaudeStreamEvent::User {
-                        message: user_msg,
-                        session_id,
-                    },
-                    ClaudeMessage::Result {
-                        result,
-                        session_id,
-                        is_error,
-                        total_cost_usd,
-                        duration_ms,
-                        num_turns,
-                        ..
-                    } => ClaudeStreamEvent::Result {
-                        result,
-                        session_id,
-                        is_error,
-                        total_cost_usd,
-                        duration_ms,
-                        num_turns,
-                    },
-                };
-                Ok(Some(event))
-            }
-            Err(_) => {
-                // If JSON parsing fails, treat as plain text
-                if !line.is_empty() {
-                    Ok(Some(ClaudeStreamEvent::PlainText(line.to_string())))
-                } else {
-                    Ok(None)
-                }
-            }
-        }
-    }
-
-    /// Process batch JSON output and extract events
-    pub fn process_batch_output(
-        &self,
-        output: &str,
-    ) -> Result<Vec<ClaudeStreamEvent>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut events = Vec::new();
-
-        // Process each line of JSON output
-        for line in output.lines() {
-            if let Some(event) = self.parse_streaming_line(line)? {
-                events.push(event);
-            }
-        }
-
-        Ok(events)
-    }
 
     /// Create a stream of parsed Claude messages from a string stream
     fn create_parsed_stream(
@@ -234,61 +127,6 @@ pub enum ClaudeExecutionResult {
     Batch(String),
 }
 
-/// Events that can occur during Claude streaming
-#[derive(Debug)]
-pub enum ClaudeStreamEvent {
-    System {
-        session_id: Option<String>,
-        subtype: String,
-    },
-    Assistant {
-        message: super::streaming::AssistantMessage,
-        session_id: Option<String>,
-    },
-    User {
-        message: super::streaming::UserMessage,
-        session_id: Option<String>,
-    },
-    Result {
-        result: String,
-        session_id: String,
-        is_error: bool,
-        total_cost_usd: Option<f64>,
-        duration_ms: Option<u64>,
-        num_turns: Option<u32>,
-    },
-    PlainText(String),
-    Error(String),
-}
-
-impl ClaudeStreamEvent {
-    /// Extract conversation ID from any event that contains one
-    pub fn conversation_id(&self) -> Option<&String> {
-        match self {
-            ClaudeStreamEvent::System { session_id, .. } => session_id.as_ref(),
-            ClaudeStreamEvent::Assistant { session_id, .. } => session_id.as_ref(),
-            ClaudeStreamEvent::User { session_id, .. } => session_id.as_ref(),
-            ClaudeStreamEvent::Result { session_id, .. } => Some(session_id),
-            _ => None,
-        }
-    }
-
-    /// Check if this is an initialization event
-    pub fn is_init(&self) -> bool {
-        matches!(
-            self,
-            ClaudeStreamEvent::System { subtype, .. } if subtype == "init"
-        )
-    }
-
-    /// Check if this is an error event
-    pub fn is_error(&self) -> bool {
-        matches!(
-            self,
-            ClaudeStreamEvent::Result { is_error: true, .. } | ClaudeStreamEvent::Error(_)
-        )
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -345,31 +183,4 @@ mod tests {
         assert_eq!(args, expected);
     }
 
-    #[test]
-    fn test_conversation_id_extraction() {
-        let system_event = ClaudeStreamEvent::System {
-            session_id: Some("test-id".to_string()),
-            subtype: "init".to_string(),
-        };
-        assert_eq!(system_event.conversation_id(), Some(&"test-id".to_string()));
-        assert!(system_event.is_init());
-
-        let result_event = ClaudeStreamEvent::Result {
-            result: "Success".to_string(),
-            session_id: "test-result-id".to_string(),
-            is_error: false,
-            total_cost_usd: None,
-            duration_ms: None,
-            num_turns: None,
-        };
-        assert_eq!(
-            result_event.conversation_id(),
-            Some(&"test-result-id".to_string())
-        );
-        assert!(!result_event.is_error());
-
-        let error_event = ClaudeStreamEvent::Error("Test error".to_string());
-        assert_eq!(error_event.conversation_id(), None);
-        assert!(error_event.is_error());
-    }
 }
