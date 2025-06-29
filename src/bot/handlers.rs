@@ -418,7 +418,7 @@ pub async fn handle_callback_query(
     if let Some(data) = &query.data {
         if let Some(message) = &query.message {
             let chat_id = message.chat().id;
-            
+
             // Answer the callback query first to remove the loading state
             bot.answer_callback_query(&query.id).await?;
 
@@ -426,11 +426,21 @@ pub async fn handle_callback_query(
                 "auth_login" => {
                     // Handle auth login callback
                     let container_name = format!("coding-session-{}", chat_id.0);
-                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
+                        .await
+                    {
                         Ok(_client) => {
                             // Extract the regular message from MaybeInaccessibleMessage
-                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message {
-                                commands::auth::handle_auth(bot, (**msg).clone(), bot_state, chat_id.0, Some("login".to_string())).await?;
+                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message
+                            {
+                                commands::auth::handle_auth(
+                                    bot,
+                                    (**msg).clone(),
+                                    bot_state,
+                                    chat_id.0,
+                                    Some("login".to_string()),
+                                )
+                                .await?;
                             }
                         }
                         Err(e) => {
@@ -450,11 +460,20 @@ pub async fn handle_callback_query(
                 "github_repo_list" => {
                     // Handle github repo list callback
                     let container_name = format!("coding-session-{}", chat_id.0);
-                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
+                        .await
+                    {
                         Ok(_client) => {
                             // Extract the regular message from MaybeInaccessibleMessage
-                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message {
-                                commands::github_repo_list::handle_github_repo_list(bot, (**msg).clone(), bot_state, chat_id.0).await?;
+                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message
+                            {
+                                commands::github_repo_list::handle_github_repo_list(
+                                    bot,
+                                    (**msg).clone(),
+                                    bot_state,
+                                    chat_id.0,
+                                )
+                                .await?;
                             }
                         }
                         Err(e) => {
@@ -476,7 +495,8 @@ pub async fn handle_callback_query(
                     let repository = data.strip_prefix("clone:").unwrap_or("");
                     let container_name = format!("coding-session-{}", chat_id.0);
 
-                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
+                        .await
                     {
                         Ok(client) => {
                             let github_client = GithubClient::new(
@@ -486,8 +506,13 @@ pub async fn handle_callback_query(
                             );
 
                             // Perform the clone operation
-                            commands::perform_github_clone(&bot, chat_id, &github_client, repository)
-                                .await?;
+                            commands::perform_github_clone(
+                                &bot,
+                                chat_id,
+                                &github_client,
+                                repository,
+                            )
+                            .await?;
                         }
                         Err(e) => {
                             bot.send_message(

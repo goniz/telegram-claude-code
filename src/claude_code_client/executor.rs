@@ -8,7 +8,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use super::config::ClaudeCodeConfig;
 
 /// Command execution functionality for Claude Code client
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CommandExecutor {
     docker: Docker,
     container_id: String,

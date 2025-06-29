@@ -42,7 +42,6 @@ enum Command {
     Claude,
 }
 
-
 /// Pull the runtime image asynchronously in the background
 async fn pull_runtime_image_async(docker: Docker) {
     log::info!(

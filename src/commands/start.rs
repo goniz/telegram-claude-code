@@ -270,10 +270,7 @@ async fn prompt_for_repository_setup(bot: Bot, chat_id: ChatId) -> ResponseResul
                 "📊 Claude Status",
                 "/claudestatus",
             ),
-            InlineKeyboardButton::switch_inline_query_current_chat(
-                "🔐 Auth Status",
-                "/auth",
-            ),
+            InlineKeyboardButton::switch_inline_query_current_chat("🔐 Auth Status", "/auth"),
         ],
     ]);
 

@@ -2,20 +2,29 @@ use bollard::Docker;
 use serde::{Deserialize, Serialize};
 
 pub mod auth;
+pub mod claude_command;
 pub mod config;
 pub mod container;
 pub mod container_cred_storage;
 pub mod container_utils;
 pub mod executor;
 pub mod github_client;
+pub mod message_parser;
+pub mod response_processor;
 pub mod streaming;
 
 pub use auth::{AuthState, AuthenticationHandle};
+pub use claude_command::{ClaudeCommandExecutor, ClaudeExecutionResult, ClaudeStreamEvent};
 pub use config::ClaudeCodeConfig;
 pub use container_cred_storage::ContainerCredStorage;
 pub use executor::CommandExecutor;
 #[allow(unused_imports)]
 pub use github_client::{GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult};
+pub use message_parser::{ClaudeMessageParser, MessageType, ParseResult, ParsedClaudeMessage};
+pub use response_processor::{
+    ErrorInfo, LiveMessage, ProcessedResponse, ResponseItem, ResponseProcessor, SessionInfo,
+    ToolResultItem,
+};
 pub use streaming::{AssistantMessage, ClaudeMessage, ContentBlock, ToolResult, UserMessage};
 
 // Re-export OAuth types from oauth module
@@ -63,6 +72,7 @@ pub struct ClaudeCodeClient {
     config: ClaudeCodeConfig,
     auth_manager: auth::AuthenticationManager,
     executor: CommandExecutor,
+    claude_executor: ClaudeCommandExecutor,
 }
 
 #[allow(dead_code)]
@@ -72,6 +82,7 @@ impl ClaudeCodeClient {
         let auth_manager =
             auth::AuthenticationManager::new(docker.clone(), container_id.clone(), config.clone());
         let executor = CommandExecutor::new(docker.clone(), container_id.clone(), config.clone());
+        let claude_executor = ClaudeCommandExecutor::new(executor.clone());
 
         Self {
             docker,
@@ -79,6 +90,7 @@ impl ClaudeCodeClient {
             config,
             auth_manager,
             executor,
+            claude_executor,
         }
     }
 
@@ -226,6 +238,36 @@ impl ClaudeCodeClient {
         Box<dyn std::error::Error + Send + Sync>,
     > {
         self.executor.exec_streaming_command(command).await
+    }
+
+    /// Execute a Claude prompt with streaming or batch processing
+    pub async fn execute_claude_prompt(
+        &self,
+        prompt: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<ClaudeExecutionResult, Box<dyn std::error::Error + Send + Sync>> {
+        self.claude_executor
+            .execute_claude_prompt(prompt, conversation_id)
+            .await
+    }
+
+    /// Build Claude command arguments
+    pub fn build_claude_command_args(
+        &self,
+        prompt: &str,
+        conversation_id: Option<&str>,
+    ) -> Vec<String> {
+        self.claude_executor
+            .build_command_args(prompt, conversation_id)
+    }
+
+    /// Process Claude events using the response processor
+    pub fn process_claude_events(
+        &self,
+        events: Vec<ClaudeStreamEvent>,
+        processor: &mut ResponseProcessor,
+    ) -> ProcessedResponse {
+        processor.process_events(events)
     }
 }
 

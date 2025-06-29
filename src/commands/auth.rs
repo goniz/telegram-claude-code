@@ -1,5 +1,7 @@
 use crate::{escape_markdown_v2, handle_auth_state_updates, AuthSession, BotState};
-use telegram_bot::claude_code_client::{AuthenticationHandle, ClaudeCodeClient, GithubClient, GithubClientConfig};
+use telegram_bot::claude_code_client::{
+    AuthenticationHandle, ClaudeCodeClient, GithubClient, GithubClientConfig,
+};
 use teloxide::{
     prelude::*,
     types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
@@ -114,7 +116,10 @@ async fn handle_auth_status(
         Ok(auth_result) => {
             let status = if auth_result.authenticated {
                 if let Some(username) = &auth_result.username {
-                    format!("GitHub Auth: Logged in as {} ✅", escape_markdown_v2(username))
+                    format!(
+                        "GitHub Auth: Logged in as {} ✅",
+                        escape_markdown_v2(username)
+                    )
                 } else {
                     "GitHub Auth: Logged in ✅".to_string()
                 }
@@ -139,11 +144,14 @@ async fn handle_auth_status(
         Err(_) => ("Claude Auth: Status unknown ❓".to_string(), false),
     };
 
-    let message = format!("🔐 *Authentication Status*\n\n{}\n{}", github_status, claude_status);
+    let message = format!(
+        "🔐 *Authentication Status*\n\n{}\n{}",
+        github_status, claude_status
+    );
 
     // Create keyboard based on authentication status
     let mut keyboard_buttons = Vec::new();
-    
+
     if !github_authenticated || !claude_authenticated {
         keyboard_buttons.push(vec![InlineKeyboardButton::callback(
             "🔐 Login to Services",
@@ -164,7 +172,8 @@ async fn handle_auth_status(
         None
     };
 
-    let mut message_builder = bot.send_message(msg.chat.id, message)
+    let mut message_builder = bot
+        .send_message(msg.chat.id, message)
         .parse_mode(ParseMode::MarkdownV2);
 
     if let Some(keyboard) = reply_markup {
@@ -228,8 +237,9 @@ async fn handle_auth_login(
                 } else if let (Some(oauth_url), Some(device_code)) =
                     (&auth_result.oauth_url, &auth_result.device_code)
                 {
-                    status_messages.push("GitHub Auth: Waiting for OAuth completion 🔄".to_string());
-                    
+                    status_messages
+                        .push("GitHub Auth: Waiting for OAuth completion 🔄".to_string());
+
                     let github_message = format!(
                         "🔗 *GitHub OAuth Authentication Required*\n\n*Please follow these steps:*\n\n1️⃣ *Click the button below to visit the authentication URL*\n\n2️⃣ *Enter this device code:*\n```{}```\n\n3️⃣ *Sign in to your GitHub account* and authorize the application\n\n4️⃣ *Return here* \\- authentication will be completed automatically\n\n⏱️ This code will expire in a few minutes\\.",
                         escape_markdown_v2(device_code)
@@ -276,11 +286,12 @@ async fn handle_auth_login(
             status_messages.push("Claude Auth: Already in progress 🔄".to_string());
         } else {
             drop(sessions);
-            
+
             match client.authenticate_claude_account().await {
                 Ok(auth_handle) => {
-                    status_messages.push("Claude Auth: Waiting for OAuth completion 🔄".to_string());
-                    
+                    status_messages
+                        .push("Claude Auth: Waiting for OAuth completion 🔄".to_string());
+
                     let AuthenticationHandle {
                         state_receiver,
                         code_sender,
@@ -350,30 +361,24 @@ async fn handle_auth_logout(
             status_messages.push(format!("Claude: {}", escape_markdown_v2(&message)));
         }
         Err(e) => {
-            status_messages.push(format!(
-                "Claude: ❌ {}",
-                escape_markdown_v2(&e.to_string())
-            ));
+            status_messages.push(format!("Claude: ❌ {}", escape_markdown_v2(&e.to_string())));
         }
     }
 
     // Handle GitHub logout
     match github_client.logout().await {
         Ok(auth_result) => {
-            status_messages.push(format!("GitHub: {}", escape_markdown_v2(&auth_result.message)));
+            status_messages.push(format!(
+                "GitHub: {}",
+                escape_markdown_v2(&auth_result.message)
+            ));
         }
         Err(e) => {
-            status_messages.push(format!(
-                "GitHub: ❌ {}",
-                escape_markdown_v2(&e.to_string())
-            ));
+            status_messages.push(format!("GitHub: ❌ {}", escape_markdown_v2(&e.to_string())));
         }
     }
 
-    let summary_message = format!(
-        "🚪 *Logout Results*\n\n{}",
-        status_messages.join("\n")
-    );
+    let summary_message = format!("🚪 *Logout Results*\n\n{}", status_messages.join("\n"));
 
     bot.send_message(msg.chat.id, summary_message)
         .parse_mode(ParseMode::MarkdownV2)

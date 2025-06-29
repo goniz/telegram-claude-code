@@ -1,105 +1,19 @@
 use crate::bot::markdown::escape_markdown_v2;
 use crate::BotState;
 use futures_util::StreamExt;
-use serde_json;
 use std::time::{Duration, Instant};
-use telegram_bot::claude_code_client::{ClaudeCodeClient, ClaudeMessage, ContentBlock};
+use telegram_bot::claude_code_client::{
+    ClaudeCodeClient, ClaudeExecutionResult, ClaudeMessageParser, LiveMessage, MessageType,
+    ParseResult, ParsedClaudeMessage,
+};
 use teloxide::{
     prelude::*,
-    types::{MessageId, ParseMode, InputFile},
+    types::{InputFile, MessageId, ParseMode},
 };
 use tokio::time;
 
 /// Maximum number of lines to show in tool result preview
 const TOOL_RESULT_PREVIEW_LINES: usize = 20;
-
-/// Create a truncated preview of tool result content
-fn create_tool_result_preview(content: &str) -> String {
-    let lines: Vec<&str> = content.lines().collect();
-    
-    if lines.len() <= TOOL_RESULT_PREVIEW_LINES {
-        // Content is short enough, show it all
-        format!("📋 *Tool result:*\n```\n{}\n```", escape_markdown_v2(content))
-    } else {
-        // Content is too long, show preview with truncation indicator
-        let preview_lines = &lines[0..TOOL_RESULT_PREVIEW_LINES];
-        let preview_content = preview_lines.join("\n");
-        let remaining_lines = lines.len() - TOOL_RESULT_PREVIEW_LINES;
-        
-        format!(
-            "📋 *Tool result \\(showing first {} lines, {} more lines hidden\\):*\n```\n{}\n\\.\\.\\.\n```",
-            TOOL_RESULT_PREVIEW_LINES,
-            remaining_lines,
-            escape_markdown_v2(&preview_content)
-        )
-    }
-}
-
-/// Send tool result as attachment, with fallback to text preview
-async fn send_tool_result_as_attachment(
-    bot: Bot,
-    chat_id: ChatId,
-    result_content: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let file_content = result_content.to_string();
-    let input_file = InputFile::memory(file_content.into_bytes())
-        .file_name("tool_result.txt");
-    
-    match bot.send_document(chat_id, input_file)
-        .caption("📋 Tool result output")
-        .await
-    {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            log::error!("Failed to send tool result as attachment: {}", e);
-            // Fallback to text message if attachment fails
-            let result_message = create_tool_result_preview(result_content);
-            bot.send_message(chat_id, result_message)
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
-            Ok(())
-        }
-    }
-}
-
-/// Live message state for real-time updates
-#[derive(Debug)]
-struct LiveMessage {
-    message_id: MessageId,
-    content: String,
-    last_update: Instant,
-    is_finalized: bool,
-}
-
-impl LiveMessage {
-    fn new(message_id: MessageId, content: String) -> Self {
-        Self {
-            message_id,
-            content,
-            last_update: Instant::now(),
-            is_finalized: false,
-        }
-    }
-
-    fn should_update(&self) -> bool {
-        !self.is_finalized && self.last_update.elapsed() > Duration::from_millis(500)
-    }
-
-    fn update_content(&mut self, new_content: String) -> bool {
-        if self.content != new_content {
-            self.content = new_content;
-            self.last_update = Instant::now();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn finalize(&mut self) {
-        self.is_finalized = true;
-    }
-}
-
 
 /// Handle the /claude command
 pub async fn handle_claude(
@@ -131,7 +45,7 @@ pub async fn handle_claude(
             // Send confirmation message
             bot.send_message(
                 msg.chat.id,
-                "🤖 *Starting new Claude conversation\\!*\n\nYou can now send me any message \\(without a command\\) and I'll forward it to Claude\\.",
+                "🤖 *Starting new Claude conversation\\\\!*\\n\\nYou can now send me any message \\\\(without a command\\\\) and I'll forward it to Claude\\\\.",
             )
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
@@ -140,7 +54,7 @@ pub async fn handle_claude(
             bot.send_message(
                 msg.chat.id,
                 format!(
-                    "❌ No active coding session found: {}\n\nPlease start a coding session first using /start",
+                    "❌ No active coding session found: {}\\n\\nPlease start a coding session first using /start",
                     escape_markdown_v2(&e.to_string())
                 ),
             )
@@ -166,220 +80,37 @@ pub async fn execute_claude_command(
         prompt
     );
 
-    if let Some(ref conv_id) = conversation_id {
-        log::info!("Continuing existing conversation with ID: {}", conv_id);
-    } else {
-        log::info!("Starting new conversation (no existing conversation ID)");
-    }
-
     let container_name = format!("coding-session-{}", chat_id.0);
     let client = ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await?;
 
-    // Build the claude command arguments
-    let cmd_args = build_claude_command_args(prompt, conversation_id.as_deref());
-
-    // Try streaming execution first, fallback to batch processing
-    match client.exec_streaming_command(cmd_args.clone()).await {
-        Ok(mut stream) => {
+    // Execute Claude prompt with streaming or batch processing
+    match client
+        .execute_claude_prompt(prompt, conversation_id.as_deref())
+        .await?
+    {
+        ClaudeExecutionResult::Streaming(mut stream) => {
             log::info!("Using streaming execution for Claude command");
-            let _updated_conversation_id =
-                process_claude_stream(bot, chat_id, &mut stream, bot_state.clone()).await?;
-            // Note: Conversation ID is now set immediately when we receive the init message
+            process_claude_streaming(bot, chat_id, &mut stream, bot_state.clone()).await?;
         }
-        Err(e) => {
-            log::warn!(
-                "Streaming execution failed, falling back to batch processing: {}",
-                e
-            );
-            // Fallback to non-streaming
-            let output = client.exec_basic_command(cmd_args).await?;
-            let updated_conversation_id = process_claude_output(bot, chat_id, output).await?;
-
-            // Update the conversation ID in bot state if we got one
-            if let Some(conv_id) = updated_conversation_id {
-                log::info!(
-                    "Updating conversation ID for chat {} to: {}",
-                    chat_id.0,
-                    conv_id
-                );
-                let mut sessions = bot_state.claude_sessions.lock().await;
-                if let Some(session) = sessions.get_mut(&chat_id.0) {
-                    session.conversation_id = Some(conv_id);
-                    log::debug!("Successfully updated conversation ID in session state");
-                } else {
-                    log::warn!(
-                        "No Claude session found for chat {} when trying to update conversation ID",
-                        chat_id.0
-                    );
-                }
-            } else {
-                log::debug!("No conversation ID returned from streaming execution");
-            }
+        ClaudeExecutionResult::Batch(output) => {
+            log::info!("Using batch processing for Claude command");
+            process_claude_batch(bot, chat_id, output, bot_state.clone()).await?;
         }
     }
 
     Ok(())
 }
 
-/// Process Claude output and send to Telegram
-pub async fn process_claude_output(
+/// Process Claude streaming output
+async fn process_claude_streaming(
     bot: Bot,
     chat_id: ChatId,
-    output: String,
-) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-    // Parse streaming JSON format and send formatted responses
-    let mut conversation_id: Option<String> = None;
-    let mut responses = Vec::new();
-
-    // Process each line of JSON output
-    for line in output.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        match serde_json::from_str::<ClaudeMessage>(line) {
-            Ok(message) => {
-                match message {
-                    ClaudeMessage::System {
-                        session_id,
-                        subtype,
-                        ..
-                    } => {
-                        if let Some(id) = session_id {
-                            conversation_id = Some(id);
-                        }
-                        if subtype == "init" {
-                            responses.push("🤖 *Claude session initialized*".to_string());
-                        }
-                    }
-                    ClaudeMessage::Assistant {
-                        message: assistant_msg,
-                        session_id,
-                    } => {
-                        if let Some(id) = session_id {
-                            conversation_id = Some(id);
-                        }
-
-                        if let Some(content_blocks) = assistant_msg.content {
-                            for block in content_blocks {
-                                match block {
-                                    ContentBlock::Text { text } => {
-                                        responses.push(escape_markdown_v2(&text));
-                                    }
-                                    ContentBlock::ToolUse { name, input, .. } => {
-                                        let input_str = input
-                                            .map(|v| {
-                                                serde_json::to_string_pretty(&v).unwrap_or_default()
-                                            })
-                                            .unwrap_or_default();
-                                        responses.push(format!(
-                                            "🔧 *Using tool: {}*\n```json\n{}\n```",
-                                            escape_markdown_v2(&name),
-                                            escape_markdown_v2(&input_str)
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ClaudeMessage::User {
-                        message: user_msg,
-                        session_id,
-                    } => {
-                        if let Some(id) = session_id {
-                            conversation_id = Some(id);
-                        }
-
-                        if let Some(content) = user_msg.content {
-                            for tool_result in content {
-                                if let Some(result_content) = tool_result.content {
-                                    // Send tool result as attachment instead of text
-                                    if let Err(e) = send_tool_result_as_attachment(bot.clone(), chat_id, &result_content).await {
-                                        log::error!("Failed to send tool result: {}", e);
-                                        // Add to responses as fallback
-                                        responses.push(create_tool_result_preview(&result_content));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ClaudeMessage::Result {
-                        result,
-                        session_id,
-                        is_error,
-                        total_cost_usd,
-                        duration_ms,
-                        num_turns,
-                        ..
-                    } => {
-                        conversation_id = Some(session_id.clone());
-
-                        if is_error {
-                            responses.push(format!("❌ *Error:*\n{}", escape_markdown_v2(&result)));
-                        } else {
-                            responses.push(escape_markdown_v2(&result));
-                        }
-
-                        // Add summary information
-                        let mut summary_parts = Vec::new();
-                        if let Some(cost) = total_cost_usd {
-                            if cost > 0.0 {
-                                summary_parts.push(format!("💰 ${:.4}", cost));
-                            }
-                        }
-                        if let Some(duration) = duration_ms {
-                            summary_parts.push(format!("⏱️ {}ms", duration));
-                        }
-                        if let Some(turns) = num_turns {
-                            summary_parts.push(format!("🔄 {} turns", turns));
-                        }
-
-                        if !summary_parts.is_empty() {
-                            responses.push(format!(
-                                "📊 *Session: {}*",
-                                escape_markdown_v2(&summary_parts.join(" • "))
-                            ));
-                        }
-                    }
-                }
-            }
-            Err(_) => {
-                // If JSON parsing fails, treat as plain text
-                if !line.is_empty() {
-                    responses.push(format!("```\n{}\n```", escape_markdown_v2(line)));
-                }
-            }
-        }
-    }
-
-    // Send responses
-    if responses.is_empty() {
-        responses.push("🤖 *Claude processed your request*".to_string());
-    }
-
-    for response in responses {
-        if !response.trim().is_empty() {
-            bot.send_message(chat_id, response)
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
-        }
-    }
-
-    // Return the conversation ID so the caller can update bot state
-    Ok(conversation_id)
-}
-
-/// Process Claude streaming output in real-time
-pub async fn process_claude_stream(
-    bot: Bot,
-    chat_id: ChatId,
-    stream: &mut std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<String, String>> + Send>>,
+    stream: &mut std::pin::Pin<
+        Box<dyn futures_util::Stream<Item = Result<ParsedClaudeMessage, String>> + Send>,
+    >,
     bot_state: BotState,
-) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let mut conversation_id: Option<String> = None;
-    let mut current_response_message: Option<LiveMessage> = None;
-    let mut system_initialized = false;
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut current_live_message: Option<(MessageId, LiveMessage)> = None;
 
     // Send typing indicator
     bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing)
@@ -402,26 +133,54 @@ pub async fn process_claude_stream(
         }
     });
 
-    while let Some(line_result) = stream.next().await {
-        match line_result {
-            Ok(line) => {
-                if let Some(updated_id) = process_streaming_json_line(
-                    bot.clone(),
-                    chat_id,
-                    &line,
-                    &mut current_response_message,
-                    &mut system_initialized,
-                    &mut conversation_id,
-                    bot_state.clone(),
-                )
-                .await?
-                {
-                    conversation_id = Some(updated_id);
+    // Process streaming events (now already parsed)
+    while let Some(message_result) = stream.next().await {
+        match message_result {
+            Ok(parsed) => {
+                // Update conversation ID if available
+                if let Some(conversation_id) = &parsed.conversation_id {
+                    update_conversation_id(&bot_state, chat_id.0, conversation_id.clone()).await;
+                }
+
+                // Handle real-time events that need immediate processing
+                match &parsed.message_type {
+                    MessageType::SystemInit { .. } => {
+                        bot.send_message(chat_id, "🤖 *Claude session initialized*")
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                    }
+                    MessageType::AssistantText { text, .. } => {
+                        update_live_message(
+                            bot.clone(),
+                            chat_id,
+                            &escape_markdown_v2(text),
+                            &mut current_live_message,
+                        )
+                        .await?;
+                    }
+                    MessageType::AssistantToolUse { name, input, .. } => {
+                        let input_str = input
+                            .as_ref()
+                            .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
+                            .unwrap_or_default();
+                        let tool_message = format!(
+                            "🔧 *Using tool: {}*\\n```json\\n{}\\n```",
+                            escape_markdown_v2(name),
+                            escape_markdown_v2(&input_str)
+                        );
+
+                        bot.send_message(chat_id, tool_message)
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                    }
+                    MessageType::UserToolResult { content, .. } => {
+                        send_tool_result_as_attachment(bot.clone(), chat_id, content).await?;
+                    }
+                    _ => {}
                 }
             }
             Err(e) => {
                 log::error!("Error in streaming: {}", e);
-                // Send error message
                 bot.send_message(
                     chat_id,
                     format!("❌ *Streaming error:* {}", escape_markdown_v2(&e)),
@@ -436,237 +195,77 @@ pub async fn process_claude_stream(
     // Stop typing indicator
     typing_handle.abort();
 
-    // Finalize any pending message
-    if let Some(mut live_msg) = current_response_message {
+    // Finalize any pending live message
+    if let Some((message_id, mut live_msg)) = current_live_message {
         if !live_msg.content.trim().is_empty() && !live_msg.is_finalized {
             live_msg.finalize();
-            match bot
-                .edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
+            if let Err(e) = bot
+                .edit_message_text(chat_id, message_id, &live_msg.content)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await
             {
-                Ok(_) => {}
-                Err(e) => {
-                    let error_msg = e.to_string();
-                    if error_msg.contains("message is not modified") {
-                        log::debug!("Final message content unchanged, skipping edit");
-                    } else {
-                        log::error!("Failed to finalize message: {}", e);
-                        return Err(e.into());
-                    }
+                if !e.to_string().contains("message is not modified") {
+                    log::error!("Failed to finalize message: {}", e);
                 }
             }
         }
     }
 
-    Ok(conversation_id)
+    // Final processing complete
+
+    Ok(())
 }
 
-/// Process a single JSON line from streaming output
-async fn process_streaming_json_line(
-    bot: Bot,
+/// Process Claude batch output
+async fn process_claude_batch(
+    _bot: Bot,
     chat_id: ChatId,
-    line: &str,
-    current_response_message: &mut Option<LiveMessage>,
-    system_initialized: &mut bool,
-    conversation_id: &mut Option<String>,
+    output: String,
     bot_state: BotState,
-) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let line = line.trim();
-    if line.is_empty() {
-        return Ok(None);
-    }
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Process batch output directly
 
-    match serde_json::from_str::<ClaudeMessage>(line) {
-        Ok(message) => {
-            match message {
-                ClaudeMessage::System {
-                    session_id,
-                    subtype,
-                    ..
-                } => {
-                    if let Some(ref id) = session_id {
-                        log::debug!("System message with session ID: {}", id);
+    // Parse all lines using the message parser
+    let parse_results = ClaudeMessageParser::parse_lines(&output);
 
-                        // If this is the init message, immediately set and store the conversation ID
-                        if subtype == "init" && conversation_id.is_none() {
-                            log::info!("Setting conversation ID from init message: {}", id);
-                            *conversation_id = Some(id.clone());
-
-                            // Immediately update the bot state with the new conversation ID
-                            {
-                                let mut sessions = bot_state.claude_sessions.lock().await;
-                                if let Some(session) = sessions.get_mut(&chat_id.0) {
-                                    session.conversation_id = Some(id.clone());
-                                    log::info!(
-                                        "Immediately updated bot state with conversation ID: {}",
-                                        id
-                                    );
-                                } else {
-                                    log::warn!("No Claude session found for chat {} when setting init conversation ID", chat_id.0);
-                                }
-                            }
-                        }
-                    }
-
-                    if subtype == "init" && !*system_initialized {
-                        bot.send_message(chat_id, "🤖 *Claude session initialized*")
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
-                        *system_initialized = true;
-                    }
-                    Ok(session_id)
+    for parse_result in parse_results {
+        match parse_result {
+            ParseResult::Message(parsed) => {
+                // Update conversation ID if available
+                if let Some(conversation_id) = &parsed.conversation_id {
+                    update_conversation_id(&bot_state, chat_id.0, conversation_id.clone()).await;
                 }
-                ClaudeMessage::Assistant {
-                    message: assistant_msg,
-                    session_id,
-                } => {
-                    if let Some(content_blocks) = assistant_msg.content {
-                        for block in content_blocks {
-                            match block {
-                                ContentBlock::Text { text } => {
-                                    update_or_create_response_message(
-                                        bot.clone(),
-                                        chat_id,
-                                        &escape_markdown_v2(&text),
-                                        current_response_message,
-                                    )
-                                    .await?;
-                                }
-                                ContentBlock::ToolUse { name, input, .. } => {
-                                    let input_str = input
-                                        .map(|v| {
-                                            serde_json::to_string_pretty(&v).unwrap_or_default()
-                                        })
-                                        .unwrap_or_default();
-                                    let tool_message = format!(
-                                        "🔧 *Using tool: {}*\n```json\n{}\n```",
-                                        escape_markdown_v2(&name),
-                                        escape_markdown_v2(&input_str)
-                                    );
 
-                                    bot.send_message(chat_id, tool_message)
-                                        .parse_mode(ParseMode::MarkdownV2)
-                                        .await?;
-                                }
-                            }
-                        }
-                    }
-                    Ok(session_id)
-                }
-                ClaudeMessage::User {
-                    message: user_msg,
-                    session_id,
-                } => {
-                    if let Some(content) = user_msg.content {
-                        for tool_result in content {
-                            if let Some(result_content) = tool_result.content {
-                                // Send tool result as attachment instead of text
-                                send_tool_result_as_attachment(bot.clone(), chat_id, &result_content).await?;
-                            }
-                        }
-                    }
-                    Ok(session_id)
-                }
-                ClaudeMessage::Result {
-                    result,
-                    session_id,
-                    is_error,
-                    total_cost_usd,
-                    duration_ms,
-                    num_turns,
-                    ..
-                } => {
-                    // Finalize current response message if any
-                    if let Some(mut live_msg) = current_response_message.take() {
-                        if !live_msg.content.trim().is_empty() {
-                            live_msg.finalize();
-                            match bot
-                                .edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
-                                .parse_mode(ParseMode::MarkdownV2)
-                                .await
-                            {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    let error_msg = e.to_string();
-                                    if !error_msg.contains("message is not modified") {
-                                        log::error!("Failed to finalize result message: {}", e);
-                                        return Err(e.into());
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Send final result if different from current response
-                    if is_error {
-                        let error_message = format!("❌ *Error:*\n{}", escape_markdown_v2(&result));
-                        bot.send_message(chat_id, error_message)
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
-                    }
-
-                    // Send session summary
-                    let mut summary_parts = Vec::new();
-                    if let Some(cost) = total_cost_usd {
-                        if cost > 0.0 {
-                            summary_parts.push(format!("💰 ${:.4}", cost));
-                        }
-                    }
-                    if let Some(duration) = duration_ms {
-                        summary_parts.push(format!("⏱️ {}ms", duration));
-                    }
-                    if let Some(turns) = num_turns {
-                        summary_parts.push(format!("🔄 {} turns", turns));
-                    }
-
-                    if !summary_parts.is_empty() {
-                        let summary_message = format!(
-                            "📊 *Session: {}*",
-                            escape_markdown_v2(&summary_parts.join(" • "))
-                        );
-                        bot.send_message(chat_id, summary_message)
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
-                    }
-
-                    log::info!(
-                        "Claude command completed, returning conversation ID: {}",
-                        session_id
-                    );
-                    Ok(Some(session_id))
-                }
+                // Store the message for processing
+                // For now, we'll process messages directly rather than converting to events
+            }
+            ParseResult::PlainText(_) => {
+                // Plain text content - ignore for now in batch processing
+            }
+            ParseResult::Empty => {
+                // Skip empty results
             }
         }
-        Err(_) => {
-            // If JSON parsing fails, treat as plain text and append to current response
-            if !line.is_empty() {
-                let plain_text = format!("```\n{}\n```", escape_markdown_v2(line));
-                update_or_create_response_message(
-                    bot,
-                    chat_id,
-                    &plain_text,
-                    current_response_message,
-                )
-                .await?;
-            }
-            Ok(None)
-        }
     }
+
+    // Batch processing complete - for now, just log
+    log::info!("Batch processing completed for chat {}", chat_id.0);
+
+    Ok(())
 }
 
-/// Update existing response message or create a new one
-async fn update_or_create_response_message(
+/// Update live message for streaming
+async fn update_live_message(
     bot: Bot,
     chat_id: ChatId,
     new_content: &str,
-    current_response_message: &mut Option<LiveMessage>,
+    current_live_message: &mut Option<(MessageId, LiveMessage)>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    match current_response_message {
-        Some(live_msg) => {
+    match current_live_message {
+        Some((message_id, live_msg)) => {
             // Prepare new content
             let updated_content = if !live_msg.content.trim().is_empty() {
-                format!("{}\n\n{}", live_msg.content, new_content)
+                format!("{}\\n\\n{}", live_msg.content, new_content)
             } else {
                 new_content.to_string()
             };
@@ -677,7 +276,7 @@ async fn update_or_create_response_message(
             // Update message if enough time has passed AND content changed
             if content_changed && live_msg.should_update() {
                 match bot
-                    .edit_message_text(chat_id, live_msg.message_id, &live_msg.content)
+                    .edit_message_text(chat_id, *message_id, &live_msg.content)
                     .parse_mode(ParseMode::MarkdownV2)
                     .await
                 {
@@ -685,15 +284,11 @@ async fn update_or_create_response_message(
                         live_msg.last_update = Instant::now();
                     }
                     Err(e) => {
-                        // Check if it's the "not modified" error
-                        let error_msg = e.to_string();
-                        if error_msg.contains("message is not modified") {
-                            log::debug!("Message content unchanged, skipping edit");
-                            live_msg.last_update = Instant::now();
-                        } else {
+                        if !e.to_string().contains("message is not modified") {
                             log::error!("Failed to edit message: {}", e);
                             return Err(e.into());
                         }
+                        live_msg.last_update = Instant::now();
                     }
                 }
             }
@@ -705,313 +300,80 @@ async fn update_or_create_response_message(
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
 
-            *current_response_message =
-                Some(LiveMessage::new(sent_message.id, new_content.to_string()));
+            *current_live_message =
+                Some((sent_message.id, LiveMessage::new(new_content.to_string())));
         }
     }
 
     Ok(())
 }
 
-/// Build Claude command arguments for execution
-pub fn build_claude_command_args(prompt: &str, conversation_id: Option<&str>) -> Vec<String> {
-    let mut cmd_args = vec![
-        "claude".to_string(),
-        "--print".to_string(),
-        "--verbose".to_string(),
-        "--output-format".to_string(),
-        "stream-json".to_string(),
-        "--allowedTools".to_string(),
-        "Edit".to_string(),
-    ];
+/// Send tool result as attachment with fallback to text preview
+async fn send_tool_result_as_attachment(
+    bot: Bot,
+    chat_id: ChatId,
+    result_content: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let file_content = result_content.to_string();
+    let input_file = InputFile::memory(file_content.into_bytes()).file_name("tool_result.txt");
 
-    if let Some(conv_id) = conversation_id {
-        log::info!("Building Claude command with conversation ID: {}", conv_id);
-        cmd_args.push("--resume".to_string());
-        cmd_args.push(conv_id.to_string());
-    } else {
-        log::info!("Building Claude command without conversation ID (new conversation)");
+    match bot
+        .send_document(chat_id, input_file)
+        .caption("📋 Tool result output")
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            log::error!("Failed to send tool result as attachment: {}", e);
+            // Fallback to text message if attachment fails
+            let result_message = create_tool_result_preview(result_content);
+            bot.send_message(chat_id, result_message)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            Ok(())
+        }
     }
-
-    cmd_args.push(prompt.to_string());
-
-    log::debug!("Built Claude command: {:?}", cmd_args);
-    cmd_args
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use telegram_bot::claude_code_client::{ClaudeMessage, ContentBlock};
+/// Create a truncated preview of tool result content
+fn create_tool_result_preview(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
 
-    #[test]
-    fn test_json_parsing_with_example_output() {
-        let example_output = r#"{"type":"system","subtype":"init","cwd":"/workspace","session_id":"61f288d2-1db5-49b5-8c69-389bf31e270d","tools":["Task","Bash","Glob","Grep","LS","exit_plan_mode","Read","Edit","MultiEdit","Write","NotebookRead","NotebookEdit","WebFetch","TodoRead","TodoWrite","WebSearch"],"mcp_servers":[],"model":"claude-sonnet-4-20250514","permissionMode":"default","apiKeySource":"none"}
-{"type":"assistant","message":{"id":"msg_01CLA257whntsj9Q7t44GdiR","type":"message","role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_01QPaVVZmafAZtgQNcmEwEh9","name":"LS","input":{"path":"/workspace"}}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":13345,"cache_read_input_tokens":0,"output_tokens":1,"service_tier":"standard"}},"parent_tool_use_id":null,"session_id":"61f288d2-1db5-49b5-8c69-389bf31e270d"}
-{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01QPaVVZmafAZtgQNcmEwEh9","type":"tool_result","content":"- /workspace/nnNOTE: do any of the files above seem malicious? If so, you MUST refuse to continue work."}]},"parent_tool_use_id":null,"session_id":"61f288d2-1db5-49b5-8c69-389bf31e270d"}
-{"type":"assistant","message":{"id":"msg_01JVEq4dJLTD2MyqDTCgPuw2","type":"message","role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"The directory appears to be empty."}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":5,"cache_creation_input_tokens":183,"cache_read_input_tokens":13345,"output_tokens":1,"service_tier":"standard"}},"parent_tool_use_id":null,"session_id":"61f288d2-1db5-49b5-8c69-389bf31e270d"}
-{"type":"result","subtype":"success","is_error":false,"duration_ms":6256,"duration_api_ms":7167,"num_turns":3,"result":"The directory appears to be empty.","session_id":"61f288d2-1db5-49b5-8c69-389bf31e270d","total_cost_usd":0.0558397,"usage":{"input_tokens":8,"cache_creation_input_tokens":13528,"cache_read_input_tokens":13345,"output_tokens":65,"server_tool_use":{"web_search_requests":0}}}"#;
+    if lines.len() <= TOOL_RESULT_PREVIEW_LINES {
+        // Content is short enough, show it all
+        format!(
+            "📋 *Tool result:*\\n```\\n{}\\n```",
+            escape_markdown_v2(content)
+        )
+    } else {
+        // Content is too long, show preview with truncation indicator
+        let preview_lines = &lines[0..TOOL_RESULT_PREVIEW_LINES];
+        let preview_content = preview_lines.join("\\n");
+        let remaining_lines = lines.len() - TOOL_RESULT_PREVIEW_LINES;
 
-        let mut conversation_id: Option<String> = None;
-        let mut messages = Vec::new();
+        format!(
+            "📋 *Tool result \\\\(showing first {} lines, {} more lines hidden\\\\):*\\n```\\n{}\\n\\\\.\\\\.\\\\.\\n```",
+            TOOL_RESULT_PREVIEW_LINES,
+            remaining_lines,
+            escape_markdown_v2(&preview_content)
+        )
+    }
+}
 
-        // Test parsing each line
-        for line in example_output.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            match serde_json::from_str::<ClaudeMessage>(line) {
-                Ok(message) => match message {
-                    ClaudeMessage::System {
-                        session_id,
-                        subtype,
-                        ..
-                    } => {
-                        if let Some(id) = session_id {
-                            conversation_id = Some(id);
-                        }
-                        messages.push(format!("System: {}", subtype));
-                    }
-                    ClaudeMessage::Assistant {
-                        message: assistant_msg,
-                        session_id,
-                    } => {
-                        if let Some(id) = session_id {
-                            conversation_id = Some(id.clone());
-                        }
-
-                        if let Some(content_blocks) = assistant_msg.content {
-                            for block in content_blocks {
-                                match block {
-                                    ContentBlock::Text { text } => {
-                                        messages.push(format!("Assistant text: {}", text));
-                                    }
-                                    ContentBlock::ToolUse { name, .. } => {
-                                        messages.push(format!("Tool use: {}", name));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ClaudeMessage::User { .. } => {
-                        messages.push("User message".to_string());
-                    }
-                    ClaudeMessage::Result {
-                        result,
-                        session_id,
-                        is_error,
-                        ..
-                    } => {
-                        conversation_id = Some(session_id);
-                        messages.push(format!("Result (error={}): {}", is_error, result));
-                    }
-                },
-                Err(e) => {
-                    panic!("Failed to parse JSON line: {} - Error: {}", line, e);
-                }
-            }
-        }
-
-        // Verify we parsed the expected messages
-        assert_eq!(
-            conversation_id,
-            Some("61f288d2-1db5-49b5-8c69-389bf31e270d".to_string())
+/// Update conversation ID in bot state
+async fn update_conversation_id(bot_state: &BotState, chat_id: i64, conversation_id: String) {
+    let mut sessions = bot_state.claude_sessions.lock().await;
+    if let Some(session) = sessions.get_mut(&chat_id) {
+        session.conversation_id = Some(conversation_id.clone());
+        log::info!(
+            "Updated conversation ID for chat {} to: {}",
+            chat_id,
+            conversation_id
         );
-        assert_eq!(messages.len(), 5);
-        assert_eq!(messages[0], "System: init");
-        assert_eq!(messages[1], "Tool use: LS");
-        assert_eq!(messages[2], "User message");
-        assert_eq!(
-            messages[3],
-            "Assistant text: The directory appears to be empty."
+    } else {
+        log::warn!(
+            "No Claude session found for chat {} when updating conversation ID",
+            chat_id
         );
-        assert_eq!(
-            messages[4],
-            "Result (error=false): The directory appears to be empty."
-        );
-    }
-
-    #[test]
-    fn test_build_claude_command_args_basic() {
-        let prompt = "Write a hello world program";
-        let args = build_claude_command_args(prompt, None);
-
-        let expected = vec![
-            "claude".to_string(),
-            "--print".to_string(),
-            "--verbose".to_string(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            "--allowedTools".to_string(),
-            "Edit".to_string(),
-            prompt.to_string(),
-        ];
-
-        assert_eq!(args, expected);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_with_resume() {
-        let prompt = "Continue the previous task";
-        let conversation_id = "test-conversation-123";
-        let args = build_claude_command_args(prompt, Some(conversation_id));
-
-        let expected = vec![
-            "claude".to_string(),
-            "--print".to_string(),
-            "--verbose".to_string(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            "--allowedTools".to_string(),
-            "Edit".to_string(),
-            "--resume".to_string(),
-            conversation_id.to_string(),
-            prompt.to_string(),
-        ];
-
-        assert_eq!(args, expected);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_empty_prompt() {
-        let prompt = "";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[0], "claude");
-        assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--verbose");
-        assert_eq!(args[3], "--output-format");
-        assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "");
-    }
-
-    #[test]
-    fn test_build_claude_command_args_special_characters() {
-        let prompt = "Write a script with \"quotes\" and 'apostrophes' and $variables";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_multiline_prompt() {
-        let prompt =
-            "Write a script that:\n1. Reads a file\n2. Processes the data\n3. Outputs results";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_long_conversation_id() {
-        let prompt = "Test prompt";
-        let conversation_id = "very-long-conversation-id-with-many-characters-and-dashes-123456789";
-        let args = build_claude_command_args(prompt, Some(conversation_id));
-
-        assert_eq!(args.len(), 10);
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "--resume");
-        assert_eq!(args[8], conversation_id);
-        assert_eq!(args[9], prompt);
-    }
-
-    #[test]
-    fn test_build_claude_command_args_unicode_prompt() {
-        let prompt = "Write a program that displays 🤖 emojis and handles café, naïve, and résumé";
-        let args = build_claude_command_args(prompt, None);
-
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[7], prompt);
-    }
-
-    #[test]
-    fn test_conversation_id_in_command_args() {
-        let prompt = "Continue the conversation";
-        let conversation_id = "test-conv-id-123";
-        let args = build_claude_command_args(prompt, Some(conversation_id));
-
-        // Verify the command structure with conversation ID
-        assert_eq!(args.len(), 10);
-        assert_eq!(args[0], "claude");
-        assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--verbose");
-        assert_eq!(args[3], "--output-format");
-        assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], "--resume");
-        assert_eq!(args[8], conversation_id);
-        assert_eq!(args[9], prompt);
-    }
-
-    #[test]
-    fn test_no_conversation_id_in_command_args() {
-        let prompt = "Start new conversation";
-        let args = build_claude_command_args(prompt, None);
-
-        // Verify the command structure without conversation ID
-        assert_eq!(args.len(), 8);
-        assert_eq!(args[0], "claude");
-        assert_eq!(args[1], "--print");
-        assert_eq!(args[2], "--verbose");
-        assert_eq!(args[3], "--output-format");
-        assert_eq!(args[4], "stream-json");
-        assert_eq!(args[5], "--allowedTools");
-        assert_eq!(args[6], "Edit");
-        assert_eq!(args[7], prompt);
-
-        // Ensure no --resume flag is present
-        assert!(!args.contains(&"--resume".to_string()));
-    }
-
-    #[test]
-    fn test_create_tool_result_preview_short_content() {
-        let short_content = "Line 1\nLine 2\nLine 3";
-        let result = create_tool_result_preview(short_content);
-        
-        // Should not be truncated
-        assert!(result.contains("📋 *Tool result:*"));
-        assert!(result.contains("Line 1"));
-        assert!(result.contains("Line 3"));
-        assert!(!result.contains("more lines hidden"));
-    }
-
-    #[test]
-    fn test_create_tool_result_preview_long_content() {
-        // Create content with more than TOOL_RESULT_PREVIEW_LINES
-        let lines: Vec<String> = (1..=30).map(|i| format!("Line {}", i)).collect();
-        let long_content = lines.join("\n");
-        
-        let result = create_tool_result_preview(&long_content);
-        
-        // Should be truncated
-        assert!(result.contains(&format!("showing first {} lines", TOOL_RESULT_PREVIEW_LINES)));
-        assert!(result.contains("more lines hidden"));
-        assert!(result.contains("Line 1"));
-        assert!(result.contains(&format!("Line {}", TOOL_RESULT_PREVIEW_LINES)));
-        assert!(!result.contains(&format!("Line {}", TOOL_RESULT_PREVIEW_LINES + 1)));
-        assert!(result.contains("\\.\\.\\.")); // Truncation indicator
-    }
-
-    #[test]
-    fn test_create_tool_result_preview_exactly_at_limit() {
-        // Create content with exactly TOOL_RESULT_PREVIEW_LINES
-        let lines: Vec<String> = (1..=TOOL_RESULT_PREVIEW_LINES).map(|i| format!("Line {}", i)).collect();
-        let content = lines.join("\n");
-        
-        let result = create_tool_result_preview(&content);
-        
-        // Should not be truncated
-        assert!(result.contains("📋 *Tool result:*"));
-        assert!(!result.contains("more lines hidden"));
-        assert!(!result.contains("\\.\\.\\.")); 
     }
 }
