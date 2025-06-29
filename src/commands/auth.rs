@@ -155,12 +155,6 @@ async fn handle_auth_status(
         )]);
     }
 
-    if github_authenticated {
-        keyboard_buttons.push(vec![InlineKeyboardButton::callback(
-            "📂 List Repositories",
-            "github_repo_list",
-        )]);
-    }
 
     let reply_markup = if !keyboard_buttons.is_empty() {
         Some(InlineKeyboardMarkup::new(keyboard_buttons))
