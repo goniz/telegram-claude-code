@@ -538,13 +538,23 @@ Please start a coding session \
                 data if data.starts_with("start_clone:") => {
                     // Extract repository name from callback data for start workflow
                     let repository = data.strip_prefix("start_clone:").unwrap_or("");
-                    commands::start::handle_repository_clone_in_start(
-                        bot,
+                    if let Err(e) = commands::start::handle_repository_clone_in_start(
+                        bot.clone(),
                         chat_id,
                         &bot_state,
                         repository,
                     )
-                    .await?;
+                    .await {
+                        bot.send_message(
+                            chat_id,
+                            format!(
+                                "❌ Failed to clone repository: {}",
+                                escape_markdown_v2(&e.to_string())
+                            ),
+                        )
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                    }
                 }
                 "manual_repo_entry" => {
                     // Handle manual repository entry
