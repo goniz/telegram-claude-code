@@ -120,9 +120,8 @@ async fn handle_auth_status(
     };
 
     // Check Claude authentication status
-    let (claude_status, claude_authenticated) = match client.get_auth_info().await {
-        Ok(auth_info) => {
-            let authenticated = auth_info.contains("Authenticated") || auth_info.contains("authenticated");
+    let (claude_status, claude_authenticated) = match client.check_auth_status().await {
+        Ok(authenticated) => {
             let status = if authenticated {
                 "Claude Auth: Logged in ✅".to_string()
             } else {
@@ -191,10 +190,7 @@ async fn handle_auth_login(
     };
 
     // Check Claude authentication status
-    let claude_auth_result = client.get_auth_info().await;
-    let claude_already_authenticated = claude_auth_result
-        .map(|info| info.contains("Authenticated") || info.contains("authenticated"))
-        .unwrap_or(false);
+    let claude_already_authenticated = client.check_auth_status().await.unwrap_or(false);
 
     let mut status_messages = Vec::new();
 
