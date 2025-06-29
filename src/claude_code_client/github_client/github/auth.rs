@@ -268,14 +268,28 @@ impl GitHubAuth {
 
             // Look for device code patterns
             if line.to_lowercase().contains("code") && line.contains("-") {
-                // Extract codes that look like XXXX-XXXX
+                // Extract codes that look like XXXX-XXXX or similar GitHub device code patterns
                 let words: Vec<&str> = line.split_whitespace().collect();
                 for word in words {
                     if word.contains("-") && word.len() >= 7 && word.len() <= 12 {
-                        // Basic validation for device code format
+                        // Skip descriptive words like "one-time", "multi-factor", etc.
+                        let word_lower = word.to_lowercase();
+                        if word_lower == "one-time" || word_lower == "multi-factor" || 
+                           word_lower == "two-factor" || word_lower.contains("time") {
+                            continue;
+                        }
+                        
+                        // GitHub device codes are typically alphanumeric with hyphens
+                        // and should have at least 4 alphanumeric characters on each side of hyphen
                         if word.chars().all(|c| c.is_alphanumeric() || c == '-') {
-                            device_code = Some(word.to_string());
-                            break;
+                            let parts: Vec<&str> = word.split('-').collect();
+                            if parts.len() == 2 && 
+                               parts[0].len() >= 4 && parts[1].len() >= 4 &&
+                               parts[0].chars().all(|c| c.is_alphanumeric()) &&
+                               parts[1].chars().all(|c| c.is_alphanumeric()) {
+                                device_code = Some(word.to_string());
+                                break;
+                            }
                         }
                     }
                 }
