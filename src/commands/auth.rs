@@ -155,7 +155,6 @@ async fn handle_auth_status(
         )]);
     }
 
-
     let reply_markup = if !keyboard_buttons.is_empty() {
         Some(InlineKeyboardMarkup::new(keyboard_buttons))
     } else {

@@ -3,7 +3,10 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{dispatching::UpdateFilterExt, dptree, prelude::*, utils::command::BotCommands, types::AllowedUpdate};
+use teloxide::{
+    dispatching::UpdateFilterExt, dptree, prelude::*,
+    utils::command::BotCommands,
+};
 use tokio::sync::Mutex;
 
 mod bot;
@@ -113,19 +116,19 @@ async fn main() {
     let handler = dptree::entry()
         .branch(
             Update::filter_message()
+                .branch(dptree::entry().filter_command::<Command>().endpoint(
+                    move |bot, msg, cmd| {
+                        let bot_state = bot_state_clone1.clone();
+                        answer(bot, msg, cmd, bot_state)
+                    },
+                ))
                 .branch(
-                    dptree::entry()
-                        .filter_command::<Command>()
-                        .endpoint(move |bot, msg, cmd| {
-                            let bot_state = bot_state_clone1.clone();
-                            answer(bot, msg, cmd, bot_state)
-                        }),
-                )
-                .branch(
-                    dptree::filter(|msg: Message| msg.text().is_some()).endpoint(move |bot, msg| {
-                        let bot_state = bot_state_clone2.clone();
-                        handle_text_message(bot, msg, bot_state)
-                    }),
+                    dptree::filter(|msg: Message| msg.text().is_some()).endpoint(
+                        move |bot, msg| {
+                            let bot_state = bot_state_clone2.clone();
+                            handle_text_message(bot, msg, bot_state)
+                        },
+                    ),
                 ),
         )
         .branch(Update::filter_callback_query().endpoint(move |bot, query| {

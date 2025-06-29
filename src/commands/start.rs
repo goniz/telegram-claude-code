@@ -145,13 +145,14 @@ pub async fn handle_start(
 
             // Start the guided workflow directly with container info included
             check_and_guide_authentication_with_container_info(
-                bot, 
-                msg.chat.id, 
-                &bot_state, 
+                bot,
+                msg.chat.id,
+                &bot_state,
                 &claude_client,
                 &container_id_short,
-                &container_name
-            ).await?;
+                &container_name,
+            )
+            .await?;
         }
         Err(e) => {
             bot.send_message(
@@ -228,14 +229,22 @@ async fn check_and_guide_authentication_with_container_info(
         prompt_for_repository_selection(bot, chat_id, bot_state, claude_client).await?;
     } else if github_authenticated && !claude_authenticated {
         // GitHub authenticated but Claude not - offer repository listing while Claude auth proceeds
-        start_authentication_flows_consolidated(bot.clone(), chat_id, bot_state, claude_client, github_authenticated, claude_authenticated)
-            .await?;
-        
+        start_authentication_flows_consolidated(
+            bot.clone(),
+            chat_id,
+            bot_state,
+            claude_client,
+            github_authenticated,
+            claude_authenticated,
+        )
+        .await?;
+
         // Add repository listing option since GitHub is authenticated
-        let keyboard = InlineKeyboardMarkup::new(vec![
-            vec![InlineKeyboardButton::callback("📂 List Repositories", "github_repo_list")],
-        ]);
-        
+        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+            "📂 List Repositories",
+            "github_repo_list",
+        )]]);
+
         bot.send_message(
             chat_id,
             "💡 *Quick Start Option*\n\nWhile Claude authentication is in progress, you can browse and select a repository to clone:",
@@ -245,13 +254,19 @@ async fn check_and_guide_authentication_with_container_info(
         .await?;
     } else {
         // Start authentication flows automatically and show guidance
-        start_authentication_flows_consolidated(bot, chat_id, bot_state, claude_client, github_authenticated, claude_authenticated)
-            .await?;
+        start_authentication_flows_consolidated(
+            bot,
+            chat_id,
+            bot_state,
+            claude_client,
+            github_authenticated,
+            claude_authenticated,
+        )
+        .await?;
     }
 
     Ok(())
 }
-
 
 /// Check GitHub authentication status silently (no messages sent)
 async fn check_github_auth_status_silent(github_client: &GithubClient) -> bool {
@@ -261,16 +276,10 @@ async fn check_github_auth_status_silent(github_client: &GithubClient) -> bool {
     }
 }
 
-
 /// Check Claude authentication status silently (no messages sent)
 async fn check_claude_auth_status_silent(claude_client: &ClaudeCodeClient) -> bool {
-    match claude_client.check_auth_status().await {
-        Ok(is_authenticated) => is_authenticated,
-        Err(_) => false,
-    }
+    claude_client.check_auth_status().await.unwrap_or_default()
 }
-
-
 
 /// Start authentication flows automatically for unauthenticated services (consolidated version)
 async fn start_authentication_flows_consolidated(
@@ -282,11 +291,11 @@ async fn start_authentication_flows_consolidated(
     claude_authenticated: bool,
 ) -> ResponseResult<()> {
     let mut auth_actions = Vec::new();
-    
+
     if !github_authenticated {
         auth_actions.push("🐙 GitHub");
     }
-    
+
     if !claude_authenticated {
         auth_actions.push("🤖 Claude");
     }
@@ -299,9 +308,11 @@ async fn start_authentication_flows_consolidated(
                 claude_client.container_id().to_string(),
                 GithubClientConfig::default(),
             );
-            
+
             if let Ok(auth_result) = github_client.login().await {
-                if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
+                if let (Some(oauth_url), Some(device_code)) =
+                    (&auth_result.oauth_url, &auth_result.device_code)
+                {
                     let consolidated_message = format!(
                         "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
                          Please complete the authentication process and then use /start again to continue\\.\n\n\
@@ -314,8 +325,9 @@ async fn start_authentication_flows_consolidated(
 
                     let keyboard = InlineKeyboardMarkup::new(vec![
                         vec![InlineKeyboardButton::url(
-                            "🔗 Authenticate GitHub", 
-                            url::Url::parse(&oauth_url).unwrap_or_else(|_| url::Url::parse("https://github.com").unwrap())
+                            "🔗 Authenticate GitHub",
+                            url::Url::parse(oauth_url)
+                                .unwrap_or_else(|_| url::Url::parse("https://github.com").unwrap()),
                         )],
                         vec![InlineKeyboardButton::switch_inline_query_current_chat(
                             "📋 Copy Device Code",
@@ -363,7 +375,7 @@ async fn start_authentication_flows_consolidated(
             match claude_client.authenticate_claude_account().await {
                 Ok(auth_handle) => {
                     use telegram_bot::claude_code_client::AuthenticationHandle;
-                    
+
                     let AuthenticationHandle {
                         state_receiver,
                         code_sender,
@@ -391,7 +403,10 @@ async fn start_authentication_flows_consolidated(
                 Err(e) => {
                     bot.send_message(
                         chat_id,
-                        format!("❌ Failed to start Claude authentication: {}", crate::escape_markdown_v2(&e.to_string())),
+                        format!(
+                            "❌ Failed to start Claude authentication: {}",
+                            crate::escape_markdown_v2(&e.to_string())
+                        ),
                     )
                     .parse_mode(ParseMode::MarkdownV2)
                     .await?;
@@ -402,7 +417,6 @@ async fn start_authentication_flows_consolidated(
 
     Ok(())
 }
-
 
 /// Show repository selection UI (public function for callback handlers)
 pub async fn show_repository_selection(
@@ -416,12 +430,13 @@ pub async fn show_repository_selection(
 
 /// Prompt user for repository selection after successful authentication
 async fn prompt_for_repository_selection(
-    bot: Bot, 
-    chat_id: ChatId, 
+    bot: Bot,
+    chat_id: ChatId,
     bot_state: &BotState,
-    claude_client: &ClaudeCodeClient
+    claude_client: &ClaudeCodeClient,
 ) -> ResponseResult<()> {
-    let message = "🎯 *Ready to Start Coding\\!*\n\nBoth GitHub and Claude are authenticated\\.\n\n\
+    let message =
+        "🎯 *Ready to Start Coding\\!*\n\nBoth GitHub and Claude are authenticated\\.\n\n\
                    📂 *Choose a Repository*\n\
                    Select a repository to clone into your coding environment:";
 
@@ -470,14 +485,16 @@ async fn prompt_for_repository_selection(
                     }
 
                     // Add option for manual repository entry
-                    keyboard_rows.push(vec![
-                        InlineKeyboardButton::callback("✏️ Enter Repository Manually", "manual_repo_entry")
-                    ]);
+                    keyboard_rows.push(vec![InlineKeyboardButton::callback(
+                        "✏️ Enter Repository Manually",
+                        "manual_repo_entry",
+                    )]);
 
                     // Add skip option
-                    keyboard_rows.push(vec![
-                        InlineKeyboardButton::callback("⏭️ Skip Repository Setup", "skip_repo_setup")
-                    ]);
+                    keyboard_rows.push(vec![InlineKeyboardButton::callback(
+                        "⏭️ Skip Repository Setup",
+                        "skip_repo_setup",
+                    )]);
 
                     let keyboard = InlineKeyboardMarkup::new(keyboard_rows);
 
@@ -503,13 +520,22 @@ async fn prompt_for_repository_selection(
         Err(_) => {
             // Show manual entry option if repo listing fails
             let keyboard = InlineKeyboardMarkup::new(vec![
-                vec![InlineKeyboardButton::callback("✏️ Enter Repository Manually", "manual_repo_entry")],
-                vec![InlineKeyboardButton::callback("⏭️ Skip Repository Setup", "skip_repo_setup")],
+                vec![InlineKeyboardButton::callback(
+                    "✏️ Enter Repository Manually",
+                    "manual_repo_entry",
+                )],
+                vec![InlineKeyboardButton::callback(
+                    "⏭️ Skip Repository Setup",
+                    "skip_repo_setup",
+                )],
             ]);
 
             bot.send_message(
                 chat_id,
-                format!("{}\n\n⚠️ Could not list repositories\\. You can enter one manually:", message),
+                format!(
+                    "{}\n\n⚠️ Could not list repositories\\. You can enter one manually:",
+                    message
+                ),
             )
             .parse_mode(ParseMode::MarkdownV2)
             .reply_markup(keyboard)
@@ -570,10 +596,7 @@ pub async fn handle_repository_clone_in_start(
 }
 
 /// Handle manual repository entry
-pub async fn handle_manual_repository_entry(
-    bot: Bot,
-    chat_id: ChatId,
-) -> ResponseResult<()> {
+pub async fn handle_manual_repository_entry(bot: Bot, chat_id: ChatId) -> ResponseResult<()> {
     bot.send_message(
         chat_id,
         "✏️ *Enter Repository*\n\n\
@@ -591,10 +614,7 @@ pub async fn handle_manual_repository_entry(
 }
 
 /// Handle skipping repository setup
-pub async fn handle_skip_repository_setup(
-    bot: Bot,
-    chat_id: ChatId,
-) -> ResponseResult<()> {
+pub async fn handle_skip_repository_setup(bot: Bot, chat_id: ChatId) -> ResponseResult<()> {
     bot.send_message(
         chat_id,
         "⏭️ *Repository Setup Skipped*\n\n\

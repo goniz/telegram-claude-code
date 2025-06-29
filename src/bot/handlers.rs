@@ -171,12 +171,11 @@ If you need to restart authentication, use `/auth login`",
             // Simple validation for owner/repo pattern
             let parts: Vec<&str> = text.split('/').collect();
             if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-                let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                    InlineKeyboardButton::callback(
+                let keyboard =
+                    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
                         format!("🔗 Clone {}", text),
                         format!("start_clone:{}", text),
-                    ),
-                ]]);
+                    )]]);
 
                 bot.send_message(
                     msg.chat.id,
@@ -443,13 +442,13 @@ pub async fn handle_callback_query(
     bot_state: BotState,
 ) -> ResponseResult<()> {
     log::debug!("Received callback query: {:?}", query);
-    
+
     // Always answer the callback query first (this is required by Telegram)
     bot.answer_callback_query(&query.id).await?;
-    
+
     if let Some(data) = &query.data {
         log::debug!("Callback data: {}", data);
-        
+
         if let Some(message) = &query.message {
             let chat_id = message.chat().id;
             log::debug!("Chat ID: {}", chat_id.0);
@@ -552,7 +551,8 @@ Please start a coding session \
                         &bot_state,
                         repository,
                     )
-                    .await {
+                    .await
+                    {
                         bot.send_message(
                             chat_id,
                             format!(
@@ -584,10 +584,7 @@ Please start a coding session \
                         Ok(client) => {
                             // Show repository selection UI
                             commands::start::show_repository_selection(
-                                bot,
-                                chat_id,
-                                &bot_state,
-                                &client,
+                                bot, chat_id, &bot_state, &client,
                             )
                             .await?;
                         }
