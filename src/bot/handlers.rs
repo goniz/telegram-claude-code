@@ -427,31 +427,11 @@ pub async fn handle_callback_query(
                     // Handle auth login callback
                     let container_name = format!("coding-session-{}", chat_id.0);
                     match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
-                        Ok(client) => {
-                            // Create a fake message to pass to the auth handler
-                            let fake_msg = teloxide::types::Message {
-                                id: teloxide::types::MessageId(0),
-                                thread_id: None,
-                                date: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-                                chat: message.chat().clone(),
-                                via_bot: None,
-                                kind: teloxide::types::MessageKind::Common(
-                                    teloxide::types::MessageCommon {
-                                        from: None,
-                                        forward: None,
-                                        reply_to_message: None,
-                                        edit_date: None,
-                                        media_kind: teloxide::types::MediaKind::Text(
-                                            teloxide::types::MediaText {
-                                                text: String::new(),
-                                                entities: Vec::new(),
-                                            }
-                                        ),
-                                        reply_markup: None,
-                                    }
-                                ),
-                            };
-                            commands::auth::handle_auth(bot, fake_msg, bot_state, chat_id.0, Some("login".to_string())).await?;
+                        Ok(_client) => {
+                            // Extract the regular message from MaybeInaccessibleMessage
+                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message {
+                                commands::auth::handle_auth(bot, (**msg).clone(), bot_state, chat_id.0, Some("login".to_string())).await?;
+                            }
                         }
                         Err(e) => {
                             bot.send_message(
@@ -471,31 +451,11 @@ pub async fn handle_callback_query(
                     // Handle github repo list callback
                     let container_name = format!("coding-session-{}", chat_id.0);
                     match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
-                        Ok(client) => {
-                            // Create a fake message to pass to the command handler
-                            let fake_msg = teloxide::types::Message {
-                                id: teloxide::types::MessageId(0),
-                                thread_id: None,
-                                date: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-                                chat: message.chat().clone(),
-                                via_bot: None,
-                                kind: teloxide::types::MessageKind::Common(
-                                    teloxide::types::MessageCommon {
-                                        from: None,
-                                        forward: None,
-                                        reply_to_message: None,
-                                        edit_date: None,
-                                        media_kind: teloxide::types::MediaKind::Text(
-                                            teloxide::types::MediaText {
-                                                text: String::new(),
-                                                entities: Vec::new(),
-                                            }
-                                        ),
-                                        reply_markup: None,
-                                    }
-                                ),
-                            };
-                            commands::github_repo_list::handle_github_repo_list(bot, fake_msg, bot_state, chat_id.0).await?;
+                        Ok(_client) => {
+                            // Extract the regular message from MaybeInaccessibleMessage
+                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message {
+                                commands::github_repo_list::handle_github_repo_list(bot, (**msg).clone(), bot_state, chat_id.0).await?;
+                            }
                         }
                         Err(e) => {
                             bot.send_message(
