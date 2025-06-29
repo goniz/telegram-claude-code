@@ -166,7 +166,33 @@ If you need to restart authentication, use `/auth login`",
             return Ok(());
         }
 
-        // Priority 3: No active sessions - do nothing (default behavior)
+        // Priority 3: Check if text looks like a repository name for cloning
+        if text.contains('/') && !text.contains(' ') && text.len() > 3 && text.len() < 100 {
+            // Simple validation for owner/repo pattern
+            let parts: Vec<&str> = text.split('/').collect();
+            if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+                let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                    InlineKeyboardButton::callback(
+                        format!("🔗 Clone {}", text),
+                        format!("start_clone:{}", text),
+                    ),
+                ]]);
+
+                bot.send_message(
+                    msg.chat.id,
+                    format!(
+                        "📦 *Repository Detected*\n\nI detected a repository name: `{}`\n\nWould you like to clone it?",
+                        escape_markdown_v2(&text)
+                    ),
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .reply_markup(keyboard)
+                .await?;
+                return Ok(());
+            }
+        }
+
+        // Priority 4: No active sessions - do nothing (default behavior)
     }
 
     Ok(())
@@ -486,8 +512,8 @@ Please start a coding session \
                                 GithubClientConfig::default(),
                             );
 
-                            // Perform the clone operation
-                            commands::perform_github_clone(
+                            // Perform the clone operation using the new start workflow function
+                            commands::start::perform_github_clone(
                                 &bot,
                                 chat_id,
                                 &github_client,
@@ -508,6 +534,25 @@ Please start a coding session \
                             .await?;
                         }
                     }
+                }
+                data if data.starts_with("start_clone:") => {
+                    // Extract repository name from callback data for start workflow
+                    let repository = data.strip_prefix("start_clone:").unwrap_or("");
+                    commands::start::handle_repository_clone_in_start(
+                        bot,
+                        chat_id,
+                        &bot_state,
+                        repository,
+                    )
+                    .await?;
+                }
+                "manual_repo_entry" => {
+                    // Handle manual repository entry
+                    commands::start::handle_manual_repository_entry(bot, chat_id).await?;
+                }
+                "skip_repo_setup" => {
+                    // Handle skipping repository setup
+                    commands::start::handle_skip_repository_setup(bot, chat_id).await?;
                 }
                 _ => {
                     // Unknown callback data, already answered above
