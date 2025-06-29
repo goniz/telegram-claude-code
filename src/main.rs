@@ -2,7 +2,6 @@ use bollard::image::CreateImageOptions;
 use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use teloxide::{dispatching::UpdateFilterExt, dptree, prelude::*, utils::command::BotCommands};
 use tokio::sync::Mutex;
@@ -37,25 +36,12 @@ enum Command {
     GitHubRepoList,
     #[command(description = "Clone a GitHub repository")]
     GitHubClone(String),
-    #[command(description = "Get Claude authentication debug log file")]
-    DebugClaudeLogin,
     #[command(description = "Update Claude CLI to latest version")]
     UpdateClaude,
     #[command(description = "Start a new Claude conversation")]
     Claude,
 }
 
-/// Find Claude authentication log file (fixed filename)
-async fn find_claude_auth_log_file() -> Option<String> {
-    let log_file_path = "/tmp/claude_auth_output.log";
-
-    // Check if the fixed log file exists
-    if Path::new(log_file_path).exists() {
-        Some(log_file_path.to_string())
-    } else {
-        None
-    }
-}
 
 /// Pull the runtime image asynchronously in the background
 async fn pull_runtime_image_async(docker: Docker) {
@@ -197,9 +183,6 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 Some(repository)
             };
             commands::handle_github_clone(bot, msg, bot_state, chat_id, repo_option).await?;
-        }
-        Command::DebugClaudeLogin => {
-            commands::handle_debug_claude_login(bot, msg, chat_id).await?;
         }
         Command::UpdateClaude => {
             commands::handle_update_claude(bot, msg, bot_state, chat_id).await?;
