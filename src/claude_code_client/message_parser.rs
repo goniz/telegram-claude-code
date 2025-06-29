@@ -11,6 +11,9 @@ pub enum ParseResult {
     Empty,
 }
 
+/// Type alias for complex result tuple
+pub type ResultInfo<'a> = (&'a String, bool, Option<f64>, Option<u64>, Option<u32>);
+
 /// A parsed Claude message with extracted information
 #[derive(Debug)]
 pub struct ParsedClaudeMessage {
@@ -75,7 +78,7 @@ impl ClaudeMessageParser {
     pub fn parse_lines(output: &str) -> Vec<ParseResult> {
         output
             .lines()
-            .map(|line| Self::parse_line(line))
+            .map(Self::parse_line)
             .filter(|result| !matches!(result, ParseResult::Empty))
             .collect()
     }
@@ -125,7 +128,7 @@ impl ClaudeMessageParser {
                 session_id,
             } => {
                 if let Some(content_blocks) = &message.content {
-                    for block in content_blocks {
+                    if let Some(block) = content_blocks.iter().next() {
                         match block {
                             ContentBlock::Text { text } => {
                                 return MessageType::AssistantText {
@@ -225,7 +228,7 @@ impl ParsedClaudeMessage {
     }
 
     /// Get result information if this is a result message
-    pub fn get_result(&self) -> Option<(&String, bool, Option<f64>, Option<u64>, Option<u32>)> {
+    pub fn get_result(&self) -> Option<ResultInfo<'_>> {
         match &self.message_type {
             MessageType::Result {
                 result,

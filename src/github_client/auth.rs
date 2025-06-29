@@ -8,12 +8,15 @@ use super::types::{GithubAuthResult, GithubClientConfig};
 
 #[derive(Debug)]
 pub struct OAuthProcess {
+    #[allow(dead_code)]
     exec_id: String,
+    #[allow(dead_code)]
     docker: Arc<Docker>,
 }
 
 impl OAuthProcess {
     /// Wait for the OAuth process to complete with a timeout
+    #[allow(dead_code)]
     pub async fn wait_for_completion(
         &self,
         timeout_secs: u64,
@@ -60,6 +63,7 @@ impl OAuthProcess {
     }
 
     /// Terminate the OAuth process if it's still running
+    #[allow(dead_code)]
     pub async fn terminate(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         log::debug!("Terminating OAuth process {}", self.exec_id);
         // Note: Docker doesn't provide direct exec termination, but the process should
@@ -305,6 +309,7 @@ impl GitHubAuth {
     }
 
     /// Wait for OAuth completion after user has visited the URL
+    #[allow(dead_code)]
     pub async fn wait_for_oauth_completion(
         &self,
         oauth_process: OAuthProcess,
