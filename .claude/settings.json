@@ -1,4 +1,5 @@
 {
-  "allowedTools": ["Bash"],
-  "description": "Enable Bash tool permissions for building and testing the Rust project using cargo commands"
+  "permissions": {
+    "allow": ["Bash", "Bash(cargo:*)"],
+  }
 }
