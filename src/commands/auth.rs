@@ -322,10 +322,7 @@ async fn handle_auth_login(
         }
     }
 
-    let summary_message = format!(
-        "🔐 *Auth Results*\n\n{}",
-        status_messages.join("\n")
-    );
+    let summary_message = format!("🔐 *Auth Results*\n\n{}", status_messages.join("\n"));
 
     bot.send_message(msg.chat.id, summary_message)
         .parse_mode(ParseMode::MarkdownV2)

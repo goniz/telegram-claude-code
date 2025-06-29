@@ -494,7 +494,10 @@ pub async fn handle_callback_query(
                             // Inform user that cloning is starting
                             bot.send_message(
                                 chat_id,
-                                format!("🔄 Cloning repository: `{}`", escape_markdown_v2(repository)),
+                                format!(
+                                    "🔄 Cloning repository: `{}`",
+                                    escape_markdown_v2(repository)
+                                ),
                             )
                             .parse_mode(ParseMode::MarkdownV2)
                             .await?;
