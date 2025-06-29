@@ -24,6 +24,37 @@ impl CommandExecutor {
         }
     }
 
+    /// Convert command vector to bash -l -c format with proper shell escaping
+    fn prepare_bash_command(&self, command: Vec<String>) -> Vec<String> {
+        if command.is_empty() {
+            return vec![
+                "bash".to_string(),
+                "-l".to_string(),
+                "-c".to_string(),
+                "".to_string(),
+            ];
+        }
+
+        // Join command arguments with proper shell escaping
+        let escaped_args: Vec<String> = command
+            .iter()
+            .map(|arg| {
+                // Use try_quote and fallback to original if it fails (contains nul bytes)
+                shlex::try_quote(arg)
+                    .unwrap_or_else(|_| arg.clone().into())
+                    .to_string()
+            })
+            .collect();
+        let joined_command = escaped_args.join(" ");
+
+        vec![
+            "bash".to_string(),
+            "-l".to_string(),
+            "-c".to_string(),
+            joined_command,
+        ]
+    }
+
     /// Execute a command in the container and return output
     pub async fn exec_command(
         &self,
@@ -35,8 +66,11 @@ impl CommandExecutor {
             command
         );
 
+        let bash_command = self.prepare_bash_command(command);
+        log::debug!("Prepared bash command: {:?}", bash_command);
+
         let exec_config = CreateExecOptions {
-            cmd: Some(command.clone()),
+            cmd: Some(bash_command),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),
@@ -161,8 +195,11 @@ impl CommandExecutor {
             command
         );
 
+        let bash_command = self.prepare_bash_command(command);
+        log::debug!("Prepared bash streaming command: {:?}", bash_command);
+
         let exec_config = CreateExecOptions {
-            cmd: Some(command.clone()),
+            cmd: Some(bash_command),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             working_dir: self.config.working_directory.clone(),

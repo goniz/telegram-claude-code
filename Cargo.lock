@@ -2001,6 +2001,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shlex",
  "tar",
  "teloxide",
  "thiserror 1.0.69",
