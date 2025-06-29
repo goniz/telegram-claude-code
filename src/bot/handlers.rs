@@ -29,12 +29,7 @@ pub async fn handle_auth_state_updates(
             }
             AuthState::UrlReady(url) => {
                 let message =
-                    "🔐 *Claude Account Authentication*\n\nTo complete authentication with your \
-                     Claude account:\n\n*1\\. Click the button below to visit the authentication \
-                     URL*\n\n*2\\. Sign in with your Claude account*\n\n*3\\. Complete the OAuth \
-                     flow in your browser*\n\n*4\\. If prompted for a code, simply paste it here* \
-                     \\(no command needed\\)\n\n✨ This will enable full access to your Claude \
-                     subscription features\\!"
+                    "🔐 *Claude OAuth*\n\nClick below to sign in\\. If prompted for a code, paste it here\\."
                         .to_string();
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
@@ -52,9 +47,7 @@ pub async fn handle_auth_state_updates(
                 let _ = bot
                     .send_message(
                         chat_id,
-                        "🔑 *Authentication code required*\n\nPlease check your browser for an \
-                         authentication code and paste it directly into this chat\\. No command \
-                         needed\\!",
+                        "🔑 *Code required*\n\nPaste your authentication code here\\.",
                     )
                     .parse_mode(ParseMode::MarkdownV2)
                     .await;
