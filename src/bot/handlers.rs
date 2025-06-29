@@ -119,14 +119,14 @@ pub async fn handle_text_message(
 
         if let Some(code_sender) = code_sender_clone {
             // An auth session exists for this chat_id
-            if commands::authenticate_claude::is_authentication_code(&text) {
+            if commands::auth::is_authentication_code(&text) {
                 // Send the code to the authentication process
                 if code_sender.send(text.clone()).is_err() {
                     bot.send_message(
                         msg.chat.id,
                         "❌ Failed to send authentication code\\. The authentication session may \
                          have expired\\.\n\nPlease restart authentication with \
-                         `/authenticateclaude`",
+                         `/auth login`",
                     )
                     .parse_mode(ParseMode::MarkdownV2)
                     .await?;
@@ -145,7 +145,7 @@ pub async fn handle_text_message(
                     msg.chat.id,
                     "🔐 *Authentication in Progress*\n\nI'm currently waiting for your \
                      authentication code\\. Please paste the code you received during the OAuth \
-                     flow\\.\n\nIf you need to restart authentication, use `/authenticateclaude`",
+                     flow\\.\n\nIf you need to restart authentication, use `/auth login`",
                 )
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
@@ -416,47 +416,99 @@ pub async fn handle_callback_query(
     bot_state: BotState,
 ) -> ResponseResult<()> {
     if let Some(data) = &query.data {
-        if data.starts_with("clone:") {
-            // Extract repository name from callback data
-            let repository = data.strip_prefix("clone:").unwrap_or("");
+        if let Some(message) = &query.message {
+            let chat_id = message.chat().id;
+            
+            // Answer the callback query first to remove the loading state
+            bot.answer_callback_query(&query.id).await?;
 
-            if let Some(message) = &query.message {
-                // Handle both accessible and inaccessible messages
-                let chat_id = message.chat().id;
-                let container_name = format!("coding-session-{}", chat_id.0);
-
-                // Answer the callback query to remove the loading state
-                bot.answer_callback_query(&query.id).await?;
-
-                match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await
-                {
-                    Ok(client) => {
-                        let github_client = GithubClient::new(
-                            bot_state.docker.clone(),
-                            client.container_id().to_string(),
-                            GithubClientConfig::default(),
-                        );
-
-                        // Perform the clone operation
-                        commands::perform_github_clone(&bot, chat_id, &github_client, repository)
+            match data.as_str() {
+                "auth_login" => {
+                    // Handle auth login callback
+                    let container_name = format!("coding-session-{}", chat_id.0);
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                        Ok(_client) => {
+                            // Extract the regular message from MaybeInaccessibleMessage
+                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message {
+                                commands::auth::handle_auth(bot, (**msg).clone(), bot_state, chat_id.0, Some("login".to_string())).await?;
+                            }
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                     first using /start",
+                                    escape_markdown_v2(&e.to_string())
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
                             .await?;
+                        }
                     }
-                    Err(e) => {
-                        bot.send_message(
-                            chat_id,
-                            format!(
-                                "❌ No active coding session found: {}\\n\\nPlease start a coding session \
-                                 first using /start",
-                                escape_markdown_v2(&e.to_string())
-                            ),
-                        )
-                        .parse_mode(ParseMode::MarkdownV2)
-                        .await?;
+                }
+                "github_repo_list" => {
+                    // Handle github repo list callback
+                    let container_name = format!("coding-session-{}", chat_id.0);
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                        Ok(_client) => {
+                            // Extract the regular message from MaybeInaccessibleMessage
+                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message {
+                                commands::github_repo_list::handle_github_repo_list(bot, (**msg).clone(), bot_state, chat_id.0).await?;
+                            }
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                     first using /start",
+                                    escape_markdown_v2(&e.to_string())
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                        }
                     }
+                }
+                data if data.starts_with("clone:") => {
+                    // Extract repository name from callback data
+                    let repository = data.strip_prefix("clone:").unwrap_or("");
+                    let container_name = format!("coding-session-{}", chat_id.0);
+
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await
+                    {
+                        Ok(client) => {
+                            let github_client = GithubClient::new(
+                                bot_state.docker.clone(),
+                                client.container_id().to_string(),
+                                GithubClientConfig::default(),
+                            );
+
+                            // Perform the clone operation
+                            commands::perform_github_clone(&bot, chat_id, &github_client, repository)
+                                .await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                     first using /start",
+                                    escape_markdown_v2(&e.to_string())
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                        }
+                    }
+                }
+                _ => {
+                    // Unknown callback data, already answered above
                 }
             }
         } else {
-            // Unknown callback data, just answer the query
+            // No message, just answer the query
             bot.answer_callback_query(&query.id).await?;
         }
     } else {

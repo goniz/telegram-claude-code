@@ -207,7 +207,7 @@ async fn show_authentication_guidance(
         keyboard_buttons.push(vec![
             InlineKeyboardButton::switch_inline_query_current_chat(
                 "🔐 Authenticate GitHub",
-                "/githubauth",
+                "/auth login",
             ),
         ]);
     }
@@ -217,7 +217,7 @@ async fn show_authentication_guidance(
         keyboard_buttons.push(vec![
             InlineKeyboardButton::switch_inline_query_current_chat(
                 "🔐 Authenticate Claude",
-                "/authenticateclaude",
+                "/auth login",
             ),
         ]);
     }
@@ -271,8 +271,8 @@ async fn prompt_for_repository_setup(bot: Bot, chat_id: ChatId) -> ResponseResul
                 "/claudestatus",
             ),
             InlineKeyboardButton::switch_inline_query_current_chat(
-                "📋 GitHub Status",
-                "/githubstatus",
+                "🔐 Auth Status",
+                "/auth",
             ),
         ],
     ]);
