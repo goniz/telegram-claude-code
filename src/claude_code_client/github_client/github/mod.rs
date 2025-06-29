@@ -43,6 +43,13 @@ impl GithubClient {
         self.auth.check_auth_status().await
     }
 
+    /// Logout from GitHub by removing stored credentials
+    pub async fn logout(
+        &self,
+    ) -> Result<GithubAuthResult, Box<dyn std::error::Error + Send + Sync>> {
+        self.auth.logout().await
+    }
+
     /// Wait for OAuth completion after user has visited the URL
     pub async fn wait_for_oauth_completion(
         &self,

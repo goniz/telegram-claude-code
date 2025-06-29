@@ -132,9 +132,9 @@ impl ClaudeCodeClient {
         // Delegate to executor for status commands
         let status_command = vec![
             "claude".to_string(),
-            "status".to_string(),
-            "--output-format".to_string(),
-            "json".to_string(),
+            "--output-format=json".to_string(),
+            "--print".to_string(),
+            "say hi".to_string(),
         ];
 
         match self.executor.exec_command(status_command).await {
@@ -162,6 +162,34 @@ impl ClaudeCodeClient {
         }
     }
 
+    /// Logout from Claude Code by removing stored credentials
+    pub async fn logout_claude(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // Remove the credentials file
+        let remove_command = vec![
+            "rm".to_string(),
+            "-f".to_string(),
+            "/root/.claude/.credentials.json".to_string(),
+        ];
+
+        match self.executor.exec_command(remove_command).await {
+            Ok(_) => {
+                // Verify the logout was successful
+                match self.check_auth_status().await {
+                    Ok(false) => Ok("✅ Successfully logged out from Claude Code".to_string()),
+                    Ok(true) => Ok(
+                        "⚠️ Logout may not have been successful - Claude Code still appears \
+                         authenticated"
+                            .to_string(),
+                    ),
+                    Err(_) => {
+                        Ok("✅ Logged out from Claude Code (status check failed)".to_string())
+                    }
+                }
+            }
+            Err(e) => Err(format!("Failed to logout from Claude Code: {}", e).into()),
+        }
+    }
+
     /// Check Claude Code version and availability
     pub async fn check_availability(
         &self,
@@ -173,9 +201,9 @@ impl ClaudeCodeClient {
     /// Update Claude CLI to latest version
     pub async fn update_claude(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let command = vec![
-            "sh".to_string(),
+            "/opt/entrypoint.sh".to_string(),
             "-c".to_string(),
-            "/opt/entrypoint.sh -c \"nvm use default && claude update\"".to_string(),
+            "nvm use default && npm install -g @anthropic-ai/claude-code".to_string(),
         ];
         self.executor.exec_command(command).await
     }
