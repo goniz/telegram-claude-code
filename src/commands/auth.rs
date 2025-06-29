@@ -58,15 +58,22 @@ pub async fn handle_auth(
     match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
         Ok(client) => {
             if let Some(args) = args {
-                if args.trim().to_lowercase() == "login" {
-                    handle_auth_login(bot, msg, bot_state, chat_id, client).await?;
-                } else {
-                    bot.send_message(
-                        msg.chat.id,
-                        "❓ *Invalid argument*\n\n*Usage:*\n• `/auth` \\- Show authentication status\n• `/auth login` \\- Start authentication process",
-                    )
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await?;
+                let arg = args.trim().to_lowercase();
+                match arg.as_str() {
+                    "login" => {
+                        handle_auth_login(bot, msg, bot_state, chat_id, client).await?;
+                    }
+                    "logout" => {
+                        handle_auth_logout(bot, msg, bot_state, chat_id, client).await?;
+                    }
+                    _ => {
+                        bot.send_message(
+                            msg.chat.id,
+                            "❓ *Invalid argument*\n\n*Usage:*\n• `/auth` \\- Show authentication status\n• `/auth login` \\- Start authentication process\n• `/auth logout` \\- Logout from both services",
+                        )
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                    }
                 }
             } else {
                 handle_auth_status(bot, msg, bot_state, chat_id, client).await?;
@@ -310,6 +317,61 @@ async fn handle_auth_login(
 
     let summary_message = format!(
         "🔐 *Authentication Login Results*\n\n{}",
+        status_messages.join("\n")
+    );
+
+    bot.send_message(msg.chat.id, summary_message)
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
+
+    Ok(())
+}
+
+/// Handle authentication logout process
+async fn handle_auth_logout(
+    bot: Bot,
+    msg: Message,
+    bot_state: BotState,
+    _chat_id: i64,
+    client: ClaudeCodeClient,
+) -> ResponseResult<()> {
+    // Create GitHub client
+    let github_client = GithubClient::new(
+        bot_state.docker.clone(),
+        client.container_id().to_string(),
+        GithubClientConfig::default(),
+    );
+
+    let mut status_messages = Vec::new();
+
+    // Handle Claude logout
+    match client.logout_claude().await {
+        Ok(message) => {
+            status_messages.push(format!("Claude: {}", escape_markdown_v2(&message)));
+        }
+        Err(e) => {
+            status_messages.push(format!(
+                "Claude: ❌ {}",
+                escape_markdown_v2(&e.to_string())
+            ));
+        }
+    }
+
+    // Handle GitHub logout
+    match github_client.logout().await {
+        Ok(auth_result) => {
+            status_messages.push(format!("GitHub: {}", escape_markdown_v2(&auth_result.message)));
+        }
+        Err(e) => {
+            status_messages.push(format!(
+                "GitHub: ❌ {}",
+                escape_markdown_v2(&e.to_string())
+            ));
+        }
+    }
+
+    let summary_message = format!(
+        "🚪 *Logout Results*\n\n{}",
         status_messages.join("\n")
     );
 

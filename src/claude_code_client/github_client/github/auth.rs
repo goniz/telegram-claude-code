@@ -416,4 +416,102 @@ impl GitHubAuth {
         }
         None
     }
+
+    /// Logout from GitHub by removing stored credentials
+    pub async fn logout(
+        &self,
+    ) -> Result<GithubAuthResult, Box<dyn std::error::Error + Send + Sync>> {
+        let logout_command = vec!["gh".to_string(), "auth".to_string(), "logout".to_string()];
+
+        let exec_config = CreateExecOptions {
+            cmd: Some(logout_command),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            working_dir: self.config.working_directory.clone(),
+            env: Some(vec![
+                "PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string(),
+                "HOME=/root".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let exec = self
+            .docker
+            .create_exec(&self.container_id, exec_config)
+            .await?;
+
+        let start_config = StartExecOptions {
+            detach: false,
+            ..Default::default()
+        };
+
+        let mut output = String::new();
+
+        match self.docker.start_exec(&exec.id, Some(start_config)).await? {
+            bollard::exec::StartExecResults::Attached {
+                output: mut output_stream,
+                ..
+            } => {
+                while let Some(Ok(msg)) = output_stream.next().await {
+                    match msg {
+                        bollard::container::LogOutput::StdOut { message } => {
+                            output.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        bollard::container::LogOutput::StdErr { message } => {
+                            output.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            bollard::exec::StartExecResults::Detached => {
+                return Err("Unexpected detached execution".into());
+            }
+        }
+
+        // Check the exit code
+        let exec_inspect = self.docker.inspect_exec(&exec.id).await?;
+        let exit_code = exec_inspect.exit_code.unwrap_or(-1);
+
+        if exit_code == 0 {
+            // Verify the logout was successful by checking auth status
+            match self.check_auth_status().await {
+                Ok(auth_result) if !auth_result.authenticated => {
+                    Ok(GithubAuthResult {
+                        authenticated: false,
+                        username: None,
+                        message: "✅ Successfully logged out from GitHub".to_string(),
+                        oauth_url: None,
+                        device_code: None,
+                    })
+                }
+                Ok(_) => {
+                    Ok(GithubAuthResult {
+                        authenticated: false,
+                        username: None,
+                        message: "⚠️ Logout may not have been successful - GitHub still appears authenticated".to_string(),
+                        oauth_url: None,
+                        device_code: None,
+                    })
+                }
+                Err(_) => {
+                    Ok(GithubAuthResult {
+                        authenticated: false,
+                        username: None,
+                        message: "✅ Logged out from GitHub (status check failed)".to_string(),
+                        oauth_url: None,
+                        device_code: None,
+                    })
+                }
+            }
+        } else {
+            Ok(GithubAuthResult {
+                authenticated: false,
+                username: None,
+                message: format!("❌ Failed to logout from GitHub: {}", output.trim()),
+                oauth_url: None,
+                device_code: None,
+            })
+        }
+    }
 }
