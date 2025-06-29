@@ -117,7 +117,7 @@ pub async fn handle_start(
 ) -> ResponseResult<()> {
     let container_name = format!("coding-session-{}", chat_id);
 
-    // Send initial welcome message
+    // Send initial welcome message and start container creation
     bot.send_message(
         msg.chat.id,
         "Hello\\! I'm your Claude Code Chat Bot 🤖🐳\n\n🚀 Starting new coding \
@@ -143,22 +143,15 @@ pub async fn handle_start(
                 .take(12)
                 .collect::<String>();
 
-            // Send container started message
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "✅ Coding session started successfully\\!\n\n*Container ID:* \
-                     `{}`\n*Container Name:* `{}`\n\n🎯 Claude Code is pre\\-installed and \
-                     ready to use\\!",
-                    escape_markdown_v2(&container_id_short),
-                    escape_markdown_v2(&container_name)
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
-
-            // Start the guided workflow: check authentication status
-            check_and_guide_authentication(bot, msg.chat.id, &bot_state, &claude_client).await?;
+            // Start the guided workflow directly with container info included
+            check_and_guide_authentication_with_container_info(
+                bot, 
+                msg.chat.id, 
+                &bot_state, 
+                &claude_client,
+                &container_id_short,
+                &container_name
+            ).await?;
         }
         Err(e) => {
             bot.send_message(
@@ -179,17 +172,15 @@ pub async fn handle_start(
 }
 
 /// Check GitHub and Claude authentication status and guide the user through the process
-async fn check_and_guide_authentication(
+/// This version consolidates container success with authentication status
+async fn check_and_guide_authentication_with_container_info(
     bot: Bot,
     chat_id: ChatId,
     bot_state: &BotState,
     claude_client: &ClaudeCodeClient,
+    container_id_short: &str,
+    container_name: &str,
 ) -> ResponseResult<()> {
-    // Send status checking message
-    bot.send_message(chat_id, "🔍 Checking authentication status\\.\\.\\.")
-        .parse_mode(ParseMode::MarkdownV2)
-        .await?;
-
     // Create GitHub client
     let github_client = GithubClient::new(
         bot_state.docker.clone(),
@@ -197,9 +188,39 @@ async fn check_and_guide_authentication(
         GithubClientConfig::default(),
     );
 
-    // Check authentication status for both services
-    let github_authenticated = check_github_auth_status(&github_client, &bot, chat_id).await?;
-    let claude_authenticated = check_claude_auth_status(claude_client, &bot, chat_id).await?;
+    // Check authentication status for both services (without sending individual status messages)
+    let github_authenticated = check_github_auth_status_silent(&github_client).await;
+    let claude_authenticated = check_claude_auth_status_silent(claude_client).await;
+
+    // Send consolidated container success + auth status message
+    let auth_status_text = match (github_authenticated, claude_authenticated) {
+        (true, true) => {
+            "✅ Container running with Claude Code\n✅ GitHub authenticated\n✅ Claude authenticated\n\n🎯 Ready to start coding!"
+        }
+        (true, false) => {
+            "✅ Container running with Claude Code\n✅ GitHub authenticated\n❌ Claude authentication needed"
+        }
+        (false, true) => {
+            "✅ Container running with Claude Code\n❌ GitHub authentication needed\n✅ Claude authenticated"
+        }
+        (false, false) => {
+            "✅ Container running with Claude Code\n❌ GitHub authentication needed\n❌ Claude authentication needed"
+        }
+    };
+
+    let consolidated_message = format!(
+        "✅ *Coding session started successfully\\!*\n\n\
+         *Container ID:* `{}`\n\
+         *Container Name:* `{}`\n\n\
+         {}",
+        escape_markdown_v2(container_id_short),
+        escape_markdown_v2(container_name),
+        escape_markdown_v2(auth_status_text)
+    );
+
+    bot.send_message(chat_id, consolidated_message)
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
 
     // Guide user through next steps based on authentication status
     if github_authenticated && claude_authenticated {
@@ -207,94 +228,35 @@ async fn check_and_guide_authentication(
         prompt_for_repository_selection(bot, chat_id, bot_state, claude_client).await?;
     } else {
         // Start authentication flows automatically and show guidance
-        start_authentication_flows(bot, chat_id, bot_state, claude_client, github_authenticated, claude_authenticated)
+        start_authentication_flows_consolidated(bot, chat_id, bot_state, claude_client, github_authenticated, claude_authenticated)
             .await?;
     }
 
     Ok(())
 }
 
-/// Check GitHub authentication status and send appropriate status message
-async fn check_github_auth_status(
-    github_client: &GithubClient,
-    bot: &Bot,
-    chat_id: ChatId,
-) -> ResponseResult<bool> {
+
+/// Check GitHub authentication status silently (no messages sent)
+async fn check_github_auth_status_silent(github_client: &GithubClient) -> bool {
     match github_client.check_auth_status().await {
-        Ok(auth_result) => {
-            if auth_result.authenticated {
-                let message = if let Some(username) = &auth_result.username {
-                    format!(
-                        "✅ *GitHub Status:* Authenticated as {}",
-                        escape_markdown_v2(username)
-                    )
-                } else {
-                    "✅ *GitHub Status:* Authenticated".to_string()
-                };
-
-                bot.send_message(chat_id, message)
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await?;
-                Ok(true)
-            } else {
-                bot.send_message(chat_id, "❌ *GitHub Status:* Not authenticated")
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .await?;
-                Ok(false)
-            }
-        }
-        Err(e) => {
-            bot.send_message(
-                chat_id,
-                format!(
-                    "⚠️ *GitHub Status:* Could not check \\({}\\)",
-                    escape_markdown_v2(&e.to_string())
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
-            Ok(false)
-        }
+        Ok(auth_result) => auth_result.authenticated,
+        Err(_) => false,
     }
 }
 
-/// Check Claude authentication status and send appropriate status message
-async fn check_claude_auth_status(
-    claude_client: &ClaudeCodeClient,
-    bot: &Bot,
-    chat_id: ChatId,
-) -> ResponseResult<bool> {
+
+/// Check Claude authentication status silently (no messages sent)
+async fn check_claude_auth_status_silent(claude_client: &ClaudeCodeClient) -> bool {
     match claude_client.check_auth_status().await {
-        Ok(is_authenticated) => {
-            let message = if is_authenticated {
-                "✅ *Claude Status:* Authenticated"
-            } else {
-                "❌ *Claude Status:* Not authenticated"
-            };
-
-            bot.send_message(chat_id, message)
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
-            Ok(is_authenticated)
-        }
-        Err(e) => {
-            bot.send_message(
-                chat_id,
-                format!(
-                    "⚠️ *Claude Status:* Could not check \\({}\\)",
-                    escape_markdown_v2(&e.to_string())
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
-            Ok(false)
-        }
+        Ok(is_authenticated) => is_authenticated,
+        Err(_) => false,
     }
 }
 
 
-/// Start authentication flows automatically for unauthenticated services
-async fn start_authentication_flows(
+
+/// Start authentication flows automatically for unauthenticated services (consolidated version)
+async fn start_authentication_flows_consolidated(
     bot: Bot,
     chat_id: ChatId,
     bot_state: &BotState,
@@ -313,12 +275,6 @@ async fn start_authentication_flows(
     }
 
     if !auth_actions.is_empty() {
-        let base_message = format!(
-            "🔐 *Authentication Required*\n\nStarting authentication for: {}\n\n\
-             Please complete the authentication process and then use /start again to continue\\.",
-            auth_actions.join(" and ")
-        );
-
         // Start GitHub authentication if needed
         if !github_authenticated {
             let github_client = GithubClient::new(
@@ -329,9 +285,13 @@ async fn start_authentication_flows(
             
             if let Ok(auth_result) = github_client.login().await {
                 if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
-                    let github_message = format!(
-                        "{}\n\n🐙 *GitHub Authentication*\n\nDevice code: ```{}```\n\nClick below to authenticate\\.",
-                        base_message,
+                    let consolidated_message = format!(
+                        "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
+                         Please complete the authentication process and then use /start again to continue\\.\n\n\
+                         🐙 *GitHub Authentication*\n\n\
+                         Device code: ```{}```\n\n\
+                         Click below to authenticate\\.",
+                        auth_actions.join(" and "),
                         escape_markdown_v2(device_code)
                     );
 
@@ -346,27 +306,42 @@ async fn start_authentication_flows(
                         )],
                     ]);
 
-                    bot.send_message(chat_id, github_message)
+                    bot.send_message(chat_id, consolidated_message)
                         .parse_mode(ParseMode::MarkdownV2)
                         .reply_markup(keyboard)
                         .await?;
                 } else {
-                    bot.send_message(chat_id, base_message)
+                    let fallback_message = format!(
+                        "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
+                         Please complete the authentication process and then use /start again to continue\\.",
+                        auth_actions.join(" and ")
+                    );
+                    bot.send_message(chat_id, fallback_message)
                         .parse_mode(ParseMode::MarkdownV2)
                         .await?;
                 }
             } else {
-                bot.send_message(chat_id, base_message)
+                let fallback_message = format!(
+                    "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
+                     Please complete the authentication process and then use /start again to continue\\.",
+                    auth_actions.join(" and ")
+                );
+                bot.send_message(chat_id, fallback_message)
                     .parse_mode(ParseMode::MarkdownV2)
                     .await?;
             }
         } else {
+            let base_message = format!(
+                "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
+                 Please complete the authentication process and then use /start again to continue\\.",
+                auth_actions.join(" and ")
+            );
             bot.send_message(chat_id, base_message)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
         }
 
-        // Start Claude authentication if needed
+        // Start Claude authentication if needed (this will still generate separate messages due to the interactive nature)
         if !claude_authenticated {
             match claude_client.authenticate_claude_account().await {
                 Ok(auth_handle) => {
@@ -410,6 +385,7 @@ async fn start_authentication_flows(
 
     Ok(())
 }
+
 
 /// Prompt user for repository selection after successful authentication
 async fn prompt_for_repository_selection(
