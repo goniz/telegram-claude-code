@@ -276,6 +276,15 @@ impl ClaudeCodeClient {
         docker: Docker,
         container_name: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::for_session_with_working_dir(docker, container_name, None).await
+    }
+
+    /// Helper method to create a client for a coding session with custom working directory
+    pub async fn for_session_with_working_dir(
+        docker: Docker,
+        container_name: &str,
+        working_directory: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Find the container by name
         let containers = docker
             .list_containers(None::<bollard::container::ListContainersOptions<String>>)
@@ -301,7 +310,12 @@ impl ClaudeCodeClient {
             .ok_or("Container ID not found")?
             .clone();
 
-        Ok(Self::new(docker, container_id, ClaudeCodeConfig::default()))
+        let mut config = ClaudeCodeConfig::default();
+        if let Some(dir) = working_directory {
+            config.working_directory = Some(dir);
+        }
+
+        Ok(Self::new(docker, container_id, config))
     }
 
     /// Create a client with custom OAuth configuration

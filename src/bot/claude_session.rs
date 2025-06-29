@@ -9,6 +9,7 @@ pub struct ClaudeSession {
     pub conversation_id: Option<String>,
     pub process_handle: Option<Child>,
     pub is_active: bool,
+    pub working_directory: Option<String>,
 }
 
 impl ClaudeSession {
@@ -17,6 +18,7 @@ impl ClaudeSession {
             conversation_id: None,
             process_handle: None,
             is_active: false,
+            working_directory: None,
         }
     }
 
@@ -38,6 +40,14 @@ impl ClaudeSession {
     pub fn reset_conversation(&mut self) {
         self.stop_conversation();
         self.conversation_id = None;
+    }
+
+    pub fn set_working_directory(&mut self, directory: String) {
+        self.working_directory = Some(directory);
+    }
+
+    pub fn get_working_directory(&self) -> Option<&String> {
+        self.working_directory.as_ref()
     }
 }
 

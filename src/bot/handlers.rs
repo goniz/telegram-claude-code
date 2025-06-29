@@ -524,6 +524,7 @@ Please start a coding session \
                                 chat_id,
                                 &github_client,
                                 repository,
+                                &bot_state,
                             )
                             .await?;
                         }

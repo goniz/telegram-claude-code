@@ -80,7 +80,20 @@ pub async fn execute_claude_command(
     );
 
     let container_name = format!("coding-session-{}", chat_id.0);
-    let client = ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await?;
+    
+    // Get working directory from session state
+    let working_directory = {
+        let claude_sessions = bot_state.claude_sessions.lock().await;
+        claude_sessions
+            .get(&chat_id.0)
+            .and_then(|session| session.get_working_directory().cloned())
+    };
+    
+    let client = ClaudeCodeClient::for_session_with_working_dir(
+        bot_state.docker.clone(), 
+        &container_name, 
+        working_directory
+    ).await?;
 
     // Execute Claude prompt with streaming or batch processing
     match client

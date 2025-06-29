@@ -46,6 +46,7 @@ pub async fn perform_github_clone(
     chat_id: teloxide::types::ChatId,
     github_client: &GithubClient,
     repository: &str,
+    bot_state: &BotState,
 ) -> ResponseResult<()> {
     bot.send_message(
         chat_id,
@@ -60,8 +61,17 @@ pub async fn perform_github_clone(
     match github_client.repo_clone(repository, None).await {
         Ok(clone_result) => {
             let message = if clone_result.success {
+                // Update working directory for this session
+                {
+                    let mut claude_sessions = bot_state.claude_sessions.lock().await;
+                    claude_sessions
+                        .entry(chat_id.0)
+                        .or_insert_with(|| crate::bot::claude_session::ClaudeSession::new())
+                        .set_working_directory(clone_result.target_directory.clone());
+                }
+
                 format!(
-                    "✅ *Repository Cloned Successfully*\n\n📦 Repository: {}\n📁 Location: {}\n✨ {}",
+                    "✅ *Repository Cloned Successfully*\n\n📦 Repository: {}\n📁 Location: {}\n✨ {}\n\n🎯 *Working directory set for /claude commands*",
                     escape_markdown_v2(&clone_result.repository),
                     escape_markdown_v2(&clone_result.target_directory),
                     escape_markdown_v2(&clone_result.message)
@@ -564,7 +574,7 @@ pub async fn handle_repository_clone_in_start(
             );
 
             // Perform the clone using the same logic as the old github_clone command
-            perform_github_clone(&bot, chat_id, &github_client, repository).await?;
+            perform_github_clone(&bot, chat_id, &github_client, repository, bot_state).await?;
 
             // After successful clone, provide next steps
             bot.send_message(
