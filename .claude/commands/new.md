@@ -28,7 +28,7 @@ Based on the feature description "$ARGUMENTS", I'll create an appropriate branch
 ### Step 4: Create and Switch to New Branch
 I'll now create and switch to a new branch based on the latest main branch:
 
-!`git checkout -b BRANCH_NAME origin/main`
+`git checkout -b $BRANCH_NAME origin/main`
 
 ## Implementation Plan
 
