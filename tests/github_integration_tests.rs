@@ -2,7 +2,8 @@ use bollard::Docker;
 use futures_util;
 use rstest::*;
 use telegram_bot::claude_code_client::ClaudeCodeConfig;
-use telegram_bot::{container_utils, ClaudeCodeClient, GithubClient, GithubClientConfig};
+use telegram_bot::{container_utils, ClaudeCodeClient};
+use telegram_bot::github_client::{GithubClient, GithubClientConfig};
 use uuid;
 
 // =============================================================================

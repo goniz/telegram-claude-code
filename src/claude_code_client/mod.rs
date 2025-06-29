@@ -8,7 +8,6 @@ pub mod container;
 pub mod container_cred_storage;
 pub mod container_utils;
 pub mod executor;
-pub mod github_client;
 pub mod message_parser;
 pub mod response_processor;
 pub mod streaming;
@@ -18,8 +17,6 @@ pub use claude_command::{ClaudeCommandExecutor, ClaudeExecutionResult};
 pub use config::ClaudeCodeConfig;
 pub use container_cred_storage::ContainerCredStorage;
 pub use executor::CommandExecutor;
-#[allow(unused_imports)]
-pub use github_client::{GithubAuthResult, GithubClient, GithubClientConfig, GithubCloneResult};
 pub use message_parser::{ClaudeMessageParser, MessageType, ParseResult, ParsedClaudeMessage};
 pub use response_processor::{
     ErrorInfo, LiveMessage, ProcessedResponse, ResponseItem, ResponseProcessor, SessionInfo,

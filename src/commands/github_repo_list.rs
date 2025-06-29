@@ -1,5 +1,6 @@
 use crate::{escape_markdown_v2, BotState};
-use telegram_bot::claude_code_client::{ClaudeCodeClient, GithubClient, GithubClientConfig};
+use telegram_bot::claude_code_client::ClaudeCodeClient;
+use crate::github_client::{GithubClient, GithubClientConfig};
 use teloxide::{prelude::*, types::ParseMode};
 
 /// Handle the /githubrepolist command
