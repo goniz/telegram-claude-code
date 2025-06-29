@@ -554,6 +554,38 @@ Please start a coding session \
                     // Handle skipping repository setup
                     commands::start::handle_skip_repository_setup(bot, chat_id).await?;
                 }
+                "github_repo_list" => {
+                    // Handle github repo list callback
+                    let container_name = format!("coding-session-{}", chat_id.0);
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
+                        .await
+                    {
+                        Ok(client) => {
+                            // Show repository selection UI
+                            commands::start::show_repository_selection(
+                                bot,
+                                chat_id,
+                                &bot_state,
+                                &client,
+                            )
+                            .await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "❌ No active coding session found: {}
+
+Please start a coding session \
+                                     first using /start",
+                                    escape_markdown_v2(&e.to_string())
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                        }
+                    }
+                }
                 _ => {
                     // Unknown callback data, already answered above
                 }

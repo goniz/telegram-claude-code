@@ -226,6 +226,23 @@ async fn check_and_guide_authentication_with_container_info(
     if github_authenticated && claude_authenticated {
         // Both authenticated - proceed to repository setup
         prompt_for_repository_selection(bot, chat_id, bot_state, claude_client).await?;
+    } else if github_authenticated && !claude_authenticated {
+        // GitHub authenticated but Claude not - offer repository listing while Claude auth proceeds
+        start_authentication_flows_consolidated(bot.clone(), chat_id, bot_state, claude_client, github_authenticated, claude_authenticated)
+            .await?;
+        
+        // Add repository listing option since GitHub is authenticated
+        let keyboard = InlineKeyboardMarkup::new(vec![
+            vec![InlineKeyboardButton::callback("📂 List Repositories", "github_repo_list")],
+        ]);
+        
+        bot.send_message(
+            chat_id,
+            "💡 *Quick Start Option*\n\nWhile Claude authentication is in progress, you can browse and select a repository to clone:",
+        )
+        .parse_mode(ParseMode::MarkdownV2)
+        .reply_markup(keyboard)
+        .await?;
     } else {
         // Start authentication flows automatically and show guidance
         start_authentication_flows_consolidated(bot, chat_id, bot_state, claude_client, github_authenticated, claude_authenticated)
@@ -386,6 +403,16 @@ async fn start_authentication_flows_consolidated(
     Ok(())
 }
 
+
+/// Show repository selection UI (public function for callback handlers)
+pub async fn show_repository_selection(
+    bot: Bot,
+    chat_id: ChatId,
+    bot_state: &BotState,
+    claude_client: &ClaudeCodeClient,
+) -> ResponseResult<()> {
+    prompt_for_repository_selection(bot, chat_id, bot_state, claude_client).await
+}
 
 /// Prompt user for repository selection after successful authentication
 async fn prompt_for_repository_selection(
