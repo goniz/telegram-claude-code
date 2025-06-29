@@ -498,6 +498,14 @@ pub async fn handle_callback_query(
                         .await
                     {
                         Ok(client) => {
+                            // Inform user that cloning is starting
+                            bot.send_message(
+                                chat_id,
+                                format!("🔄 Cloning repository: `{}`", escape_markdown_v2(repository)),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+
                             let github_client = GithubClient::new(
                                 bot_state.docker.clone(),
                                 client.container_id().to_string(),
