@@ -33,8 +33,6 @@ enum Command {
     ClaudeStatus,
     #[command(description = "Unified authentication management for GitHub and Claude")]
     Auth(String),
-    #[command(description = "List GitHub repositories for the authenticated user")]
-    GitHubRepoList,
     #[command(description = "Clone a GitHub repository")]
     GitHubClone(String),
     #[command(description = "Update Claude CLI to latest version")]
@@ -172,9 +170,6 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
                 Some(args)
             };
             commands::handle_auth(bot, msg, bot_state, chat_id, auth_args).await?;
-        }
-        Command::GitHubRepoList => {
-            commands::handle_github_repo_list(bot, msg, bot_state, chat_id).await?;
         }
         Command::GitHubClone(repository) => {
             let repo_option = if repository.trim().is_empty() {

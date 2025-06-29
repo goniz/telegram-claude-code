@@ -460,41 +460,6 @@ Please start a coding session \
                         }
                     }
                 }
-                "github_repo_list" => {
-                    // Handle github repo list callback
-                    let container_name = format!("coding-session-{}", chat_id.0);
-                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
-                        .await
-                    {
-                        Ok(_client) => {
-                            // Extract the regular message from MaybeInaccessibleMessage
-                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message
-                            {
-                                commands::github_repo_list::handle_github_repo_list(
-                                    bot,
-                                    (**msg).clone(),
-                                    bot_state,
-                                    chat_id.0,
-                                )
-                                .await?;
-                            }
-                        }
-                        Err(e) => {
-                            bot.send_message(
-                                chat_id,
-                                format!(
-                                    "❌ No active coding session found: {}
-
-Please start a coding session \
-                                     first using /start",
-                                    escape_markdown_v2(&e.to_string())
-                                ),
-                            )
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
-                        }
-                    }
-                }
                 data if data.starts_with("clone:") => {
                     // Extract repository name from callback data
                     let repository = data.strip_prefix("clone:").unwrap_or("");
