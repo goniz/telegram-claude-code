@@ -7,9 +7,8 @@ use url::Url;
 
 use super::{markdown::escape_markdown_v2, state::BotState};
 use crate::commands;
-use telegram_bot::claude_code_client::{
-    AuthState, ClaudeCodeClient, GithubClient, GithubClientConfig,
-};
+use crate::github_client::{GithubClient, GithubClientConfig};
+use telegram_bot::claude_code_client::{AuthState, ClaudeCodeClient};
 
 /// Authentication state monitoring task
 pub async fn handle_auth_state_updates(
@@ -28,9 +27,10 @@ pub async fn handle_auth_state_updates(
                     .await;
             }
             AuthState::UrlReady(url) => {
-                let message =
-                    "🔐 *Claude OAuth*\n\nClick below to sign in\\. If prompted for a code, paste it here\\."
-                        .to_string();
+                let message = "🔐 *Claude OAuth*
+
+Click below to sign in\\. If prompted for a code, paste it here\\."
+                    .to_string();
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
                     "🔗 Open Claude OAuth",
@@ -47,7 +47,9 @@ pub async fn handle_auth_state_updates(
                 let _ = bot
                     .send_message(
                         chat_id,
-                        "🔑 *Code required*\n\nPaste your authentication code here\\.",
+                        "🔑 *Code required*
+
+Paste your authentication code here\\.",
                     )
                     .parse_mode(ParseMode::MarkdownV2)
                     .await;
@@ -118,7 +120,9 @@ pub async fn handle_text_message(
                     bot.send_message(
                         msg.chat.id,
                         "❌ Failed to send authentication code\\. The authentication session may \
-                         have expired\\.\n\nPlease restart authentication with \
+                         have expired\\.
+
+Please restart authentication with \
                          `/auth login`",
                     )
                     .parse_mode(ParseMode::MarkdownV2)
@@ -136,9 +140,13 @@ pub async fn handle_text_message(
                 // Not an auth code, but an auth session is active. Inform user.
                 bot.send_message(
                     msg.chat.id,
-                    "🔐 *Authentication in Progress*\n\nI'm currently waiting for your \
+                    "🔐 *Authentication in Progress*
+
+I'm currently waiting for your \
                      authentication code\\. Please paste the code you received during the OAuth \
-                     flow\\.\n\nIf you need to restart authentication, use `/auth login`",
+                     flow\\.
+
+If you need to restart authentication, use `/auth login`",
                 )
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
@@ -411,7 +419,7 @@ pub async fn handle_callback_query(
     if let Some(data) = &query.data {
         if let Some(message) = &query.message {
             let chat_id = message.chat().id;
-            
+
             // Answer the callback query first to remove the loading state
             bot.answer_callback_query(&query.id).await?;
 
@@ -419,18 +427,30 @@ pub async fn handle_callback_query(
                 "auth_login" => {
                     // Handle auth login callback
                     let container_name = format!("coding-session-{}", chat_id.0);
-                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
+                        .await
+                    {
                         Ok(_client) => {
                             // Extract the regular message from MaybeInaccessibleMessage
-                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message {
-                                commands::auth::handle_auth(bot, (**msg).clone(), bot_state, chat_id.0, Some("login".to_string())).await?;
+                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message
+                            {
+                                commands::auth::handle_auth(
+                                    bot,
+                                    (**msg).clone(),
+                                    bot_state,
+                                    chat_id.0,
+                                    Some("login".to_string()),
+                                )
+                                .await?;
                             }
                         }
                         Err(e) => {
                             bot.send_message(
                                 chat_id,
                                 format!(
-                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                    "❌ No active coding session found: {}
+
+Please start a coding session \
                                      first using /start",
                                     escape_markdown_v2(&e.to_string())
                                 ),
@@ -443,18 +463,29 @@ pub async fn handle_callback_query(
                 "github_repo_list" => {
                     // Handle github repo list callback
                     let container_name = format!("coding-session-{}", chat_id.0);
-                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
+                        .await
+                    {
                         Ok(_client) => {
                             // Extract the regular message from MaybeInaccessibleMessage
-                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message {
-                                commands::github_repo_list::handle_github_repo_list(bot, (**msg).clone(), bot_state, chat_id.0).await?;
+                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message
+                            {
+                                commands::github_repo_list::handle_github_repo_list(
+                                    bot,
+                                    (**msg).clone(),
+                                    bot_state,
+                                    chat_id.0,
+                                )
+                                .await?;
                             }
                         }
                         Err(e) => {
                             bot.send_message(
                                 chat_id,
                                 format!(
-                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                    "❌ No active coding session found: {}
+
+Please start a coding session \
                                      first using /start",
                                     escape_markdown_v2(&e.to_string())
                                 ),
@@ -469,9 +500,21 @@ pub async fn handle_callback_query(
                     let repository = data.strip_prefix("clone:").unwrap_or("");
                     let container_name = format!("coding-session-{}", chat_id.0);
 
-                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
+                        .await
                     {
                         Ok(client) => {
+                            // Inform user that cloning is starting
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "🔄 Cloning repository: `{}`",
+                                    escape_markdown_v2(repository)
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+
                             let github_client = GithubClient::new(
                                 bot_state.docker.clone(),
                                 client.container_id().to_string(),
@@ -479,14 +522,19 @@ pub async fn handle_callback_query(
                             );
 
                             // Perform the clone operation
-                            commands::perform_github_clone(&bot, chat_id, &github_client, repository)
-                                .await?;
+                            commands::perform_github_clone(
+                                &bot,
+                                chat_id,
+                                &github_client,
+                                repository,
+                            )
+                            .await?;
                         }
                         Err(e) => {
                             bot.send_message(
                                 chat_id,
                                 format!(
-                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                    "❌ No active coding session found: {}\nPlease start a coding session \
                                      first using /start",
                                     escape_markdown_v2(&e.to_string())
                                 ),

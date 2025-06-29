@@ -12,9 +12,8 @@
 use bollard::Docker;
 use rstest::*;
 use telegram_bot::claude_code_client::container::generate_volume_name;
-use telegram_bot::{
-    container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig,
-};
+use telegram_bot::github_client::{GithubClient, GithubClientConfig};
+use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
 use uuid::Uuid;
 
 // =============================================================================

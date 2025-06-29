@@ -20,6 +20,7 @@ pub struct GithubCloneResult {
 #[derive(Debug, Clone)]
 pub struct GithubClientConfig {
     pub working_directory: Option<String>,
+    #[allow(dead_code)]
     pub exec_timeout_secs: u64,
 }
 

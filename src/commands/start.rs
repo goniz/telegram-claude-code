@@ -1,7 +1,6 @@
+use crate::github_client::{GithubClient, GithubClientConfig};
 use crate::{escape_markdown_v2, BotState};
-use telegram_bot::claude_code_client::{
-    container_utils, ClaudeCodeClient, ClaudeCodeConfig, GithubClient, GithubClientConfig,
-};
+use telegram_bot::claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
 use teloxide::{
     prelude::*,
     types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
@@ -270,10 +269,7 @@ async fn prompt_for_repository_setup(bot: Bot, chat_id: ChatId) -> ResponseResul
                 "📊 Claude Status",
                 "/claudestatus",
             ),
-            InlineKeyboardButton::switch_inline_query_current_chat(
-                "🔐 Auth Status",
-                "/auth",
-            ),
+            InlineKeyboardButton::switch_inline_query_current_chat("🔐 Auth Status", "/auth"),
         ],
     ]);
 

@@ -8,12 +8,15 @@ use super::types::{GithubAuthResult, GithubClientConfig};
 
 #[derive(Debug)]
 pub struct OAuthProcess {
+    #[allow(dead_code)]
     exec_id: String,
+    #[allow(dead_code)]
     docker: Arc<Docker>,
 }
 
 impl OAuthProcess {
     /// Wait for the OAuth process to complete with a timeout
+    #[allow(dead_code)]
     pub async fn wait_for_completion(
         &self,
         timeout_secs: u64,
@@ -60,6 +63,7 @@ impl OAuthProcess {
     }
 
     /// Terminate the OAuth process if it's still running
+    #[allow(dead_code)]
     pub async fn terminate(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         log::debug!("Terminating OAuth process {}", self.exec_id);
         // Note: Docker doesn't provide direct exec termination, but the process should
@@ -274,19 +278,24 @@ impl GitHubAuth {
                     if word.contains("-") && word.len() >= 7 && word.len() <= 12 {
                         // Skip descriptive words like "one-time", "multi-factor", etc.
                         let word_lower = word.to_lowercase();
-                        if word_lower == "one-time" || word_lower == "multi-factor" || 
-                           word_lower == "two-factor" || word_lower.contains("time") {
+                        if word_lower == "one-time"
+                            || word_lower == "multi-factor"
+                            || word_lower == "two-factor"
+                            || word_lower.contains("time")
+                        {
                             continue;
                         }
-                        
+
                         // GitHub device codes are typically alphanumeric with hyphens
                         // and should have at least 4 alphanumeric characters on each side of hyphen
                         if word.chars().all(|c| c.is_alphanumeric() || c == '-') {
                             let parts: Vec<&str> = word.split('-').collect();
-                            if parts.len() == 2 && 
-                               parts[0].len() >= 4 && parts[1].len() >= 4 &&
-                               parts[0].chars().all(|c| c.is_alphanumeric()) &&
-                               parts[1].chars().all(|c| c.is_alphanumeric()) {
+                            if parts.len() == 2
+                                && parts[0].len() >= 4
+                                && parts[1].len() >= 4
+                                && parts[0].chars().all(|c| c.is_alphanumeric())
+                                && parts[1].chars().all(|c| c.is_alphanumeric())
+                            {
                                 device_code = Some(word.to_string());
                                 break;
                             }
@@ -300,6 +309,7 @@ impl GitHubAuth {
     }
 
     /// Wait for OAuth completion after user has visited the URL
+    #[allow(dead_code)]
     pub async fn wait_for_oauth_completion(
         &self,
         oauth_process: OAuthProcess,

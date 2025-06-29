@@ -25,6 +25,7 @@ impl GithubClient {
     }
 
     /// Get the container ID from the operations module
+    #[allow(dead_code)]
     pub fn container_id(&self) -> &str {
         self.operations.container_id()
     }
@@ -51,6 +52,7 @@ impl GithubClient {
     }
 
     /// Wait for OAuth completion after user has visited the URL
+    #[allow(dead_code)]
     pub async fn wait_for_oauth_completion(
         &self,
         oauth_process: OAuthProcess,
@@ -68,6 +70,7 @@ impl GithubClient {
     }
 
     /// Check if gh client is available
+    #[allow(dead_code)]
     pub async fn check_availability(
         &self,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {

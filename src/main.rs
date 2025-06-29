@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 
 mod bot;
 mod commands;
+mod github_client;
 
 use bot::{
     escape_markdown_v2, handle_auth_state_updates, handle_callback_query, handle_text_message,
@@ -41,7 +42,6 @@ enum Command {
     #[command(description = "Start a new Claude conversation")]
     Claude,
 }
-
 
 /// Pull the runtime image asynchronously in the background
 async fn pull_runtime_image_async(docker: Docker) {

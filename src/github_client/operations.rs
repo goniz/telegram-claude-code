@@ -22,6 +22,7 @@ impl GitHubOperations {
     }
 
     /// Get the container ID
+    #[allow(dead_code)]
     pub fn container_id(&self) -> &str {
         &self.container_id
     }
@@ -106,6 +107,7 @@ impl GitHubOperations {
     }
 
     /// Check GitHub availability (check if gh command is available)
+    #[allow(dead_code)]
     pub async fn check_availability(
         &self,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {

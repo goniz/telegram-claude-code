@@ -117,9 +117,9 @@ async fn init_claude_settings(
     ]
   }
 }"#;
-    
+
     let settings_path = format!("{}/settings.json", claude_dir_path);
-    
+
     // Use container_put_file to write settings.json
     container_put_file(
         docker,
