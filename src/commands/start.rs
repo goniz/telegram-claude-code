@@ -305,23 +305,19 @@ async fn start_authentication_flows(
     let mut auth_actions = Vec::new();
     
     if !github_authenticated {
-        auth_actions.push("🐙 GitHub authentication");
+        auth_actions.push("🐙 GitHub");
     }
     
     if !claude_authenticated {
-        auth_actions.push("🤖 Claude authentication");
+        auth_actions.push("🤖 Claude");
     }
 
     if !auth_actions.is_empty() {
-        let message = format!(
+        let base_message = format!(
             "🔐 *Authentication Required*\n\nStarting authentication for: {}\n\n\
              Please complete the authentication process and then use /start again to continue\\.",
             auth_actions.join(" and ")
         );
-
-        bot.send_message(chat_id, message)
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
 
         // Start GitHub authentication if needed
         if !github_authenticated {
@@ -332,18 +328,42 @@ async fn start_authentication_flows(
             );
             
             if let Ok(auth_result) = github_client.login().await {
-                if let Some(oauth_url) = auth_result.oauth_url {
-                    let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                        InlineKeyboardButton::url("🔗 Authenticate GitHub", 
-                        url::Url::parse(&oauth_url).unwrap_or_else(|_| url::Url::parse("https://github.com").unwrap()))
-                    ]]);
+                if let (Some(oauth_url), Some(device_code)) = (&auth_result.oauth_url, &auth_result.device_code) {
+                    let github_message = format!(
+                        "{}\n\n🐙 *GitHub Authentication*\n\nDevice code: ```{}```\n\nClick below to authenticate\\.",
+                        base_message,
+                        escape_markdown_v2(device_code)
+                    );
 
-                    bot.send_message(chat_id, "🐙 *GitHub Authentication*\n\nClick the button below to authenticate with GitHub\\.")
+                    let keyboard = InlineKeyboardMarkup::new(vec![
+                        vec![InlineKeyboardButton::url(
+                            "🔗 Authenticate GitHub", 
+                            url::Url::parse(&oauth_url).unwrap_or_else(|_| url::Url::parse("https://github.com").unwrap())
+                        )],
+                        vec![InlineKeyboardButton::switch_inline_query_current_chat(
+                            "📋 Copy Device Code",
+                            device_code,
+                        )],
+                    ]);
+
+                    bot.send_message(chat_id, github_message)
                         .parse_mode(ParseMode::MarkdownV2)
                         .reply_markup(keyboard)
                         .await?;
+                } else {
+                    bot.send_message(chat_id, base_message)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
                 }
+            } else {
+                bot.send_message(chat_id, base_message)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
             }
+        } else {
+            bot.send_message(chat_id, base_message)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
         }
 
         // Start Claude authentication if needed
