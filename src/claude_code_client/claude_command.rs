@@ -77,7 +77,6 @@ impl ClaudeCommandExecutor {
         cmd_args
     }
 
-
     /// Create a stream of parsed Claude messages from a string stream
     fn create_parsed_stream(
         &self,
@@ -126,7 +125,6 @@ pub enum ClaudeExecutionResult {
     Streaming(Pin<Box<dyn Stream<Item = Result<ParsedClaudeMessage, String>> + Send>>),
     Batch(String),
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -182,5 +180,4 @@ mod tests {
 
         assert_eq!(args, expected);
     }
-
 }

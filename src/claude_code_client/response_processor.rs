@@ -109,7 +109,6 @@ impl ResponseProcessor {
         }
     }
 
-
     /// Reset conversation state
     pub fn reset(&mut self) {
         self.conversation_id = None;

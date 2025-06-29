@@ -1,8 +1,6 @@
-use crate::{escape_markdown_v2, BotState};
-use telegram_bot::claude_code_client::{
-    container_utils, ClaudeCodeClient, ClaudeCodeConfig,
-};
 use crate::github_client::{GithubClient, GithubClientConfig};
+use crate::{escape_markdown_v2, BotState};
+use telegram_bot::claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
 use teloxide::{
     prelude::*,
     types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},

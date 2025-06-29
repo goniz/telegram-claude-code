@@ -7,10 +7,8 @@ use url::Url;
 
 use super::{markdown::escape_markdown_v2, state::BotState};
 use crate::commands;
-use telegram_bot::claude_code_client::{
-    AuthState, ClaudeCodeClient,
-};
 use crate::github_client::{GithubClient, GithubClientConfig};
+use telegram_bot::claude_code_client::{AuthState, ClaudeCodeClient};
 
 /// Authentication state monitoring task
 pub async fn handle_auth_state_updates(

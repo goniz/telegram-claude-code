@@ -13,8 +13,8 @@ use bollard::Docker;
 use rstest::*;
 use std::time::Duration;
 use telegram_bot::claude_code_client::container::generate_volume_name;
-use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
 use telegram_bot::github_client::GithubClientConfig;
+use telegram_bot::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
 

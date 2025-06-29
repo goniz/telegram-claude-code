@@ -1,6 +1,6 @@
 pub mod claude_code_client;
-pub mod oauth;
 pub mod github_client;
+pub mod oauth;
 
 #[allow(unused_imports)]
 pub use claude_code_client::{
