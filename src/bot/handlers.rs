@@ -27,9 +27,10 @@ pub async fn handle_auth_state_updates(
                     .await;
             }
             AuthState::UrlReady(url) => {
-                let message =
-                    "🔐 *Claude OAuth*\n\nClick below to sign in\\. If prompted for a code, paste it here\\."
-                        .to_string();
+                let message = "🔐 *Claude OAuth*
+
+Click below to sign in\\. If prompted for a code, paste it here\\."
+                    .to_string();
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
                     "🔗 Open Claude OAuth",
@@ -46,7 +47,9 @@ pub async fn handle_auth_state_updates(
                 let _ = bot
                     .send_message(
                         chat_id,
-                        "🔑 *Code required*\n\nPaste your authentication code here\\.",
+                        "🔑 *Code required*
+
+Paste your authentication code here\\.",
                     )
                     .parse_mode(ParseMode::MarkdownV2)
                     .await;
@@ -117,7 +120,9 @@ pub async fn handle_text_message(
                     bot.send_message(
                         msg.chat.id,
                         "❌ Failed to send authentication code\\. The authentication session may \
-                         have expired\\.\n\nPlease restart authentication with \
+                         have expired\\.
+
+Please restart authentication with \
                          `/auth login`",
                     )
                     .parse_mode(ParseMode::MarkdownV2)
@@ -135,9 +140,13 @@ pub async fn handle_text_message(
                 // Not an auth code, but an auth session is active. Inform user.
                 bot.send_message(
                     msg.chat.id,
-                    "🔐 *Authentication in Progress*\n\nI'm currently waiting for your \
+                    "🔐 *Authentication in Progress*
+
+I'm currently waiting for your \
                      authentication code\\. Please paste the code you received during the OAuth \
-                     flow\\.\n\nIf you need to restart authentication, use `/auth login`",
+                     flow\\.
+
+If you need to restart authentication, use `/auth login`",
                 )
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
@@ -439,7 +448,9 @@ pub async fn handle_callback_query(
                             bot.send_message(
                                 chat_id,
                                 format!(
-                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                    "❌ No active coding session found: {}
+
+Please start a coding session \
                                      first using /start",
                                     escape_markdown_v2(&e.to_string())
                                 ),
@@ -472,7 +483,9 @@ pub async fn handle_callback_query(
                             bot.send_message(
                                 chat_id,
                                 format!(
-                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                    "❌ No active coding session found: {}
+
+Please start a coding session \
                                      first using /start",
                                     escape_markdown_v2(&e.to_string())
                                 ),
@@ -521,7 +534,7 @@ pub async fn handle_callback_query(
                             bot.send_message(
                                 chat_id,
                                 format!(
-                                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                                    "❌ No active coding session found: {}\nPlease start a coding session \
                                      first using /start",
                                     escape_markdown_v2(&e.to_string())
                                 ),

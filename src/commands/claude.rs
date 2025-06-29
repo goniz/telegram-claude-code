@@ -163,7 +163,7 @@ async fn process_claude_streaming(
                             .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
                             .unwrap_or_default();
                         let tool_message = format!(
-                            "🔧 *Using tool: {}*\\n```json\\n{}\\n```",
+                            "🔧 *Using tool: {}*\n```json\n{}\n```",
                             escape_markdown_v2(name),
                             escape_markdown_v2(&input_str)
                         );
@@ -264,7 +264,7 @@ async fn update_live_message(
         Some((message_id, live_msg)) => {
             // Prepare new content
             let updated_content = if !live_msg.content.trim().is_empty() {
-                format!("{}\\n\\n{}", live_msg.content, new_content)
+                format!("{}\n\n{}", live_msg.content, new_content)
             } else {
                 new_content.to_string()
             };

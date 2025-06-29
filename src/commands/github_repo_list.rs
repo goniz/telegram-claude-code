@@ -69,7 +69,7 @@ pub async fn handle_github_repo_list(
             bot.send_message(
                 msg.chat.id,
                 format!(
-                    "❌ No active coding session found: {}\\n\\nPlease start a coding session \
+                    "❌ No active coding session found: {}\n\nPlease start a coding session \
                      first using /start",
                     escape_markdown_v2(&e.to_string())
                 ),

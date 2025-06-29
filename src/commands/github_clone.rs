@@ -49,7 +49,7 @@ pub async fn perform_github_clone(
     bot.send_message(
         chat_id,
         format!(
-            "🔄 *Cloning Repository*\\n\\n📦 Repository: {}\\n⏳ Please wait\\.\\.\\.",
+            "🔄 *Cloning Repository*\n\n📦 Repository: {}\n⏳ Please wait\\.\\.\\.",
             escape_markdown_v2(repository)
         ),
     )
@@ -60,14 +60,14 @@ pub async fn perform_github_clone(
         Ok(clone_result) => {
             let message = if clone_result.success {
                 format!(
-                    "✅ *Repository Cloned Successfully*\\n\\n📦 Repository: {}\\n📁 Location: {}\\n✨ {}",
+                    "✅ *Repository Cloned Successfully*\n\n📦 Repository: {}\n📁 Location: {}\n✨ {}",
                     escape_markdown_v2(&clone_result.repository),
                     escape_markdown_v2(&clone_result.target_directory),
                     escape_markdown_v2(&clone_result.message)
                 )
             } else {
                 format!(
-                    "❌ *Repository Clone Failed*\\n\\n📦 Repository: {}\\n🔍 Error: {}",
+                    "❌ *Repository Clone Failed*\n\n📦 Repository: {}\n🔍 Error: {}",
                     escape_markdown_v2(&clone_result.repository),
                     escape_markdown_v2(&clone_result.message)
                 )
@@ -92,7 +92,7 @@ pub async fn perform_github_clone(
                 )
             } else {
                 format!(
-                    "❌ *Failed to clone repository*\\n\\n🔍 Error: {}",
+                    "❌ *Failed to clone repository*\n\n🔍 Error: {}",
                     escape_markdown_v2(&e.to_string())
                 )
             };
@@ -117,8 +117,8 @@ pub async fn show_repository_selection(
             if repo_list.trim().is_empty() {
                 bot.send_message(
                     msg.chat.id,
-                    "📁 *GitHub Repository Selection*\\n\\n💡 No repositories found or no \
-                     repositories accessible with current authentication\\\\.",
+                    "📁 *GitHub Repository Selection*\n\n💡 No repositories found or no \
+                     repositories accessible with current authentication\\.",
                 )
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
@@ -128,7 +128,7 @@ pub async fn show_repository_selection(
                 if repos.is_empty() {
                     bot.send_message(
                         msg.chat.id,
-                        "📁 *GitHub Repository Selection*\\n\\n💡 No valid repositories found\\\\.",
+                        "📁 *GitHub Repository Selection*\n\n💡 No valid repositories found\\.",
                     )
                     .parse_mode(ParseMode::MarkdownV2)
                     .await?;
@@ -158,7 +158,7 @@ pub async fn show_repository_selection(
                     bot.send_message(
                         msg.chat.id,
                         format!(
-                            "📁 *GitHub Repository Selection*\\n\\n🎯 Select a repository to clone {}\\n\\n💡 Click a repository button below to clone it:",
+                            "📁 *GitHub Repository Selection*\n\n🎯 Select a repository to clone {}\n\n💡 Click a repository button below to clone it:",
                             repo_count_text
                         ),
                     )
@@ -172,16 +172,16 @@ pub async fn show_repository_selection(
             let error_message = if e.to_string().contains("authentication required")
                 || e.to_string().contains("not authenticated")
             {
-                "❌ *GitHub Authentication Required*\\n\\n🔐 Please authenticate with GitHub \
+                "❌ *GitHub Authentication Required*\n\n🔐 Please authenticate with GitHub \
                  first using /githubauth"
             } else if e.to_string().contains("gh: command not found")
                 || e.to_string().contains("executable file not found")
             {
-                "❌ *GitHub CLI Not Available*\\n\\n⚠️ The GitHub CLI \\\\(gh\\\\) is not \
-                 installed in the coding session\\\\."
+                "❌ *GitHub CLI Not Available*\n\n⚠️ The GitHub CLI \\(gh\\) is not \
+                 installed in the coding session\\."
             } else {
                 &format!(
-                    "❌ *Failed to list repositories*\\n\\n🔍 Error: {}",
+                    "❌ *Failed to list repositories*\n\n🔍 Error: {}",
                     escape_markdown_v2(&e.to_string())
                 )
             };
