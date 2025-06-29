@@ -166,7 +166,33 @@ If you need to restart authentication, use `/auth login`",
             return Ok(());
         }
 
-        // Priority 3: No active sessions - do nothing (default behavior)
+        // Priority 3: Check if text looks like a repository name for cloning
+        if text.contains('/') && !text.contains(' ') && text.len() > 3 && text.len() < 100 {
+            // Simple validation for owner/repo pattern
+            let parts: Vec<&str> = text.split('/').collect();
+            if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+                let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                    InlineKeyboardButton::callback(
+                        format!("🔗 Clone {}", text),
+                        format!("start_clone:{}", text),
+                    ),
+                ]]);
+
+                bot.send_message(
+                    msg.chat.id,
+                    format!(
+                        "📦 *Repository Detected*\n\nI detected a repository name: `{}`\n\nWould you like to clone it?",
+                        escape_markdown_v2(&text)
+                    ),
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .reply_markup(keyboard)
+                .await?;
+                return Ok(());
+            }
+        }
+
+        // Priority 4: No active sessions - do nothing (default behavior)
     }
 
     Ok(())
@@ -460,41 +486,6 @@ Please start a coding session \
                         }
                     }
                 }
-                "github_repo_list" => {
-                    // Handle github repo list callback
-                    let container_name = format!("coding-session-{}", chat_id.0);
-                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
-                        .await
-                    {
-                        Ok(_client) => {
-                            // Extract the regular message from MaybeInaccessibleMessage
-                            if let teloxide::types::MaybeInaccessibleMessage::Regular(msg) = message
-                            {
-                                commands::github_repo_list::handle_github_repo_list(
-                                    bot,
-                                    (**msg).clone(),
-                                    bot_state,
-                                    chat_id.0,
-                                )
-                                .await?;
-                            }
-                        }
-                        Err(e) => {
-                            bot.send_message(
-                                chat_id,
-                                format!(
-                                    "❌ No active coding session found: {}
-
-Please start a coding session \
-                                     first using /start",
-                                    escape_markdown_v2(&e.to_string())
-                                ),
-                            )
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
-                        }
-                    }
-                }
                 data if data.starts_with("clone:") => {
                     // Extract repository name from callback data
                     let repository = data.strip_prefix("clone:").unwrap_or("");
@@ -521,8 +512,8 @@ Please start a coding session \
                                 GithubClientConfig::default(),
                             );
 
-                            // Perform the clone operation
-                            commands::perform_github_clone(
+                            // Perform the clone operation using the new start workflow function
+                            commands::start::perform_github_clone(
                                 &bot,
                                 chat_id,
                                 &github_client,
@@ -535,6 +526,67 @@ Please start a coding session \
                                 chat_id,
                                 format!(
                                     "❌ No active coding session found: {}\nPlease start a coding session \
+                                     first using /start",
+                                    escape_markdown_v2(&e.to_string())
+                                ),
+                            )
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                        }
+                    }
+                }
+                data if data.starts_with("start_clone:") => {
+                    // Extract repository name from callback data for start workflow
+                    let repository = data.strip_prefix("start_clone:").unwrap_or("");
+                    if let Err(e) = commands::start::handle_repository_clone_in_start(
+                        bot.clone(),
+                        chat_id,
+                        &bot_state,
+                        repository,
+                    )
+                    .await {
+                        bot.send_message(
+                            chat_id,
+                            format!(
+                                "❌ Failed to clone repository: {}",
+                                escape_markdown_v2(&e.to_string())
+                            ),
+                        )
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                    }
+                }
+                "manual_repo_entry" => {
+                    // Handle manual repository entry
+                    commands::start::handle_manual_repository_entry(bot, chat_id).await?;
+                }
+                "skip_repo_setup" => {
+                    // Handle skipping repository setup
+                    commands::start::handle_skip_repository_setup(bot, chat_id).await?;
+                }
+                "github_repo_list" => {
+                    // Handle github repo list callback
+                    let container_name = format!("coding-session-{}", chat_id.0);
+                    match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name)
+                        .await
+                    {
+                        Ok(client) => {
+                            // Show repository selection UI
+                            commands::start::show_repository_selection(
+                                bot,
+                                chat_id,
+                                &bot_state,
+                                &client,
+                            )
+                            .await?;
+                        }
+                        Err(e) => {
+                            bot.send_message(
+                                chat_id,
+                                format!(
+                                    "❌ No active coding session found: {}
+
+Please start a coding session \
                                      first using /start",
                                     escape_markdown_v2(&e.to_string())
                                 ),
