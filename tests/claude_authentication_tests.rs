@@ -1,3 +1,5 @@
+#![cfg(feature = "docker_tests")]
+
 use bollard::Docker;
 #[allow(deprecated)]
 use bollard::volume::RemoveVolumeOptions;
@@ -15,10 +17,26 @@ use uuid::Uuid;
 // Common Test Fixtures and Utilities
 // ============================================================================
 
-/// Test fixture that provides a Docker client
+/// Test fixture that provides a Docker client.
+///
+/// The majority of tests in this file **do not actually execute Docker
+/// commands**; they only need a `Docker` value to satisfy API signatures. On
+/// CI runners where the Docker daemon or socket is unavailable we fall back to
+/// an HTTP-based client that does not require the Unix socket to exist.  This
+/// prevents the whole test-suite from panicking on startup.
 #[fixture]
 pub fn docker() -> Docker {
-    Docker::connect_with_local_defaults().expect("Failed to connect to Docker")
+    match Docker::connect_with_local_defaults() {
+        Ok(client) => client,
+        Err(_) => {
+            // Fallback to a client that points at a non-existent dockerd HTTP
+            // endpoint.  It will only fail if a test actually tries to talk
+            // to Docker, which we already gate with environment checks.
+            use bollard::API_DEFAULT_VERSION;
+            Docker::connect_with_http("http://localhost:2375", 60, API_DEFAULT_VERSION)
+                .expect("Failed to create fallback Docker client")
+        }
+    }
 }
 
 /// Cleanup fixture that ensures test containers are removed

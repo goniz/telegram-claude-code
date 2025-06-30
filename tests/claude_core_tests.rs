@@ -1,3 +1,5 @@
+#![cfg(feature = "docker_tests")]
+
 //! # Claude Core Functionality Tests
 //!
 //! This file consolidates all core Claude functionality tests including:

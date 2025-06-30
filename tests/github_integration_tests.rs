@@ -1,3 +1,5 @@
+#![cfg(feature = "docker_tests")]
+
 use bollard::Docker;
 use futures_util;
 use rstest::*;

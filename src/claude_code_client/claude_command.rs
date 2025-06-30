@@ -52,6 +52,16 @@ impl ClaudeCommandExecutor {
 
     /// Build Claude command arguments for execution
     pub fn build_command_args(&self, prompt: &str, conversation_id: Option<&str>) -> Vec<String> {
+        Self::build_command_args_static(prompt, conversation_id)
+    }
+
+    /// Static version of `build_command_args` so it can be unit-tested without
+    /// needing to construct a full `ClaudeCommandExecutor` (which normally
+    /// requires an active Docker daemon).
+    pub fn build_command_args_static(
+        prompt: &str,
+        conversation_id: Option<&str>,
+    ) -> Vec<String> {
         let mut cmd_args = vec![
             "claude".to_string(),
             "--print".to_string(),
@@ -132,15 +142,8 @@ mod tests {
 
     #[test]
     fn test_build_command_args_basic() {
-        let executor = CommandExecutor::new(
-            bollard::Docker::connect_with_local_defaults().unwrap(),
-            "test".to_string(),
-            super::super::config::ClaudeCodeConfig::default(),
-        );
-        let claude_executor = ClaudeCommandExecutor::new(executor);
-
         let prompt = "Write a hello world program";
-        let args = claude_executor.build_command_args(prompt, None);
+        let args = ClaudeCommandExecutor::build_command_args_static(prompt, None);
 
         let expected = vec![
             "claude",
@@ -156,16 +159,9 @@ mod tests {
 
     #[test]
     fn test_build_command_args_with_resume() {
-        let executor = CommandExecutor::new(
-            bollard::Docker::connect_with_local_defaults().unwrap(),
-            "test".to_string(),
-            super::super::config::ClaudeCodeConfig::default(),
-        );
-        let claude_executor = ClaudeCommandExecutor::new(executor);
-
         let prompt = "Continue the previous task";
         let conversation_id = "test-conversation-123";
-        let args = claude_executor.build_command_args(prompt, Some(conversation_id));
+        let args = ClaudeCommandExecutor::build_command_args_static(prompt, Some(conversation_id));
 
         let expected = vec![
             "claude",

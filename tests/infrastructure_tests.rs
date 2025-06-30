@@ -1,3 +1,5 @@
+#![cfg(feature = "docker_tests")]
+
 //! Infrastructure and System Integration Tests
 //!
 //! This module contains comprehensive tests for the Telegram Claude Code bot infrastructure,

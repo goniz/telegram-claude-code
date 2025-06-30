@@ -263,8 +263,17 @@ mod tests {
     use tokio::sync::{mpsc, oneshot, Mutex};
 
     fn create_test_bot_state() -> BotState {
-        // Create a mock Docker instance (won't be used in these tests)
-        let docker = Docker::connect_with_socket_defaults().unwrap();
+        // Create a Docker client that does not require a local Docker daemon.
+        // Using an HTTP endpoint avoids the Unix socket existence check that
+        // fails in CI environments without Docker.  The client will not be
+        // used by these unit-tests, so the endpoint never needs to be
+        // reachable.
+        let docker = Docker::connect_with_http_defaults().unwrap_or_else(|_| {
+            // Fallback to constructing a no-op client pointing at localhost.
+            use bollard::API_DEFAULT_VERSION;
+            Docker::connect_with_http("http://localhost:2375", 60, API_DEFAULT_VERSION)
+                .expect("Failed to create dummy Docker client")
+        });
         let auth_sessions: AuthSessions = Arc::new(Mutex::new(HashMap::new()));
         let claude_sessions: ClaudeSessions = Arc::new(Mutex::new(HashMap::new()));
 
