@@ -78,6 +78,48 @@ async fn init_claude_configuration(
     Ok(())
 }
 
+/// Initialize git configuration in the container
+/// This sets up the git user email and name for commits
+async fn init_git_configuration(
+    docker: &Docker,
+    container_id: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Initializing git configuration...");
+
+    // Set git user email
+    exec_command_in_container(
+        docker,
+        container_id,
+        vec![
+            "git".to_string(),
+            "config".to_string(),
+            "--global".to_string(),
+            "user.email".to_string(),
+            "noreply@anthropic.com".to_string(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("Failed to set git email: {}", e))?;
+
+    // Set git user name
+    exec_command_in_container(
+        docker,
+        container_id,
+        vec![
+            "git".to_string(),
+            "config".to_string(),
+            "--global".to_string(),
+            "user.name".to_string(),
+            "Claude".to_string(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("Failed to set git name: {}", e))?;
+
+    log::info!("Git configuration initialization completed");
+    Ok(())
+}
+
 /// Initialize Claude settings.json file
 /// This creates the settings.json file with proper tool permissions
 async fn init_claude_settings(
@@ -435,6 +477,9 @@ pub async fn start_coding_session(
     // This must come BEFORE init_volume_structure because init_volume_structure
     // tries to copy /root/.claude.json which is created by this function
     init_claude_configuration(docker, &container.id).await?;
+
+    // Initialize git configuration for commits (always needed for git operations)
+    init_git_configuration(docker, &container.id).await?;
 
     // Initialize volume structure for authentication persistence only if using persistent volumes
     if container_config.persistent_volume_key.is_some() {

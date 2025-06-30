@@ -1,4 +1,4 @@
-use crate::bot::markdown::escape_markdown_v2;
+use crate::bot::markdown::{escape_markdown_v2, truncate_if_needed};
 use crate::BotState;
 use telegram_bot::claude_code_client::ClaudeCodeClient;
 use teloxide::{prelude::*, types::ParseMode};
@@ -47,15 +47,15 @@ pub async fn handle_commit(
     .await {
         Ok(client) => client,
         Err(e) => {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "❌ Failed to create client with working directory: {}",
-                    escape_markdown_v2(&e.to_string())
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+            let full_message = format!(
+                "❌ Failed to create client with working directory: {}",
+                escape_markdown_v2(&e.to_string())
+            );
+            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+            
+            bot.send_message(msg.chat.id, message_to_send)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
             return Ok(());
         }
     };
@@ -74,15 +74,15 @@ pub async fn handle_commit(
         }
         Ok(output) => output,
         Err(e) => {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "❌ *Failed to check git status:*\n```\n{}\n```",
-                    escape_markdown_v2(&e.to_string())
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+            let full_message = format!(
+                "❌ *Failed to check git status:*\n```\n{}\n```",
+                escape_markdown_v2(&e.to_string())
+            );
+            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+            
+            bot.send_message(msg.chat.id, message_to_send)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
             return Ok(());
         }
     };
@@ -122,15 +122,15 @@ pub async fn handle_commit(
             }
         }
         Err(e) => {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "❌ *Failed to get git diff:*\n```\n{}\n```",
-                    escape_markdown_v2(&e.to_string())
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+            let full_message = format!(
+                "❌ *Failed to get git diff:*\n```\n{}\n```",
+                escape_markdown_v2(&e.to_string())
+            );
+            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+            
+            bot.send_message(msg.chat.id, message_to_send)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
             return Ok(());
         }
     };
@@ -170,17 +170,18 @@ pub async fn handle_commit(
     // Stage all changes
     let stage_result = client_with_dir.exec_basic_command(vec!["git".to_string(), "add".to_string(), "-A".to_string()]).await;
     if let Err(e) = stage_result {
-        bot.send_message(
-            msg.chat.id,
-            format!(
-                "❌ *Failed to stage changes:*\n```\n{}\n```",
-                escape_markdown_v2(&e.to_string())
-            ),
-        )
-        .parse_mode(ParseMode::MarkdownV2)
-        .await?;
+        let full_message = format!(
+            "❌ *Failed to stage changes:*\n```\n{}\n```",
+            escape_markdown_v2(&e.to_string())
+        );
+        let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+        
+        bot.send_message(msg.chat.id, message_to_send)
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         return Ok(());
     }
+
 
     // Commit changes
     let commit_result = client_with_dir
@@ -194,28 +195,28 @@ pub async fn handle_commit(
 
     match commit_result {
         Ok(output) => {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "✅ *Commit successful\\!*\n\n*Message:*\n```\n{}\n```\n\n*Git output:*\n```\n{}\n```",
-                    escape_markdown_v2(&commit_message),
-                    escape_markdown_v2(&output)
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+            let full_message = format!(
+                "✅ *Commit successful\\!*\n\n*Message:*\n```\n{}\n```\n\n*Git output:*\n```\n{}\n```",
+                escape_markdown_v2(&commit_message),
+                escape_markdown_v2(&output)
+            );
+            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+            
+            bot.send_message(msg.chat.id, message_to_send)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
         }
         Err(e) => {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "❌ *Commit failed:*\n```\n{}\n```\n\n*Attempted message:*\n```\n{}\n```",
-                    escape_markdown_v2(&e.to_string()),
-                    escape_markdown_v2(&commit_message)
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+            let full_message = format!(
+                "❌ *Commit failed:*\n```\n{}\n```\n\n*Attempted message:*\n```\n{}\n```",
+                escape_markdown_v2(&e.to_string()),
+                escape_markdown_v2(&commit_message)
+            );
+            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+            
+            bot.send_message(msg.chat.id, message_to_send)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
         }
     }
 
