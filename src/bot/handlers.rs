@@ -444,7 +444,7 @@ pub async fn handle_callback_query(
     log::debug!("Received callback query: {:?}", query);
 
     // Always answer the callback query first (this is required by Telegram)
-    bot.answer_callback_query(&query.id).await?;
+    bot.answer_callback_query(query.id).await?;
 
     if let Some(data) = &query.data {
         log::debug!("Callback data: {}", data);

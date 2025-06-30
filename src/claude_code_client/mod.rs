@@ -287,7 +287,7 @@ impl ClaudeCodeClient {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Find the container by name
         let containers = docker
-            .list_containers(None::<bollard::container::ListContainersOptions<String>>)
+            .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
             .await?;
 
         let container = containers
