@@ -182,6 +182,53 @@ pub async fn handle_commit(
         return Ok(());
     }
 
+    // Set git configuration for commits
+    let config_email_result = client_with_dir
+        .exec_basic_command(vec![
+            "git".to_string(),
+            "config".to_string(),
+            "--global".to_string(),
+            "user.email".to_string(),
+            "noreply@anthropic.com".to_string(),
+        ])
+        .await;
+    
+    if let Err(e) = config_email_result {
+        let full_message = format!(
+            "❌ *Failed to set git email:*\n```\n{}\n```",
+            escape_markdown_v2(&e.to_string())
+        );
+        let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+        
+        bot.send_message(msg.chat.id, message_to_send)
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
+        return Ok(());
+    }
+
+    let config_name_result = client_with_dir
+        .exec_basic_command(vec![
+            "git".to_string(),
+            "config".to_string(),
+            "--global".to_string(),
+            "user.name".to_string(),
+            "Claude".to_string(),
+        ])
+        .await;
+    
+    if let Err(e) = config_name_result {
+        let full_message = format!(
+            "❌ *Failed to set git name:*\n```\n{}\n```",
+            escape_markdown_v2(&e.to_string())
+        );
+        let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+        
+        bot.send_message(msg.chat.id, message_to_send)
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
+        return Ok(());
+    }
+
     // Commit changes
     let commit_result = client_with_dir
         .exec_basic_command(vec![
