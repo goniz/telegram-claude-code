@@ -316,7 +316,9 @@ impl ClaudeCodeClient {
             let absolute_dir = if std::path::Path::new(&dir).is_absolute() {
                 dir
             } else {
-                format!("/workspace/{}", dir)
+                // Use the config's default working directory as the base instead of hardcoding
+                let base_dir = config.working_directory.as_deref().unwrap_or("/workspace");
+                format!("{}/{}", base_dir, dir)
             };
             config.working_directory = Some(absolute_dir);
         }
