@@ -10,6 +10,8 @@
 //! All tests are organized by functionality and use shared fixtures for consistency.
 
 use bollard::Docker;
+#[allow(deprecated)]
+use bollard::volume::RemoveVolumeOptions;
 use rstest::*;
 use telegram_bot::claude_code_client::container::generate_volume_name;
 use telegram_bot::github_client::{GithubClient, GithubClientConfig};
@@ -98,7 +100,8 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
 
     // Clean up volume
     let volume_name = generate_volume_name(&user_id.to_string());
-    let _ = docker.remove_volume(&volume_name, None).await;
+    #[allow(deprecated)]
+    let _ = docker.remove_volume(&volume_name, None::<RemoveVolumeOptions>).await;
 }
 
 // =============================================================================
@@ -540,7 +543,8 @@ async fn test_claude_config_persistence_between_sessions(docker_socket: Docker) 
 
     // Clean up any existing volume before starting test
     let volume_name = generate_volume_name(&test_user_id.to_string());
-    let _ = docker_socket.remove_volume(&volume_name, None).await;
+    #[allow(deprecated)]
+    let _ = docker_socket.remove_volume(&volume_name, None::<RemoveVolumeOptions>).await;
 
     // Step 1: Start first coding session with persistent volume
     println!("=== STEP 1: Starting first coding session ===");
@@ -699,8 +703,10 @@ async fn test_claude_config_isolation_between_users(docker_socket: Docker) {
     // Clean up any existing volumes
     let volume_name_1 = generate_volume_name(&test_user_id_1.to_string());
     let volume_name_2 = generate_volume_name(&test_user_id_2.to_string());
-    let _ = docker_socket.remove_volume(&volume_name_1, None).await;
-    let _ = docker_socket.remove_volume(&volume_name_2, None).await;
+    #[allow(deprecated)]
+    let _ = docker_socket.remove_volume(&volume_name_1, None::<RemoveVolumeOptions>).await;
+    #[allow(deprecated)]
+    let _ = docker_socket.remove_volume(&volume_name_2, None::<RemoveVolumeOptions>).await;
 
     // Step 1: Start session for user 1
     println!("=== STEP 1: Starting session for user 1 ===");
