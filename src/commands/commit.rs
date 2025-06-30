@@ -1,4 +1,5 @@
-use crate::{escape_markdown_v2, BotState};
+use crate::bot::markdown::escape_markdown_v2;
+use crate::BotState;
 use telegram_bot::claude_code_client::ClaudeCodeClient;
 use teloxide::{prelude::*, types::ParseMode};
 
@@ -45,15 +46,29 @@ pub async fn handle_commit(
             .and_then(|session| session.get_working_directory().cloned())
     };
 
-    let client_with_dir = ClaudeCodeClient::for_session_with_working_dir(
+    let client_with_dir = match ClaudeCodeClient::for_session_with_working_dir(
         bot_state.docker.clone(),
         &container_name,
         working_directory,
     )
-    .await?;
+    .await {
+        Ok(client) => client,
+        Err(e) => {
+            bot.send_message(
+                msg.chat.id,
+                format!(
+                    "❌ Failed to create client with working directory: {}",
+                    escape_markdown_v2(&e.to_string())
+                ),
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
+            return Ok(());
+        }
+    };
 
     // Execute git status to check if there are changes
-    let git_status_result = client_with_dir.execute_command("git status --porcelain").await;
+    let git_status_result = client_with_dir.exec_basic_command(vec!["git".to_string(), "status".to_string(), "--porcelain".to_string()]).await;
     let git_status = match git_status_result {
         Ok(output) if output.trim().is_empty() => {
             bot.send_message(
@@ -80,12 +95,12 @@ pub async fn handle_commit(
     };
 
     // Get git diff
-    let git_diff_result = client_with_dir.execute_command("git diff HEAD").await;
+    let git_diff_result = client_with_dir.exec_basic_command(vec!["git".to_string(), "diff".to_string(), "HEAD".to_string()]).await;
     let git_diff = match git_diff_result {
         Ok(output) => {
             if output.trim().is_empty() {
                 // Check for staged changes
-                match client_with_dir.execute_command("git diff --cached").await {
+                match client_with_dir.exec_basic_command(vec!["git".to_string(), "diff".to_string(), "--cached".to_string()]).await {
                     Ok(staged_diff) if !staged_diff.trim().is_empty() => staged_diff,
                     _ => {
                         // No staged or unstaged changes, check for untracked files
@@ -135,10 +150,13 @@ pub async fn handle_commit(
 
     // Generate commit message using Claude
     let claude_result = client_with_dir
-        .execute_command(&format!(
-            "claude --print --model claude-3-5-haiku-20241022 '{}'",
-            prompt.replace('\'', "'\"'\"'") // Escape single quotes for shell
-        ))
+        .exec_basic_command(vec![
+            "claude".to_string(),
+            "--print".to_string(),
+            "--model".to_string(),
+            "claude-3-5-haiku-20241022".to_string(),
+            prompt,
+        ])
         .await;
 
     let commit_message = match claude_result {
@@ -157,7 +175,7 @@ pub async fn handle_commit(
     };
 
     // Stage all changes
-    let stage_result = client_with_dir.execute_command("git add -A").await;
+    let stage_result = client_with_dir.exec_basic_command(vec!["git".to_string(), "add".to_string(), "-A".to_string()]).await;
     if let Err(e) = stage_result {
         bot.send_message(
             msg.chat.id,
@@ -173,10 +191,12 @@ pub async fn handle_commit(
 
     // Commit changes
     let commit_result = client_with_dir
-        .execute_command(&format!(
-            "git commit -m '{}'",
-            commit_message.replace('\'', "'\"'\"'") // Escape single quotes for shell
-        ))
+        .exec_basic_command(vec![
+            "git".to_string(),
+            "commit".to_string(),
+            "-m".to_string(),
+            commit_message.clone(),
+        ])
         .await;
 
     match commit_result {
