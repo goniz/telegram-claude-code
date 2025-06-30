@@ -12,23 +12,16 @@ pub async fn handle_commit(
 ) -> ResponseResult<()> {
     let container_name = format!("coding-session-{}", chat_id);
 
-    // Check if Claude Code client is available
-    let client = match ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await {
-        Ok(client) => client,
-        Err(e) => {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "❌ No active coding session found: {}\n\nPlease start a coding session first \
-                     using /start",
-                    escape_markdown_v2(&e.to_string())
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
-            return Ok(());
-        }
-    };
+    // Check if a coding session exists by trying to create a basic client
+    if ClaudeCodeClient::for_session(bot_state.docker.clone(), &container_name).await.is_err() {
+        bot.send_message(
+            msg.chat.id,
+            "❌ No active coding session found\\.\n\nPlease start a coding session first using /start",
+        )
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
+        return Ok(());
+    }
 
     // Send initial message
     bot.send_message(
