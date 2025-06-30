@@ -37,6 +37,8 @@ enum Command {
     UpdateClaude,
     #[command(description = "Start a new Claude conversation")]
     Claude,
+    #[command(description = "Generate commit message and commit changes")]
+    Commit,
 }
 
 /// Pull the runtime image asynchronously in the background
@@ -180,6 +182,9 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, bot_state: BotState) -> Re
         }
         Command::Claude => {
             commands::handle_claude(bot, msg, bot_state, chat_id).await?;
+        }
+        Command::Commit => {
+            commands::handle_commit(bot, msg, bot_state, chat_id).await?;
         }
     }
 
