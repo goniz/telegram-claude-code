@@ -28,7 +28,10 @@ pub fn truncate_if_needed(text: &str) -> (String, bool) {
     }
     
     let truncation_notice = "\n\n\\.\\.\\.\\[message truncated\\]";
-    let available_space = TELEGRAM_MAX_MESSAGE_LENGTH - truncation_notice.len();
+
+    // Prevent potential panic if `truncation_notice` is ever made longer than the
+    // Telegram hard-limit. Use `saturating_sub` to safely handle underflow.
+    let available_space = TELEGRAM_MAX_MESSAGE_LENGTH.saturating_sub(truncation_notice.len());
     
     // Find a good breaking point (prefer line boundaries)
     let truncated = if let Some(last_newline) = text[..available_space].rfind('\n') {
