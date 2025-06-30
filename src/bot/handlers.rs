@@ -5,7 +5,7 @@ use teloxide::{
 use tokio::sync::mpsc;
 use url::Url;
 
-use super::{markdown::escape_markdown_v2, state::BotState};
+use super::{markdown::{escape_markdown_v2, truncate_if_needed}, state::BotState};
 use crate::commands;
 use crate::github_client::{GithubClient, GithubClientConfig};
 use telegram_bot::claude_code_client::{AuthState, ClaudeCodeClient};
@@ -67,11 +67,11 @@ Paste your authentication code here\\.",
                 break;
             }
             AuthState::Failed(error) => {
+                let full_message = format!("❌ Authentication failed: {}", escape_markdown_v2(&error));
+                let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+                
                 let _ = bot
-                    .send_message(
-                        chat_id,
-                        format!("❌ Authentication failed: {}", escape_markdown_v2(&error)),
-                    )
+                    .send_message(chat_id, message_to_send)
                     .parse_mode(ParseMode::MarkdownV2)
                     .await;
                 // Clean up the session
@@ -239,15 +239,15 @@ async fn handle_claude_message(
             // TODO: Extract conversation ID from output and update session state
         }
         Err(e) => {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "❌ Claude command failed: {}",
-                    escape_markdown_v2(&e.to_string())
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+            let full_message = format!(
+                "❌ Claude command failed: {}",
+                escape_markdown_v2(&e.to_string())
+            );
+            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+            
+            bot.send_message(msg.chat.id, message_to_send)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
         }
     }
 
@@ -476,18 +476,18 @@ pub async fn handle_callback_query(
                             }
                         }
                         Err(e) => {
-                            bot.send_message(
-                                chat_id,
-                                format!(
-                                    "❌ No active coding session found: {}
+                            let full_message = format!(
+                                "❌ No active coding session found: {}
 
 Please start a coding session \
-                                     first using /start",
-                                    escape_markdown_v2(&e.to_string())
-                                ),
-                            )
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
+                                 first using /start",
+                                escape_markdown_v2(&e.to_string())
+                            );
+                            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+                            
+                            bot.send_message(chat_id, message_to_send)
+                                .parse_mode(ParseMode::MarkdownV2)
+                                .await?;
                         }
                     }
                 }

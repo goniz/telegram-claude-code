@@ -1,4 +1,4 @@
-use crate::bot::markdown::escape_markdown_v2;
+use crate::bot::markdown::{escape_markdown_v2, truncate_if_needed};
 use crate::BotState;
 use futures_util::StreamExt;
 use std::time::{Duration, Instant};
@@ -49,16 +49,16 @@ pub async fn handle_claude(
             .await?;
         }
         Err(e) => {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "❌ No active coding session found: {}\n\nPlease start a coding session first \
-                     using /start",
-                    escape_markdown_v2(&e.to_string())
-                ),
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+            let full_message = format!(
+                "❌ No active coding session found: {}\n\nPlease start a coding session first \
+                 using /start",
+                escape_markdown_v2(&e.to_string())
+            );
+            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+            
+            bot.send_message(msg.chat.id, message_to_send)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
         }
     }
 
@@ -181,8 +181,9 @@ async fn process_claude_streaming(
                             escape_markdown_v2(name),
                             escape_markdown_v2(&input_str)
                         );
+                        let (message_to_send, _was_truncated) = truncate_if_needed(&tool_message);
 
-                        bot.send_message(chat_id, tool_message)
+                        bot.send_message(chat_id, message_to_send)
                             .parse_mode(ParseMode::MarkdownV2)
                             .await?;
                     }
@@ -194,12 +195,12 @@ async fn process_claude_streaming(
             }
             Err(e) => {
                 log::error!("Error in streaming: {}", e);
-                bot.send_message(
-                    chat_id,
-                    format!("❌ *Streaming error:* {}", escape_markdown_v2(&e)),
-                )
-                .parse_mode(ParseMode::MarkdownV2)
-                .await?;
+                let full_message = format!("❌ *Streaming error:* {}", escape_markdown_v2(&e.to_string()));
+                let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
+                
+                bot.send_message(chat_id, message_to_send)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
                 break;
             }
         }
@@ -283,8 +284,11 @@ async fn update_live_message(
                 new_content.to_string()
             };
 
+            // Truncate if needed to fit Telegram's message limit
+            let (truncated_content, _was_truncated) = truncate_if_needed(&updated_content);
+
             // Only update if content actually changed
-            let content_changed = live_msg.update_content(updated_content);
+            let content_changed = live_msg.update_content(truncated_content);
 
             // Update message if enough time has passed AND content changed
             if content_changed && live_msg.should_update() {
@@ -307,14 +311,15 @@ async fn update_live_message(
             }
         }
         None => {
-            // Create new message
+            // Create new message with truncation if needed
+            let (content_to_send, _was_truncated) = truncate_if_needed(new_content);
             let sent_message = bot
-                .send_message(chat_id, new_content)
+                .send_message(chat_id, &content_to_send)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
 
             *current_live_message =
-                Some((sent_message.id, LiveMessage::new(new_content.to_string())));
+                Some((sent_message.id, LiveMessage::new(content_to_send)));
         }
     }
 
