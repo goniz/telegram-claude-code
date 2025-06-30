@@ -5,10 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Development Commands
 
 ### Build and Test
-- **Build**: `cargo build`
+- **Build**: `cargo build --all-targets`
 - **Run**: `cargo run`
 - **Test**: `cargo test`
-- **Check**: `cargo check`
+- **Check**: `cargo check --all-targets`
 
 ### Environment Setup
 - Create `.env` file with `TELOXIDE_TOKEN=your_bot_token_here`

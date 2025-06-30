@@ -10,6 +10,8 @@
 //! - Bot Workflows: End-to-end workflow tests simulating real user interactions
 
 use bollard::Docker;
+#[allow(deprecated)]
+use bollard::volume::RemoveVolumeOptions;
 use rstest::*;
 use std::time::Duration;
 use telegram_bot::claude_code_client::container::generate_volume_name;
@@ -35,7 +37,8 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
 
     // Clean up volume
     let volume_name = generate_volume_name(&user_id.to_string());
-    let _ = docker.remove_volume(&volume_name, None).await;
+    #[allow(deprecated)]
+    let _ = docker.remove_volume(&volume_name, None::<RemoveVolumeOptions>).await;
 }
 
 /// Cleanup fixture that ensures test containers are removed
@@ -59,7 +62,8 @@ async fn test_volume_creation_and_persistence(docker: Docker) {
 
     // Clean up any existing volume before starting test
     let volume_name = generate_volume_name(&test_user_id.to_string());
-    let _ = docker.remove_volume(&volume_name, None).await;
+    #[allow(deprecated)]
+    let _ = docker.remove_volume(&volume_name, None::<RemoveVolumeOptions>).await;
 
     // Step 1: Start first coding session
     println!("=== STEP 1: Starting first coding session ===");
@@ -224,8 +228,10 @@ async fn test_volume_isolation_between_users(docker: Docker) {
     // Clean up any existing volumes before starting test
     let volume_name_1 = generate_volume_name(&user_id_1.to_string());
     let volume_name_2 = generate_volume_name(&user_id_2.to_string());
-    let _ = docker.remove_volume(&volume_name_1, None).await;
-    let _ = docker.remove_volume(&volume_name_2, None).await;
+    #[allow(deprecated)]
+    let _ = docker.remove_volume(&volume_name_1, None::<RemoveVolumeOptions>).await;
+    #[allow(deprecated)]
+    let _ = docker.remove_volume(&volume_name_2, None::<RemoveVolumeOptions>).await;
 
     // Step 1: Start sessions for both users
     println!("=== STEP 1: Starting sessions for two different users ===");
@@ -374,7 +380,8 @@ async fn test_use_persistant_volume_setting(docker: Docker) {
 
     // Clean up any existing volume before starting test
     let volume_name = generate_volume_name(&test_user_id.to_string());
-    let _ = docker.remove_volume(&volume_name, None).await;
+    #[allow(deprecated)]
+    let _ = docker.remove_volume(&volume_name, None::<RemoveVolumeOptions>).await;
 
     // Test 1: Start session WITH persistent volume
     println!("=== Testing with persistent_volume_key = Some(...) ===");
@@ -771,7 +778,8 @@ async fn test_claude_settings_json_creation(docker: Docker) {
 
     // Clean up any existing volume before starting test
     let volume_name = generate_volume_name(&test_user_id.to_string());
-    let _ = docker.remove_volume(&volume_name, None).await;
+    #[allow(deprecated)]
+    let _ = docker.remove_volume(&volume_name, None::<RemoveVolumeOptions>).await;
 
     // Test 1: With persistent volume - settings.json should be in volume
     println!("=== Testing settings.json with persistent volume ===");

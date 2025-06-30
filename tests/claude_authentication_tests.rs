@@ -1,4 +1,6 @@
 use bollard::Docker;
+#[allow(deprecated)]
+use bollard::volume::RemoveVolumeOptions;
 use rstest::*;
 use std::env;
 use std::time::Duration;
@@ -31,7 +33,8 @@ pub async fn cleanup_test_resources(docker: &Docker, container_name: &str, user_
 
     // Clean up volume
     let volume_name = generate_volume_name(&user_id.to_string());
-    let _ = docker.remove_volume(&volume_name, None).await;
+    #[allow(deprecated)]
+    let _ = docker.remove_volume(&volume_name, None::<RemoveVolumeOptions>).await;
 }
 
 // ============================================================================

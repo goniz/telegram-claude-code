@@ -6,6 +6,7 @@ allowed-tools: Bash(git fetch:*), Bash(git checkout:*), Bash(git branch:*)
 # New Feature Branch Creation
 
 ## Current Repository Status
+
 - Current branch: !`git branch --show-current`
 - Repository status: !`git status --porcelain`
 - Remote branches: !`git branch -r`
@@ -13,19 +14,24 @@ allowed-tools: Bash(git fetch:*), Bash(git checkout:*), Bash(git branch:*)
 ## Branch Creation Process
 
 ### Step 1: Fetch Latest Changes
+
 !`git fetch -p`
 
 ### Step 2: Feature Description
+
 **Feature/Task Description:** $ARGUMENTS
 
 ### Step 3: Branch Naming
+
 Based on the feature description "$ARGUMENTS", I'll create an appropriate branch name following the pattern:
+
 - `feature/descriptive-name` for new features
 - `fix/descriptive-name` for bug fixes
 - `refactor/descriptive-name` for refactoring
 - `chore/descriptive-name` for maintenance tasks
 
 ### Step 4: Create and Switch to New Branch
+
 I'll now create and switch to a new branch based on the latest main branch:
 
 `git checkout -b $BRANCH_NAME origin/main`
@@ -35,13 +41,16 @@ I'll now create and switch to a new branch based on the latest main branch:
 Based on the feature description "$ARGUMENTS", here's a suggested implementation plan:
 
 ### Analysis
+
 I'll analyze the current codebase to understand:
+
 1. Existing architecture and patterns
 2. Related components that might be affected
 3. Testing strategies and frameworks in use
 4. Documentation requirements
 
 ### Implementation Steps
+
 1. **Research Phase**
    - Examine existing similar functionality
    - Identify dependencies and integration points
@@ -65,7 +74,9 @@ I'll analyze the current codebase to understand:
    - Verify all requirements are met
 
 ### Next Steps
+
 Would you like me to:
+
 1. Start with the research phase to understand the current codebase?
 2. Begin implementing specific components?
 3. Focus on a particular aspect of the feature?
