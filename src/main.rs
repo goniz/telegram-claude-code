@@ -3,10 +3,7 @@ use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{
-    dispatching::UpdateFilterExt, dptree, prelude::*,
-    utils::command::BotCommands,
-};
+use teloxide::{dispatching::UpdateFilterExt, dptree, prelude::*, utils::command::BotCommands};
 use tokio::sync::Mutex;
 
 mod bot;

@@ -4,12 +4,11 @@
 //! used by the telegram-claude-code application. It provides functions for starting coding
 //! sessions, clearing containers, and managing container configurations.
 
+use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::models::{ContainerCreateBody, HostConfig};
 use bollard::query_parameters::{
-    CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
-    CreateImageOptions,
+    CreateContainerOptions, CreateImageOptions, ListContainersOptions, RemoveContainerOptions,
 };
-use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -423,7 +422,10 @@ pub async fn start_coding_session(
 
     let container = docker.create_container(Some(options), config).await?;
     docker
-        .start_container(&container.id, None::<bollard::query_parameters::StartContainerOptions>)
+        .start_container(
+            &container.id,
+            None::<bollard::query_parameters::StartContainerOptions>,
+        )
         .await?;
 
     // Wait for container to be ready
@@ -454,7 +456,12 @@ pub async fn clear_coding_session(
     container_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Try to stop the container first (ignore errors if it's not running)
-    let _ = docker.stop_container(container_name, None::<bollard::query_parameters::StopContainerOptions>).await;
+    let _ = docker
+        .stop_container(
+            container_name,
+            None::<bollard::query_parameters::StopContainerOptions>,
+        )
+        .await;
 
     // Remove the container
     let remove_options = RemoveContainerOptions {
@@ -527,7 +534,10 @@ pub async fn create_test_container(
 
     let container = docker.create_container(Some(options), config).await?;
     docker
-        .start_container(&container.id, None::<bollard::query_parameters::StartContainerOptions>)
+        .start_container(
+            &container.id,
+            None::<bollard::query_parameters::StartContainerOptions>,
+        )
         .await?;
 
     // Wait for container to be ready

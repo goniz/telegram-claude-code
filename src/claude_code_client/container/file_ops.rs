@@ -5,11 +5,11 @@
 
 use bollard::query_parameters::{DownloadFromContainerOptions, UploadToContainerOptions};
 use bollard::Docker;
+use bytes::Bytes;
 use futures_util::StreamExt;
+use http_body_util::{Either, Full};
 use std::io::Read;
 use tar::{Archive, Builder};
-use bytes::Bytes;
-use http_body_util::{Full, Either};
 
 /// Get a file from a container
 ///
@@ -41,7 +41,9 @@ pub async fn container_get_file(
     container_id: &str,
     file_path: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let download_options = DownloadFromContainerOptions { path: file_path.to_string() };
+    let download_options = DownloadFromContainerOptions {
+        path: file_path.to_string(),
+    };
 
     let mut stream = docker.download_from_container(container_id, Some(download_options));
     let mut tar_data = Vec::new();
@@ -133,7 +135,11 @@ pub async fn container_put_file(
 
     // Upload the tar archive to the container
     docker
-        .upload_to_container(container_id, Some(upload_options), Either::Left(Full::new(Bytes::from(tar_data))))
+        .upload_to_container(
+            container_id,
+            Some(upload_options),
+            Either::Left(Full::new(Bytes::from(tar_data))),
+        )
         .await?;
 
     Ok(())
