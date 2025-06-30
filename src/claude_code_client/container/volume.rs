@@ -5,6 +5,8 @@
 //! to create named volumes, set up mount configurations, and manage the volume
 //! structure for Claude and GitHub authentication data.
 
+#![allow(deprecated)] // Volume API hasn't been migrated to new bollard API yet
+
 use bollard::models::{Mount, MountTypeEnum};
 use bollard::volume::CreateVolumeOptions;
 use bollard::Docker;
@@ -185,7 +187,11 @@ pub fn validate_volume_key(volume_key: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
-        return Err("Volume key contains invalid characters. Only alphanumeric, hyphens, underscores, and periods are allowed".to_string());
+        return Err(
+            "Volume key contains invalid characters. Only alphanumeric, hyphens, underscores, and \
+             periods are allowed"
+                .to_string(),
+        );
     }
 
     // Check length constraints (Docker has limits)

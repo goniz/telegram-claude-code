@@ -25,7 +25,7 @@ pub struct OAuthFlow;
 impl OAuthFlow {
     /// Generate secure random parameters for OAuth flow
     pub fn generate_secure_params() -> Result<(String, String), OAuthError> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut state_bytes = [0u8; 32];
         let mut code_verifier_bytes = [0u8; 32];
 

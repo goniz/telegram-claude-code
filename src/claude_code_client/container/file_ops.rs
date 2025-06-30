@@ -3,11 +3,13 @@
 //! This module provides functionality for bidirectional file operations
 //! with Docker containers using tar archives for efficient file transfers.
 
-use bollard::container::{DownloadFromContainerOptions, UploadToContainerOptions};
+use bollard::query_parameters::{DownloadFromContainerOptions, UploadToContainerOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use std::io::Read;
 use tar::{Archive, Builder};
+use bytes::Bytes;
+use http_body_util::{Full, Either};
 
 /// Get a file from a container
 ///
@@ -39,7 +41,7 @@ pub async fn container_get_file(
     container_id: &str,
     file_path: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let download_options = DownloadFromContainerOptions { path: file_path };
+    let download_options = DownloadFromContainerOptions { path: file_path.to_string() };
 
     let mut stream = docker.download_from_container(container_id, Some(download_options));
     let mut tar_data = Vec::new();
@@ -125,13 +127,13 @@ pub async fn container_put_file(
         .ok_or("Invalid directory path encoding")?;
 
     let upload_options = UploadToContainerOptions {
-        path: dir_path,
+        path: dir_path.to_string(),
         ..Default::default()
     };
 
     // Upload the tar archive to the container
     docker
-        .upload_to_container(container_id, Some(upload_options), tar_data.into())
+        .upload_to_container(container_id, Some(upload_options), Either::Left(Full::new(Bytes::from(tar_data))))
         .await?;
 
     Ok(())

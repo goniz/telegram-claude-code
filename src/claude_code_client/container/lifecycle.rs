@@ -4,12 +4,12 @@
 //! used by the telegram-claude-code application. It provides functions for starting coding
 //! sessions, clearing containers, and managing container configurations.
 
-use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::query_parameters::{
+    CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+    CreateImageOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecOptions};
-use bollard::image::CreateImageOptions;
-use bollard::models::HostConfig;
 use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -363,7 +363,7 @@ pub async fn start_coding_session(
 
     // Pull the image if it doesn't exist
     let create_image_options = CreateImageOptions {
-        from_image: MAIN_CONTAINER_IMAGE,
+        from_image: Some(MAIN_CONTAINER_IMAGE.to_string()),
         ..Default::default()
     };
 
@@ -390,17 +390,16 @@ pub async fn start_coding_session(
     };
 
     let options = CreateContainerOptions {
-        name: container_name,
+        name: Some(container_name.to_string()),
         ..Default::default()
     };
 
     // Prepare environment variables for the container
-    let env_vars_owned = prepare_container_env_vars_dynamic();
-    let env_vars: Vec<&str> = env_vars_owned.iter().map(|s| s.as_str()).collect();
+    let env_vars = prepare_container_env_vars_dynamic();
 
-    let config = Config {
-        image: Some(MAIN_CONTAINER_IMAGE),
-        working_dir: Some("/workspace"),
+    let config = ContainerCreateBody {
+        image: Some(MAIN_CONTAINER_IMAGE.to_string()),
+        working_dir: Some("/workspace".to_string()),
         tty: Some(true),
         attach_stdin: Some(true),
         attach_stdout: Some(true),
@@ -408,7 +407,7 @@ pub async fn start_coding_session(
         env: Some(env_vars),
         // Override the default command to prevent interactive shell hang
         // Run setup script then keep container alive with sleep
-        cmd: Some(vec!["-c", "sleep infinity"]),
+        cmd: Some(vec!["-c".to_string(), "sleep infinity".to_string()]),
         host_config: Some(HostConfig {
             mounts: if auth_mounts.is_empty() {
                 None
@@ -424,7 +423,7 @@ pub async fn start_coding_session(
 
     let container = docker.create_container(Some(options), config).await?;
     docker
-        .start_container::<String>(&container.id, None)
+        .start_container(&container.id, None::<bollard::query_parameters::StartContainerOptions>)
         .await?;
 
     // Wait for container to be ready
@@ -455,7 +454,7 @@ pub async fn clear_coding_session(
     container_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Try to stop the container first (ignore errors if it's not running)
-    let _ = docker.stop_container(container_name, None).await;
+    let _ = docker.stop_container(container_name, None::<bollard::query_parameters::StopContainerOptions>).await;
 
     // Remove the container
     let remove_options = RemoveContainerOptions {
@@ -491,7 +490,7 @@ pub async fn create_test_container(
 
     // Pull the image if it doesn't exist
     let create_image_options = CreateImageOptions {
-        from_image: MAIN_CONTAINER_IMAGE,
+        from_image: Some(MAIN_CONTAINER_IMAGE.to_string()),
         ..Default::default()
     };
 
@@ -507,29 +506,28 @@ pub async fn create_test_container(
     }
 
     let options = CreateContainerOptions {
-        name: container_name,
+        name: Some(container_name.to_string()),
         ..Default::default()
     };
 
     // Prepare environment variables for the container
-    let env_vars_owned = prepare_container_env_vars_dynamic();
-    let env_vars: Vec<&str> = env_vars_owned.iter().map(|s| s.as_str()).collect();
+    let env_vars = prepare_container_env_vars_dynamic();
 
-    let config = Config {
-        image: Some(MAIN_CONTAINER_IMAGE),
-        working_dir: Some("/workspace"),
+    let config = ContainerCreateBody {
+        image: Some(MAIN_CONTAINER_IMAGE.to_string()),
+        working_dir: Some("/workspace".to_string()),
         tty: Some(true),
         attach_stdin: Some(true),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
         env: Some(env_vars),
-        cmd: Some(vec!["/bin/bash"]),
+        cmd: Some(vec!["/bin/bash".to_string()]),
         ..Default::default()
     };
 
     let container = docker.create_container(Some(options), config).await?;
     docker
-        .start_container::<String>(&container.id, None)
+        .start_container(&container.id, None::<bollard::query_parameters::StartContainerOptions>)
         .await?;
 
     // Wait for container to be ready
@@ -550,7 +548,7 @@ pub async fn clear_all_session_containers(
 
     let list_options = ListContainersOptions {
         all: true,
-        filters,
+        filters: Some(filters),
         ..Default::default()
     };
 

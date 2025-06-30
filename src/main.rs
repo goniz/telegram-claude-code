@@ -1,4 +1,4 @@
-use bollard::image::CreateImageOptions;
+use bollard::query_parameters::CreateImageOptions;
 use bollard::Docker;
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -49,7 +49,7 @@ async fn pull_runtime_image_async(docker: Docker) {
         container_utils::MAIN_CONTAINER_IMAGE
     );
     let create_image_options = CreateImageOptions {
-        from_image: container_utils::MAIN_CONTAINER_IMAGE,
+        from_image: Some(container_utils::MAIN_CONTAINER_IMAGE.to_string()),
         ..Default::default()
     };
 
