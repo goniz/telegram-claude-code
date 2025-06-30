@@ -67,7 +67,15 @@ pub async fn perform_github_clone(
                     claude_sessions
                         .entry(chat_id.0)
                         .or_insert_with(|| crate::bot::claude_session::ClaudeSession::new())
-                        .set_working_directory(clone_result.target_directory.clone());
+                        .set_working_directory(
+                            std::path::Path::new(&clone_result.target_directory)
+                                .canonicalize()
+                                .unwrap_or_else(|_| {
+                                    std::path::PathBuf::from(&clone_result.target_directory)
+                                })
+                                .to_string_lossy()
+                                .to_string(),
+                        );
                 }
 
                 format!(
