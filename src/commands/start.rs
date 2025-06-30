@@ -67,7 +67,7 @@ pub async fn perform_github_clone(
                     let mut claude_sessions = bot_state.claude_sessions.lock().await;
                     claude_sessions
                         .entry(chat_id.0)
-                        .or_insert_with(|| crate::bot::claude_session::ClaudeSession::new())
+                        .or_insert_with(crate::bot::claude_session::ClaudeSession::new)
                         .set_working_directory(
                             std::path::Path::new(&clone_result.target_directory)
                                 .canonicalize()
