@@ -7,6 +7,7 @@ allowed-tools: Bash(git:*), Bash(gh:*)
 
 ## Description
 
+Run `git fetch` to make sure the diff is up to date.
 Use `git status` and `git diff` commands to view the workspace status.
 Use `git commit` to commit the changes in the workspace.
 Use `git push origin HEAD` to push the changes.
