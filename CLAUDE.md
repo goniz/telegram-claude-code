@@ -14,6 +14,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Create `.env` file with `TELOXIDE_TOKEN=your_bot_token_here`
 - Ensure Docker daemon is running (required for container operations)
 
+### Git Workflow
+- Always push code using 'git push origin HEAD'
+- Always checkout git branch using 'git fetch && git checkout -b $branch_name origin/main' in order to avoid conflicts
+
+## Development Best Practices
+- Always web search crates.io for latest version of a Cargo crate before adding it to Cargo.toml
+
 ## High-Level Architecture
 
 This is a Telegram bot built with Rust that provides coding sessions through Docker containers with Claude Code pre-installed.
