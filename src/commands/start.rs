@@ -1,6 +1,7 @@
 use crate::github_client::{GithubClient, GithubClientConfig};
 use crate::{escape_markdown_v2, BotState};
 use telegram_bot::claude_code_client::{container_utils, ClaudeCodeClient, ClaudeCodeConfig};
+use teloxide::types::CopyTextButton;
 use teloxide::{
     prelude::*,
     types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
@@ -79,7 +80,8 @@ pub async fn perform_github_clone(
                 }
 
                 format!(
-                    "✅ *Repository Cloned Successfully*\n\n📦 Repository: {}\n📁 Location: {}\n✨ {}\n\n🎯 *Working directory set for /claude commands*",
+                    "✅ *Repository Cloned Successfully*\n\n📦 Repository: {}\n📁 Location: \
+                     {}\n✨ {}\n\n🎯 *Working directory set for /claude commands*",
                     escape_markdown_v2(&clone_result.repository),
                     escape_markdown_v2(&clone_result.target_directory),
                     escape_markdown_v2(&clone_result.message)
@@ -101,13 +103,15 @@ pub async fn perform_github_clone(
                 || e.to_string().contains("not authenticated")
             {
                 escape_markdown_v2(
-                    "❌ *GitHub Authentication Required*\n\n🔐 Please authenticate with GitHub first using /auth login",
+                    "❌ *GitHub Authentication Required*\n\n🔐 Please authenticate with GitHub \
+                     first using /auth login",
                 )
             } else if e.to_string().contains("gh: command not found")
                 || e.to_string().contains("executable file not found")
             {
                 escape_markdown_v2(
-                    "❌ *GitHub CLI Not Available*\n\n⚠️ The GitHub CLI (gh) is not installed in the coding session.",
+                    "❌ *GitHub CLI Not Available*\n\n⚠️ The GitHub CLI (gh) is not installed in \
+                     the coding session.",
                 )
             } else {
                 format!(
@@ -176,9 +180,8 @@ pub async fn handle_start(
             bot.send_message(
                 msg.chat.id,
                 format!(
-                    "❌ Failed to start coding session: {}\n\nThis could be due to:\n• \
-                     Container creation failure\n• Runtime image pull failure\n• Network \
-                     connectivity issues",
+                    "❌ Failed to start coding session: {}\n\nThis could be due to:\n• Container \
+                     creation failure\n• Runtime image pull failure\n• Network connectivity issues",
                     escape_markdown_v2(&e.to_string())
                 ),
             )
@@ -214,24 +217,26 @@ async fn check_and_guide_authentication_with_container_info(
     // Send consolidated container success + auth status message
     let auth_status_text = match (github_authenticated, claude_authenticated) {
         (true, true) => {
-            "✅ Container running with Claude Code\n✅ GitHub authenticated\n✅ Claude authenticated\n\n🎯 Ready to start coding!"
+            "✅ Container running with Claude Code\n✅ GitHub authenticated\n✅ Claude \
+             authenticated\n\n🎯 Ready to start coding!"
         }
         (true, false) => {
-            "✅ Container running with Claude Code\n✅ GitHub authenticated\n❌ Claude authentication needed"
+            "✅ Container running with Claude Code\n✅ GitHub authenticated\n❌ Claude \
+             authentication needed"
         }
         (false, true) => {
-            "✅ Container running with Claude Code\n❌ GitHub authentication needed\n✅ Claude authenticated"
+            "✅ Container running with Claude Code\n❌ GitHub authentication needed\n✅ Claude \
+             authenticated"
         }
         (false, false) => {
-            "✅ Container running with Claude Code\n❌ GitHub authentication needed\n❌ Claude authentication needed"
+            "✅ Container running with Claude Code\n❌ GitHub authentication needed\n❌ Claude \
+             authentication needed"
         }
     };
 
     let consolidated_message = format!(
-        "✅ *Coding session started successfully\\!*\n\n\
-         *Container ID:* `{}`\n\
-         *Container Name:* `{}`\n\n\
-         {}",
+        "✅ *Coding session started successfully\\!*\n\n*Container ID:* `{}`\n*Container Name:* \
+         `{}`\n\n{}",
         escape_markdown_v2(container_id_short),
         escape_markdown_v2(container_name),
         escape_markdown_v2(auth_status_text)
@@ -265,7 +270,8 @@ async fn check_and_guide_authentication_with_container_info(
 
         bot.send_message(
             chat_id,
-            "💡 *Quick Start Option*\n\nWhile Claude authentication is in progress, you can browse and select a repository to clone:",
+            "💡 *Quick Start Option*\n\nWhile Claude authentication is in progress, you can \
+             browse and select a repository to clone:",
         )
         .parse_mode(ParseMode::MarkdownV2)
         .reply_markup(keyboard)
@@ -332,11 +338,10 @@ async fn start_authentication_flows_consolidated(
                     (&auth_result.oauth_url, &auth_result.device_code)
                 {
                     let consolidated_message = format!(
-                        "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
-                         Please complete the authentication process and then use /start again to continue\\.\n\n\
-                         🐙 *GitHub Authentication*\n\n\
-                         Device code: ```{}```\n\n\
-                         Click below to authenticate\\.",
+                        "🔐 *Authentication Required*\n\n📋 Starting authentication for: \
+                         {}\n\nPlease complete the authentication process and then use /start \
+                         again to continue\\.\n\n🐙 *GitHub Authentication*\n\nDevice code: \
+                         ```{}```\n\nClick below to authenticate\\.",
                         auth_actions.join(" and "),
                         escape_markdown_v2(device_code)
                     );
@@ -344,12 +349,15 @@ async fn start_authentication_flows_consolidated(
                     let keyboard = InlineKeyboardMarkup::new(vec![
                         vec![InlineKeyboardButton::url(
                             "🔗 Authenticate GitHub",
-                            url::Url::parse(oauth_url)
-                                .unwrap_or_else(|_| url::Url::parse("https://github.com").unwrap()),
+                            url::Url::parse(oauth_url).unwrap_or_else(|_| {
+                                url::Url::parse("https://github.com/login/device").unwrap()
+                            }),
                         )],
-                        vec![InlineKeyboardButton::switch_inline_query_current_chat(
+                        vec![InlineKeyboardButton::copy_text_button(
                             "📋 Copy Device Code",
-                            device_code,
+                            CopyTextButton {
+                                text: device_code.clone(),
+                            },
                         )],
                     ]);
 
@@ -359,8 +367,9 @@ async fn start_authentication_flows_consolidated(
                         .await?;
                 } else {
                     let fallback_message = format!(
-                        "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
-                         Please complete the authentication process and then use /start again to continue\\.",
+                        "🔐 *Authentication Required*\n\n📋 Starting authentication for: \
+                         {}\n\nPlease complete the authentication process and then use /start \
+                         again to continue\\.",
                         auth_actions.join(" and ")
                     );
                     bot.send_message(chat_id, fallback_message)
@@ -369,8 +378,8 @@ async fn start_authentication_flows_consolidated(
                 }
             } else {
                 let fallback_message = format!(
-                    "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
-                     Please complete the authentication process and then use /start again to continue\\.",
+                    "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\nPlease \
+                     complete the authentication process and then use /start again to continue\\.",
                     auth_actions.join(" and ")
                 );
                 bot.send_message(chat_id, fallback_message)
@@ -379,8 +388,8 @@ async fn start_authentication_flows_consolidated(
             }
         } else {
             let base_message = format!(
-                "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\n\
-                 Please complete the authentication process and then use /start again to continue\\.",
+                "🔐 *Authentication Required*\n\n📋 Starting authentication for: {}\n\nPlease \
+                 complete the authentication process and then use /start again to continue\\.",
                 auth_actions.join(" and ")
             );
             bot.send_message(chat_id, base_message)
@@ -453,10 +462,9 @@ async fn prompt_for_repository_selection(
     bot_state: &BotState,
     claude_client: &ClaudeCodeClient,
 ) -> ResponseResult<()> {
-    let message =
-        "🎯 *Ready to Start Coding\\!*\n\nBoth GitHub and Claude are authenticated\\.\n\n\
-                   📂 *Choose a Repository*\n\
-                   Select a repository to clone into your coding environment:";
+    let message = "🎯 *Ready to Start Coding\\!*\n\nBoth GitHub and Claude are \
+                   authenticated\\.\n\n📂 *Choose a Repository*\nSelect a repository to clone \
+                   into your coding environment:";
 
     let github_client = GithubClient::new(
         bot_state.docker.clone(),
@@ -470,10 +478,9 @@ async fn prompt_for_repository_selection(
             if repo_list.trim().is_empty() {
                 bot.send_message(
                     chat_id,
-                    "📁 *No Repositories Found*\n\n💡 No repositories found or accessible\\. You can:\n\n\
-                     • Create a new repository on GitHub\n\
-                     • Get access to existing repositories\n\
-                     • Manually specify a public repository",
+                    "📁 *No Repositories Found*\n\n💡 No repositories found or accessible\\. You \
+                     can:\n\n• Create a new repository on GitHub\n• Get access to existing \
+                     repositories\n• Manually specify a public repository",
                 )
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
@@ -587,12 +594,9 @@ pub async fn handle_repository_clone_in_start(
             // After successful clone, provide next steps
             bot.send_message(
                 chat_id,
-                "🎉 *Setup Complete\\!*\n\n\
-                 Your coding environment is ready:\n\
-                 ✅ Container running\n\
-                 ✅ GitHub & Claude authenticated\n\
-                 ✅ Repository cloned\n\n\
-                 💬 You can now start chatting with Claude about your code\\!",
+                "🎉 *Setup Complete\\!*\n\nYour coding environment is ready:\n✅ Container \
+                 running\n✅ GitHub & Claude authenticated\n✅ Repository cloned\n\n💬 You can \
+                 now start chatting with Claude about your code\\!",
             )
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
@@ -617,13 +621,9 @@ pub async fn handle_repository_clone_in_start(
 pub async fn handle_manual_repository_entry(bot: Bot, chat_id: ChatId) -> ResponseResult<()> {
     bot.send_message(
         chat_id,
-        "✏️ *Enter Repository*\n\n\
-         Please type the repository you want to clone in the format:\n\
-         `owner/repository`\n\n\
-         Examples:\n\
-         • `octocat/Hello-World`\n\
-         • `microsoft/vscode`\n\
-         • `golang/go`",
+        "✏️ *Enter Repository*\n\nPlease type the repository you want to clone in the \
+         format:\n`owner/repository`\n\nExamples:\n• `octocat/Hello-World`\n• \
+         `microsoft/vscode`\n• `golang/go`",
     )
     .parse_mode(ParseMode::MarkdownV2)
     .await?;
@@ -635,12 +635,9 @@ pub async fn handle_manual_repository_entry(bot: Bot, chat_id: ChatId) -> Respon
 pub async fn handle_skip_repository_setup(bot: Bot, chat_id: ChatId) -> ResponseResult<()> {
     bot.send_message(
         chat_id,
-        "⏭️ *Repository Setup Skipped*\n\n\
-         Your coding environment is ready:\n\
-         ✅ Container running\n\
-         ✅ GitHub & Claude authenticated\n\n\
-         💬 You can now start chatting with Claude\\!\n\
-         📂 Clone a repository anytime by mentioning it in the chat\\.",
+        "⏭️ *Repository Setup Skipped*\n\nYour coding environment is ready:\n✅ Container \
+         running\n✅ GitHub & Claude authenticated\n\n💬 You can now start chatting with \
+         Claude\\!\n📂 Clone a repository anytime by mentioning it in the chat\\.",
     )
     .parse_mode(ParseMode::MarkdownV2)
     .await?;
