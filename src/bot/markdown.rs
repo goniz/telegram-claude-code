@@ -2,6 +2,7 @@
 pub const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 
 /// Maximum length to use for chunks, leaving some buffer for markdown formatting
+#[allow(dead_code)]
 const SAFE_CHUNK_SIZE: usize = 3800;
 
 /// Escape reserved characters for Telegram MarkdownV2 formatting
@@ -21,6 +22,7 @@ pub fn escape_markdown_v2(text: &str) -> String {
 
 /// Split a message into chunks that fit within Telegram's message length limit
 /// Attempts to split at natural boundaries (newlines, then word boundaries)
+#[allow(dead_code)]
 pub fn split_message(text: &str) -> Vec<String> {
     if text.len() <= TELEGRAM_MAX_MESSAGE_LENGTH {
         return vec![text.to_string()];
@@ -73,6 +75,7 @@ pub fn split_message(text: &str) -> Vec<String> {
 }
 
 /// Split a single long line by word boundaries
+#[allow(dead_code)]
 fn split_line_by_words(line: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current_chunk = String::new();
@@ -115,6 +118,7 @@ fn split_line_by_words(line: &str) -> Vec<String> {
 }
 
 /// Split a single long word by character boundaries (fallback for extremely long words)
+#[allow(dead_code)]
 fn split_word_by_chars(word: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let chars: Vec<char> = word.chars().collect();
