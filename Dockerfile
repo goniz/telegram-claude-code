@@ -6,6 +6,8 @@ FROM rust:1.87-slim AS builder
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
+    build-essential \
+    perl \
     libssl-dev \
     ca-certificates \
     && update-ca-certificates \
