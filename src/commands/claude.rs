@@ -187,6 +187,66 @@ async fn process_claude_streaming(
                             .parse_mode(ParseMode::MarkdownV2)
                             .await?;
                     }
+                    MessageType::Result {
+                        is_error,
+                        cost,
+                        duration_ms,
+                        num_turns,
+                        usage,
+                        ..
+                    } => {
+                        let mut summary_parts = Vec::new();
+
+                        // Cost summary
+                        if let Some(c) = cost {
+                            if c > 0.0 {
+                                summary_parts.push(format!("Cost: ${:.4}", c));
+                            }
+                        }
+
+                        // Duration summary
+                        if let Some(d) = duration_ms {
+                            summary_parts.push(format!("Duration: {}ms", d));
+                        }
+
+                        // Turns summary
+                        if let Some(t) = num_turns {
+                            summary_parts.push(format!("Turns: {}", t));
+                        }
+
+                        // Token usage summary
+                        if let Some(u) = usage {
+                            summary_parts.push(format!("Tokens: {} in / {} out", u.input_tokens, u.output_tokens));
+
+                            if let Some(cache_create) = u.cache_creation_input_tokens {
+                                summary_parts.push(format!("Cache create: {}", cache_create));
+                            }
+
+                            if let Some(cache_read) = u.cache_read_input_tokens {
+                                summary_parts.push(format!("Cache read: {}", cache_read));
+                            }
+                        }
+
+                        let summary_body = if summary_parts.is_empty() {
+                            "Run completed".to_string()
+                        } else {
+                            summary_parts.join(" • ")
+                        };
+
+                        let status_emoji = if *is_error { "❌" } else { "✅" };
+
+                        let summary_message = format!(
+                            "{} *Claude Run Summary*\n{}",
+                            status_emoji,
+                            escape_markdown_v2(&summary_body)
+                        );
+
+                        let (message_to_send, _was_truncated) = truncate_if_needed(&summary_message);
+
+                        bot.send_message(chat_id, message_to_send)
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                    }
                     MessageType::UserToolResult { .. } => {
                         // Tool results are no longer sent to chat
                     }
@@ -232,7 +292,7 @@ async fn process_claude_streaming(
 
 /// Process Claude batch output
 async fn process_claude_batch(
-    _bot: Bot,
+    bot: Bot,
     chat_id: ChatId,
     output: String,
     bot_state: BotState,
@@ -250,19 +310,62 @@ async fn process_claude_batch(
                     update_conversation_id(&bot_state, chat_id.0, conversation_id.clone()).await;
                 }
 
-                // Store the message for processing
-                // For now, we'll process messages directly rather than converting to events
+                // If this is a result message, send summary
+                if let MessageType::Result {
+                    is_error,
+                    cost,
+                    duration_ms,
+                    num_turns,
+                    usage,
+                    ..
+                } = parsed.message_type
+                {
+                    let mut summary_parts = Vec::new();
+
+                    if let Some(c) = cost {
+                        if c > 0.0 {
+                            summary_parts.push(format!("Cost: ${:.4}", c));
+                        }
+                    }
+
+                    if let Some(d) = duration_ms {
+                        summary_parts.push(format!("Duration: {}ms", d));
+                    }
+
+                    if let Some(t) = num_turns {
+                        summary_parts.push(format!("Turns: {}", t));
+                    }
+
+                    if let Some(u) = usage {
+                        summary_parts.push(format!("Tokens: {} in / {} out", u.input_tokens, u.output_tokens));
+                    }
+
+                    let summary_body = if summary_parts.is_empty() {
+                        "Run completed".to_string()
+                    } else {
+                        summary_parts.join(" • ")
+                    };
+
+                    let status_emoji = if is_error { "❌" } else { "✅" };
+
+                    let summary_message = format!(
+                        "{} *Claude Run Summary*\n{}",
+                        status_emoji,
+                        escape_markdown_v2(&summary_body)
+                    );
+
+                    let (message_to_send, _was_truncated) = truncate_if_needed(&summary_message);
+
+                    bot.send_message(chat_id, message_to_send)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
+                }
             }
-            ParseResult::PlainText(_) => {
-                // Plain text content - ignore for now in batch processing
-            }
-            ParseResult::Empty => {
-                // Skip empty results
-            }
+            ParseResult::PlainText(_) => {}
+            ParseResult::Empty => {}
         }
     }
 
-    // Batch processing complete - for now, just log
     log::info!("Batch processing completed for chat {}", chat_id.0);
 
     Ok(())

@@ -1,4 +1,5 @@
 use super::streaming::{ClaudeMessage, ContentBlock};
+use super::Usage;
 
 /// Results from parsing a Claude message line
 #[derive(Debug)]
@@ -48,6 +49,7 @@ pub enum MessageType {
         cost: Option<f64>,
         duration_ms: Option<u64>,
         num_turns: Option<u32>,
+        usage: Option<Usage>,
     },
     Other {
         conversation_id: Option<String>,
@@ -175,6 +177,7 @@ impl ClaudeMessageParser {
                 total_cost_usd,
                 duration_ms,
                 num_turns,
+                usage,
                 ..
             } => MessageType::Result {
                 result: result.clone(),
@@ -183,6 +186,7 @@ impl ClaudeMessageParser {
                 cost: *total_cost_usd,
                 duration_ms: *duration_ms,
                 num_turns: *num_turns,
+                usage: usage.clone(),
             },
         }
     }
@@ -236,6 +240,7 @@ impl ParsedClaudeMessage {
                 cost,
                 duration_ms,
                 num_turns,
+                usage: _usage,
                 ..
             } => Some((result, *is_error, *cost, *duration_ms, *num_turns)),
             _ => None,
