@@ -40,6 +40,8 @@ pub enum ClaudeMessage {
         duration_ms: Option<u64>,
         #[serde(default)]
         num_turns: Option<u32>,
+        #[serde(default)]
+        usage: Option<super::Usage>,
     },
 }
 
