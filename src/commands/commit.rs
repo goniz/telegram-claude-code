@@ -60,26 +60,22 @@ pub async fn handle_commit(
         }
     };
 
-    // Execute git status to check if there are changes
-    let git_status_result = client_with_dir.exec_basic_command(vec!["git".to_string(), "status".to_string(), "--porcelain".to_string()]).await;
-    let git_status = match git_status_result {
-        Ok(output) if output.trim().is_empty() => {
-            bot.send_message(
-                msg.chat.id,
-                "ℹ️ *No changes to commit*\n\nThe working directory is clean\\.",
-            )
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
-            return Ok(());
-        }
-        Ok(output) => output,
+    // Execute `git status --porcelain` up-front so we can later inspect for untracked files
+    let git_status_raw = match client_with_dir
+        .exec_basic_command(vec![
+            "git".to_string(),
+            "status".to_string(),
+            "--porcelain".to_string(),
+        ])
+        .await
+    {
+        Ok(out) => out,
         Err(e) => {
             let full_message = format!(
                 "❌ *Failed to check git status:*\n```\n{}\n```",
                 escape_markdown_v2(&e.to_string())
             );
-            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
-            
+            let (message_to_send, _) = truncate_if_needed(&full_message);
             bot.send_message(msg.chat.id, message_to_send)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
@@ -87,47 +83,38 @@ pub async fn handle_commit(
         }
     };
 
-    // Get git diff
-    let git_diff_result = client_with_dir.exec_basic_command(vec!["git".to_string(), "diff".to_string(), "HEAD".to_string()]).await;
-    let git_diff = match git_diff_result {
-        Ok(output) => {
-            if output.trim().is_empty() {
-                // Check for staged changes
-                match client_with_dir.exec_basic_command(vec!["git".to_string(), "diff".to_string(), "--cached".to_string()]).await {
-                    Ok(staged_diff) if !staged_diff.trim().is_empty() => staged_diff,
-                    _ => {
-                        // No staged or unstaged changes, check for untracked files
-                        let untracked_files = git_status
-                            .lines()
-                            .filter(|line| line.starts_with("??"))
-                            .map(|line| line.trim_start_matches("?? "))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        
-                        if untracked_files.is_empty() {
-                            bot.send_message(
-                                msg.chat.id,
-                                "ℹ️ *No changes to commit*\n\nAll changes are already committed\\.",
-                            )
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
-                            return Ok(());
-                        }
-                        
-                        format!("New untracked files:\n{}", untracked_files)
-                    }
-                }
-            } else {
-                output
-            }
+    // If absolutely nothing reported by porcelain, we can early-exit.
+    if git_status_raw.trim().is_empty() {
+        bot.send_message(
+            msg.chat.id,
+            "ℹ️ *No changes to commit*\n\nThe working directory is clean\\.",
+        )
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
+        return Ok(());
+    }
+
+    // Otherwise, attempt to collect a meaningful diff / file list.
+    let git_diff_opt = get_git_diff(&client_with_dir, &git_status_raw).await;
+
+    let git_diff = match git_diff_opt {
+        Ok(Some(diff)) => diff,
+        Ok(None) => {
+            // We had a non-empty `git status`, but nothing to commit.
+            bot.send_message(
+                msg.chat.id,
+                "ℹ️ *No changes to commit*\n\nAll changes are already committed\\.",
+            )
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
+            return Ok(());
         }
         Err(e) => {
             let full_message = format!(
                 "❌ *Failed to get git diff:*\n```\n{}\n```",
                 escape_markdown_v2(&e.to_string())
             );
-            let (message_to_send, _was_truncated) = truncate_if_needed(&full_message);
-            
+            let (message_to_send, _) = truncate_if_needed(&full_message);
             bot.send_message(msg.chat.id, message_to_send)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
@@ -221,4 +208,67 @@ pub async fn handle_commit(
     }
 
     Ok(())
+}
+
+/// Determine the effective diff for the current working directory.
+/// 
+/// Returns:
+/// * `Ok(Some(diff))` – when there is a meaningful diff (unstaged / staged / new files).
+/// * `Ok(None)` – when there are *no* changes that need committing (already committed).
+/// * `Err(_)` – if a fatal error occurs when running the git commands.
+///
+/// The function tries, in order:
+/// 1. `git diff HEAD` – regular unstaged changes.
+/// 2. `git diff --cached` – staged changes (even if the above is empty).
+/// 3. Looks for untracked files from the previously-retrieved `git status --porcelain` output.
+///
+/// The `git diff --cached` command *may* exit with a non-zero status if there are no commits yet.
+/// In that case we treat it the same as an empty diff instead of bubbling the error up – this
+/// replicates the fallback behaviour that existed before the regression noted in PR review.
+async fn get_git_diff(
+    client: &ClaudeCodeClient,
+    git_status_raw: &str,
+) -> Result<Option<String>, anyhow::Error> {
+    // 1. Unstaged diff
+    let head_diff = client
+        .exec_basic_command(vec![
+            "git".into(),
+            "diff".into(),
+            "HEAD".into(),
+        ])
+        .await
+        .unwrap_or_default(); // non-critical – treat failure like empty diff
+
+    if !head_diff.trim().is_empty() {
+        return Ok(Some(head_diff));
+    }
+
+    // 2. Staged diff – allow error fall-through (e.g., fresh repo with no commits)
+    if let Ok(staged_diff) = client
+        .exec_basic_command(vec![
+            "git".into(),
+            "diff".into(),
+            "--cached".into(),
+        ])
+        .await
+    {
+        if !staged_diff.trim().is_empty() {
+            return Ok(Some(staged_diff));
+        }
+    }
+
+    // 3. Untracked files
+    let untracked_files: Vec<_> = git_status_raw
+        .lines()
+        .filter(|l| l.starts_with("??"))
+        .map(|l| l.trim_start_matches("?? ").to_string())
+        .collect();
+
+    if !untracked_files.is_empty() {
+        let list = untracked_files.join("\n");
+        return Ok(Some(format!("New untracked files:\n{}", list)));
+    }
+
+    // Nothing to commit
+    Ok(None)
 }
