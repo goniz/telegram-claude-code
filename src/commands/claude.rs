@@ -199,7 +199,7 @@ async fn process_claude_streaming(
 
                         // Cost summary
                         if let Some(c) = cost {
-                            if c > 0.0 {
+                            if *c > 0.0 {
                                 summary_parts.push(format!("Cost: ${:.4}", c));
                             }
                         }
@@ -323,9 +323,7 @@ async fn process_claude_batch(
                     let mut summary_parts = Vec::new();
 
                     if let Some(c) = cost {
-                        if c > 0.0 {
-                            summary_parts.push(format!("Cost: ${:.4}", c));
-                        }
+                        summary_parts.push(format!("Cost: ${:.4}", c));
                     }
 
                     if let Some(d) = duration_ms {
