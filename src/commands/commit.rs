@@ -142,6 +142,10 @@ pub async fn handle_commit(
     let commit_message = match claude_result {
         Ok(output) => {
             let generated_message = output.trim();
+            // If Claude returned an *empty* string we fall back to a plain
+            // "Add changes" message *without* the checkpoint prefix.  We only
+            // attach the "Claude Code Checkpoint:" prefix when Claude
+            // produced a non-empty summary.
             if generated_message.is_empty() {
                 "Add changes".to_string()
             } else {
